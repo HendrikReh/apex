@@ -34,6 +34,18 @@ impl Stores {
             .map(|i| i32::try_from(i).context("chunk index exceeds i32::MAX"))
             .collect::<Result<Vec<_>>>()?;
         let texts: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        let new_count: i32 = i32::try_from(chunks.len()).context("chunk count exceeds i32::MAX")?;
+
+        let mut tx = self.pool.begin().await.context("starting insert_chunks transaction")?;
+
+        // Serialize chunk rewrites for one document so the upsert and stale
+        // cleanup cannot interleave across concurrent ingests.
+        sqlx::query("SELECT 1 FROM documents WHERE tenant = $1 AND id = $2 FOR UPDATE")
+            .bind(tenant)
+            .bind(document_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .with_context(|| format!("locking document {document_id} before chunk update"))?;
 
         // Batch upsert all chunks in a single round-trip.
         sqlx::query(
@@ -48,24 +60,25 @@ impl Stores {
         .bind(document_id)
         .bind(&indices)
         .bind(&texts)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("batch inserting chunks for document {document_id}"))?;
 
         // Remove stale chunks left over from a previous ingestion that
         // produced more chunks than the current one.
-        let new_count: i32 = i32::try_from(chunks.len()).context("chunk count exceeds i32::MAX")?;
         sqlx::query(
             "DELETE FROM chunks WHERE tenant = $1 AND document_id = $2 AND chunk_index >= $3",
         )
         .bind(tenant)
         .bind(document_id)
         .bind(new_count)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| {
             format!("deleting stale chunks (index >= {new_count}) for document {document_id}")
         })?;
+
+        tx.commit().await.context("committing insert_chunks transaction")?;
 
         Ok(())
     }

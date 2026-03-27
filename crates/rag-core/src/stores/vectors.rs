@@ -14,6 +14,59 @@ use qdrant_client::qdrant::{
 use super::Stores;
 
 impl Stores {
+    async fn validate_collection_config(
+        &self,
+        name: &str,
+        vector_size: u64,
+        distance: Distance,
+    ) -> Result<()> {
+        let info = self
+            .qdrant
+            .collection_info(name)
+            .await
+            .with_context(|| format!("fetching collection info for '{name}'"))?;
+
+        let params = info
+            .result
+            .as_ref()
+            .and_then(|r| r.config.as_ref())
+            .and_then(|c| c.params.as_ref())
+            .ok_or_else(|| anyhow!("collection '{name}' is missing configuration details"))?;
+
+        let vectors_config = params
+            .vectors_config
+            .as_ref()
+            .ok_or_else(|| anyhow!("collection '{name}' is missing vectors_config"))?;
+
+        let (actual_size, actual_distance) = match &vectors_config.config {
+            Some(VectorsConfigVariant::Params(p)) => (p.size, p.distance()),
+            Some(VectorsConfigVariant::ParamsMap(_)) => {
+                return Err(anyhow!(
+                    "collection '{name}' uses named vectors, which is incompatible \
+                     with this store's unnamed-vector operations"
+                ));
+            }
+            None => {
+                return Err(anyhow!("collection '{name}' has no vector params configured"));
+            }
+        };
+
+        if actual_size != vector_size {
+            return Err(anyhow!(
+                "collection '{name}' has vector size {actual_size}, expected {vector_size}"
+            ));
+        }
+
+        if actual_distance != distance {
+            return Err(anyhow!(
+                "collection '{name}' uses distance metric {actual_distance:?}, \
+                 expected {distance:?}"
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Ensure a Qdrant collection exists with the expected vector parameters.
     ///
     /// * If the collection does **not** exist it is created with the given
@@ -32,52 +85,7 @@ impl Stores {
             .await
             .context("checking if Qdrant collection exists")?
         {
-            // Validate existing collection vector size.
-            let info = self
-                .qdrant
-                .collection_info(name)
-                .await
-                .with_context(|| format!("fetching collection info for '{name}'"))?;
-
-            let params = info
-                .result
-                .as_ref()
-                .and_then(|r| r.config.as_ref())
-                .and_then(|c| c.params.as_ref())
-                .ok_or_else(|| anyhow!("collection '{name}' is missing configuration details"))?;
-
-            let vectors_config = params
-                .vectors_config
-                .as_ref()
-                .ok_or_else(|| anyhow!("collection '{name}' is missing vectors_config"))?;
-
-            let (actual_size, actual_distance) = match &vectors_config.config {
-                Some(VectorsConfigVariant::Params(p)) => (p.size, p.distance()),
-                Some(VectorsConfigVariant::ParamsMap(_)) => {
-                    return Err(anyhow!(
-                        "collection '{name}' uses named vectors, which is incompatible \
-                         with this store's unnamed-vector operations"
-                    ));
-                }
-                None => {
-                    return Err(anyhow!("collection '{name}' has no vector params configured"));
-                }
-            };
-
-            if actual_size != vector_size {
-                return Err(anyhow!(
-                    "collection '{name}' has vector size {actual_size}, expected {vector_size}"
-                ));
-            }
-
-            if actual_distance != distance {
-                return Err(anyhow!(
-                    "collection '{name}' uses distance metric {actual_distance:?}, \
-                     expected {distance:?}"
-                ));
-            }
-
-            Ok(())
+            self.validate_collection_config(name, vector_size, distance).await
         } else {
             let builder = CreateCollectionBuilder::new(name)
                 .vectors_config(VectorParamsBuilder::new(vector_size, distance));
@@ -86,8 +94,13 @@ impl Stores {
                 Err(e) => {
                     // Handle TOCTOU race: another caller may have created
                     // the collection between our exists check and create.
-                    if self.qdrant.collection_exists(name).await.unwrap_or(false) {
-                        Ok(())
+                    if self
+                        .qdrant
+                        .collection_exists(name)
+                        .await
+                        .context("rechecking if Qdrant collection exists after create race")?
+                    {
+                        self.validate_collection_config(name, vector_size, distance).await
                     } else {
                         Err(e).with_context(|| format!("creating Qdrant collection '{name}'"))
                     }

@@ -134,9 +134,7 @@ impl Stores {
         let deleted = result.rows_affected() > 0;
 
         // Decrement corpus_stats if the document was previously counted.
-        if deleted
-            && let Some((Some(token_count), Some(collection))) = doc
-        {
+        if deleted && let Some((Some(token_count), Some(collection))) = doc {
             sqlx::query(
                 r#"
                     UPDATE corpus_stats
