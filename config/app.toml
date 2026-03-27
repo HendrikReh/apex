@@ -21,6 +21,9 @@ embedding_model = "text-embedding-3-small"          # OpenAI model (1536 dims)
 embedder = "openai"                                 # Options: "openai", "mock"
 embed_timeout_secs = 30
 embed_max_retries = 3
+embed_retry_backoff_ms = 500
+embed_max_batch_tokens = 8192
+embed_max_batch_size = 32
 
 # Server settings
 bind_addr = "0.0.0.0:8080"

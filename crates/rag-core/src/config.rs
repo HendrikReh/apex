@@ -100,6 +100,9 @@ struct AppSection {
     embedder: Option<String>,
     embed_timeout_secs: Option<u64>,
     embed_max_retries: Option<u32>,
+    embed_retry_backoff_ms: Option<u64>,
+    embed_max_batch_tokens: Option<usize>,
+    embed_max_batch_size: Option<usize>,
     bind_addr: Option<String>,
     auth_mode: Option<String>,
     tenant_header: Option<String>,
@@ -136,6 +139,9 @@ pub struct AppConfig {
     pub embedder: EmbedderKind,
     pub embed_timeout_secs: u64,
     pub embed_max_retries: u32,
+    pub embed_retry_backoff_ms: u64,
+    pub embed_max_batch_tokens: usize,
+    pub embed_max_batch_size: usize,
     // Server
     pub bind_addr: String,
     // Auth
@@ -248,6 +254,12 @@ impl AppConfig {
 
         let embed_max_retries =
             env_parsed("EMBED_MAX_RETRIES")?.or(f.embed_max_retries).unwrap_or(3);
+        let embed_retry_backoff_ms =
+            env_parsed("EMBED_RETRY_BACKOFF_MS")?.or(f.embed_retry_backoff_ms).unwrap_or(500);
+        let embed_max_batch_tokens =
+            env_parsed("EMBED_MAX_BATCH_TOKENS")?.or(f.embed_max_batch_tokens).unwrap_or(8_192);
+        let embed_max_batch_size =
+            env_parsed("EMBED_MAX_BATCH_SIZE")?.or(f.embed_max_batch_size).unwrap_or(32);
 
         let bind_addr = env_string("BIND_ADDR")
             .or_else(|| f.bind_addr.clone())
@@ -284,6 +296,9 @@ impl AppConfig {
             embedder,
             embed_timeout_secs,
             embed_max_retries,
+            embed_retry_backoff_ms,
+            embed_max_batch_tokens,
+            embed_max_batch_size,
             bind_addr,
             auth_mode,
             tenant_header,
@@ -324,6 +339,9 @@ mod tests {
             std::env::remove_var("RAG_EMBEDDER");
             std::env::remove_var("EMBED_TIMEOUT_SECS");
             std::env::remove_var("EMBED_MAX_RETRIES");
+            std::env::remove_var("EMBED_RETRY_BACKOFF_MS");
+            std::env::remove_var("EMBED_MAX_BATCH_TOKENS");
+            std::env::remove_var("EMBED_MAX_BATCH_SIZE");
             std::env::remove_var("BIND_ADDR");
             std::env::remove_var("AUTH_MODE");
             std::env::remove_var("TENANT_HEADER");
@@ -360,6 +378,9 @@ mod tests {
         assert_eq!(cfg.embedder, EmbedderKind::OpenAi);
         assert_eq!(cfg.embed_timeout_secs, 30);
         assert_eq!(cfg.embed_max_retries, 3);
+        assert_eq!(cfg.embed_retry_backoff_ms, 500);
+        assert_eq!(cfg.embed_max_batch_tokens, 8_192);
+        assert_eq!(cfg.embed_max_batch_size, 32);
         assert_eq!(cfg.bind_addr, "0.0.0.0:8080");
         assert_eq!(cfg.auth_mode, AuthMode::None);
         assert_eq!(cfg.tenant_header, "x-tenant");

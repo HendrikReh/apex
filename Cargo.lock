@@ -1882,6 +1882,7 @@ name = "rag-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-openai",
  "async-trait",
  "chrono",
  "dotenvy",
@@ -1889,11 +1890,13 @@ dependencies = [
  "hex",
  "qdrant-client",
  "rag-chunking",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
  "thiserror 2.0.18",
+ "tiktoken-rs",
  "tokio",
  "toml",
  "tracing",

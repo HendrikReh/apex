@@ -4,11 +4,13 @@
 //! storage abstractions with tenant-scoped operations.
 
 pub mod config;
+pub mod embed;
 pub mod extract;
 pub mod stores;
 pub mod tenant;
 
 pub use config::AppConfig;
+pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
 pub use extract::{
     ExtractionResult, ExtractorRegistry, FileType, FormatExtractor, MarkdownExtractor,
     PdfExtractor, TextExtractor,
