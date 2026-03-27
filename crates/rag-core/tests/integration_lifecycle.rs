@@ -222,3 +222,80 @@ async fn anonymous_user_is_unique_per_tenant() {
         other => panic!("expected database constraint error, got {other}"),
     }
 }
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // .expect() / .unwrap() are acceptable in test code
+async fn insert_chunks_requires_existing_document_for_empty_batches() {
+    let stores = setup_stores().await;
+    let tenant = format!("test-tenant-{}", Uuid::new_v4());
+    let doc_id = "missing-doc";
+    let chunks: Vec<String> = Vec::new();
+
+    let err = stores
+        .insert_chunks(&tenant, doc_id, &chunks)
+        .await
+        .expect_err("insert_chunks should fail when the target document does not exist");
+
+    assert!(
+        err.to_string().contains("does not exist"),
+        "expected missing-document error, got {err}"
+    );
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // .expect() / .unwrap() are acceptable in test code
+async fn oidc_user_identity_requires_complete_unique_pair() {
+    let stores = setup_stores().await;
+    let tenant = format!("test-tenant-{}", Uuid::new_v4());
+    let issuer = "https://issuer.example";
+    let subject = "subject-123";
+
+    sqlx::query(
+        "INSERT INTO users (id, tenant, oidc_issuer, oidc_subject) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&tenant)
+    .bind(issuer)
+    .bind(subject)
+    .execute(stores.pg_pool())
+    .await
+    .expect("first OIDC user insert should succeed");
+
+    let duplicate_err = sqlx::query(
+        "INSERT INTO users (id, tenant, oidc_issuer, oidc_subject) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&tenant)
+    .bind(issuer)
+    .bind(subject)
+    .execute(stores.pg_pool())
+    .await
+    .expect_err("duplicate OIDC identity should violate the partial unique index");
+
+    match duplicate_err {
+        SqlxError::Database(db_err) => {
+            assert_eq!(db_err.constraint(), Some("idx_users_oidc_identity"));
+        }
+        other => panic!("expected database constraint error, got {other}"),
+    }
+
+    let incomplete_err = sqlx::query(
+        "INSERT INTO users (id, tenant, oidc_issuer, oidc_subject) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&tenant)
+    .bind(Option::<String>::None)
+    .bind(subject)
+    .execute(stores.pg_pool())
+    .await
+    .expect_err("incomplete OIDC identity should violate the pair check constraint");
+
+    match incomplete_err {
+        SqlxError::Database(db_err) => {
+            assert_eq!(db_err.constraint(), Some("chk_users_oidc_identity_pair"));
+        }
+        other => panic!("expected database constraint error, got {other}"),
+    }
+}

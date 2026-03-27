@@ -3,7 +3,7 @@
 //! Chunks are stored with a `(tenant, document_id, chunk_index)` unique
 //! constraint. The foreign key to `documents` cascades deletes.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use super::Stores;
 
@@ -40,12 +40,16 @@ impl Stores {
 
         // Serialize chunk rewrites for one document so the upsert and stale
         // cleanup cannot interleave across concurrent ingests.
-        sqlx::query("SELECT 1 FROM documents WHERE tenant = $1 AND id = $2 FOR UPDATE")
-            .bind(tenant)
-            .bind(document_id)
-            .fetch_optional(&mut *tx)
-            .await
-            .with_context(|| format!("locking document {document_id} before chunk update"))?;
+        let locked_document: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM documents WHERE tenant = $1 AND id = $2 FOR UPDATE")
+                .bind(tenant)
+                .bind(document_id)
+                .fetch_optional(&mut *tx)
+                .await
+                .with_context(|| format!("locking document {document_id} before chunk update"))?;
+        locked_document.ok_or_else(|| {
+            anyhow!("document '{document_id}' does not exist for tenant '{tenant}'")
+        })?;
 
         // Batch upsert all chunks in a single round-trip.
         sqlx::query(

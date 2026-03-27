@@ -8,8 +8,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TIMESTAMPTZ DEFAULT now()
 );
 
+ALTER TABLE users DROP CONSTRAINT IF EXISTS chk_users_oidc_identity_pair;
+ALTER TABLE users
+    ADD CONSTRAINT chk_users_oidc_identity_pair
+    CHECK ((oidc_issuer IS NULL) = (oidc_subject IS NULL));
+
+DROP INDEX IF EXISTS idx_users_oidc_identity;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_identity
-    ON users (tenant, oidc_issuer, oidc_subject);
+    ON users (tenant, oidc_issuer, oidc_subject)
+    WHERE oidc_issuer IS NOT NULL AND oidc_subject IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_anonymous_identity
     ON users (tenant)
