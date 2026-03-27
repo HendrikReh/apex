@@ -22,17 +22,46 @@ pub fn chunk_text_paragraphs(text: &str, max_tokens: usize, overlap_ratio: f32) 
         return chunk_text_tokens(text, max_tokens, overlap_ratio);
     }
 
+    let count_tokens = |s: &str| -> usize {
+        bpe.map(|bpe| bpe.encode_with_special_tokens(s).len())
+            .unwrap_or_else(|| ((s.len() as f32) / CHARS_PER_TOKEN).ceil() as usize)
+    };
+
     let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_tokens = 0usize;
+
     for paragraph in paragraphs.iter() {
-        let token_count = bpe
-            .map(|bpe| bpe.encode_with_special_tokens(paragraph).len())
-            .unwrap_or_else(|| ((paragraph.len() as f32) / CHARS_PER_TOKEN).ceil() as usize);
-        if token_count > max_tokens {
+        let para_tokens = count_tokens(paragraph);
+        if para_tokens > max_tokens {
+            // Flush accumulator before emitting oversized paragraph sub-chunks.
+            if !current.trim().is_empty() {
+                chunks.push(current.trim().to_string());
+                current.clear();
+                current_tokens = 0;
+            }
             let token_chunks = chunk_text_tokens(paragraph, max_tokens, overlap_ratio);
             chunks.extend(token_chunks);
-        } else {
-            chunks.push(paragraph.trim().to_string());
+            continue;
         }
+        // Separator between packed paragraphs costs ~1 token.
+        let sep_cost = if current.is_empty() { 0 } else { 1 };
+        if current_tokens + para_tokens + sep_cost > max_tokens && !current.is_empty() {
+            chunks.push(current.trim().to_string());
+            current.clear();
+            current_tokens = 0;
+        }
+        // Recompute after potential flush — first paragraph in a fresh
+        // accumulator has no separator cost.
+        let sep_cost = if current.is_empty() { 0 } else { 1 };
+        if !current.is_empty() {
+            current.push_str("\n\n");
+        }
+        current.push_str(paragraph.trim());
+        current_tokens += para_tokens + sep_cost;
+    }
+    if !current.trim().is_empty() {
+        chunks.push(current.trim().to_string());
     }
 
     chunks
@@ -84,9 +113,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn paragraph_chunker_respects_blank_lines() {
+    fn paragraph_chunker_packs_small_paragraphs() {
         let text = "Para one.\nLine two.\n\nPara two continues here.";
         let chunks = chunk_text_paragraphs(text, 50, 0.0);
+        // Both paragraphs fit within 50 tokens — they should be packed together.
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].contains("Para one."));
+        assert!(chunks[0].contains("Para two continues here."));
+    }
+
+    #[test]
+    fn paragraph_chunker_splits_when_budget_exceeded() {
+        let text = "Short.\n\nAnother short paragraph.\n\nYet another.";
+        let chunks = chunk_text_paragraphs(text, 3, 0.0);
+        // With a 3-token budget each paragraph must be its own chunk.
         assert!(chunks.len() >= 2);
     }
 

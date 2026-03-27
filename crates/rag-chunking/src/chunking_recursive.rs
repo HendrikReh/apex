@@ -23,7 +23,7 @@ pub fn chunk_text_recursive_chars(
                 overlapped.push(ch.clone());
                 continue;
             }
-            let prev = overlapped.last().cloned().unwrap_or_default();
+            let prev = &chunks[i - 1];
             let keep: String = prev
                 .chars()
                 .rev()

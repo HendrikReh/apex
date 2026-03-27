@@ -5,6 +5,13 @@
 
 use crate::chunking_token::chunk_text_tokens;
 
+/// Estimate token cost of a page/chunk label so we can reserve budget.
+fn label_token_overhead(label: &str) -> usize {
+    crate::bpe()
+        .map(|bpe| bpe.encode_with_special_tokens(label).len())
+        .unwrap_or_else(|| ((label.len() as f32) / crate::CHARS_PER_TOKEN).ceil() as usize)
+}
+
 /// Page-aware token chunker with page and chunk number annotations.
 pub fn chunk_text_page_tokens(text: &str, max_tokens: usize, overlap_ratio: f32) -> Vec<String> {
     let pages: Vec<&str> = text.split('\u{0c}').collect();
@@ -18,7 +25,18 @@ pub fn chunk_text_page_tokens(text: &str, max_tokens: usize, overlap_ratio: f32)
         if trimmed.is_empty() {
             continue;
         }
-        let mut page_chunks = chunk_text_tokens(trimmed, max_tokens, overlap_ratio);
+        // max_tokens == 0 means "do not split" — pass through to chunk_text_tokens
+        // without subtracting label overhead, preserving the no-split contract.
+        let content_budget = if max_tokens == 0 {
+            0
+        } else {
+            // Use a 4-digit chunk number to cover any realistic page length.
+            let sample_label = format!("[page {} chunk 9999]\n", page_idx + 1);
+            let reserved = label_token_overhead(&sample_label);
+            max_tokens.saturating_sub(reserved).max(1)
+        };
+
+        let mut page_chunks = chunk_text_tokens(trimmed, content_budget, overlap_ratio);
         for (chunk_idx, chunk) in page_chunks.iter_mut().enumerate() {
             *chunk = format!("[page {} chunk {}]\n{}", page_idx + 1, chunk_idx + 1, chunk);
         }

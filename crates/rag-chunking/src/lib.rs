@@ -366,6 +366,11 @@ pub fn is_cjk_char(c: char) -> bool {
 }
 
 /// Dispatch chunking by strategy with word boundary normalization.
+///
+/// All strategies pass through `normalize_chunk_boundaries` because even
+/// "natural boundary" strategies (sentences, paragraphs, markdown) can
+/// internally delegate to the token chunker for oversized inputs or apply
+/// overlap, producing chunks that start mid-word.
 pub async fn chunk_text_with_strategy(
     text: &str,
     strategy: ChunkingStrategy,
