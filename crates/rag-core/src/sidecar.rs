@@ -5,14 +5,14 @@
 //! security classification, and optional ingestion overrides.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 /// Top-level sidecar envelope.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Sidecar {
     pub schema_version: u32,
     pub document: DocumentInfo,
@@ -27,7 +27,7 @@ pub struct Sidecar {
 }
 
 /// Core document metadata.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DocumentInfo {
     pub id: Option<String>,
     pub title: String,
@@ -42,7 +42,7 @@ pub struct DocumentInfo {
 }
 
 /// Where the document was obtained.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceInfo {
     pub url: String,
     pub domain: String,
@@ -51,7 +51,7 @@ pub struct SourceInfo {
 }
 
 /// Access-control list.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AclInfo {
     pub allow_roles: Vec<String>,
     pub deny_roles: Option<Vec<String>>,
@@ -59,7 +59,7 @@ pub struct AclInfo {
 }
 
 /// Security classification and related flags.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SecurityInfo {
     pub classification: String,
     pub requires_evidence_pack: bool,
@@ -69,7 +69,7 @@ pub struct SecurityInfo {
 }
 
 /// How and when the document was retrieved.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProvenanceInfo {
     pub retrieved_at: String,
     pub retrieved_by: String,
@@ -77,14 +77,14 @@ pub struct ProvenanceInfo {
 }
 
 /// Optional ingestion overrides carried in the sidecar.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IngestionConfig {
     pub collection: Option<String>,
     pub chunking: Option<ChunkingOverride>,
 }
 
 /// Per-document chunking parameter overrides.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChunkingOverride {
     pub strategy: Option<String>,
     pub max_tokens: Option<usize>,
