@@ -1,0 +1,86 @@
+name: Documentation Issue
+description: Report missing, incorrect, or unclear documentation
+title: "[Docs] "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Help us improve the documentation! This includes:
+        - API documentation
+        - Setup guides
+        - Configuration examples
+        - Architecture documentation
+        - Code comments
+
+  - type: dropdown
+    id: doc-type
+    attributes:
+      label: Documentation Type
+      description: What kind of documentation needs improvement?
+      options:
+        - Getting Started / Setup
+        - API Reference / OpenAPI
+        - Configuration Guide
+        - Architecture / Design Docs
+        - Code Comments / Rustdoc
+        - Troubleshooting Guide
+        - Performance Tuning
+        - Security / Auth Setup
+        - Examples / Tutorials
+        - CLAUDE.md (AI assistant instructions)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue Type
+      description: What's wrong with the documentation?
+      options:
+        - Missing documentation
+        - Incorrect/outdated information
+        - Unclear/confusing explanation
+        - Missing examples
+        - Broken links
+        - Typo/grammar issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: location
+    attributes:
+      label: Documentation Location
+      description: Where is the documentation issue?
+      placeholder: |
+        - File: docs/authentication.md (lines 45-60)
+        - URL: https://github.com/HendrikReh/apex/blob/main/docs/...
+        - Function: `RetrievalService::search()` in crates/rag-core/src/retrieval.rs
+        - Endpoint: POST /search in OpenAPI spec
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-content
+    attributes:
+      label: Current Content (if applicable)
+      description: Quote the current documentation that needs improvement
+
+  - type: textarea
+    id: suggested-improvement
+    attributes:
+      label: Suggested Improvement
+      description: What should the documentation say instead?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Why is this documentation important?
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to submit a PR to fix this documentation

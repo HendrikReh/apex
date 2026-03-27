@@ -1,0 +1,75 @@
+name: Question
+description: Ask a question about using or understanding Apex
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question about Apex? We're here to help!
+
+        **Tip**: Check these resources first:
+        - [Documentation](https://github.com/HendrikReh/apex/tree/main/docs)
+        - [CLAUDE.md](https://github.com/HendrikReh/apex/blob/main/CLAUDE.md) - System overview
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Question Topic
+      description: What is your question about?
+      options:
+        - Setup / Installation
+        - Configuration
+        - Usage / API
+        - Architecture / Design
+        - Performance / Optimization
+        - Authentication / Security
+        - Deployment / Operations
+        - Troubleshooting
+        - Contributing
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: Ask your question clearly and concisely
+      placeholder: |
+        What would you like to know?
+
+        Example: "How do I configure hybrid retrieval to prefer sparse (BM25) over dense (vector) search?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide context to help us answer better
+      placeholder: |
+        - What are you trying to accomplish?
+        - What have you tried so far?
+        - What did you expect vs what happened?
+        - Any relevant configuration or code snippets?
+
+  - type: textarea
+    id: research
+    attributes:
+      label: Research Done
+      description: What have you already looked at?
+      placeholder: |
+        I've checked:
+        - [ ] docs/
+        - [ ] CLAUDE.md
+        - [ ] config/app.toml comments
+        - [ ] Existing GitHub issues
+
+  - type: checkboxes
+    id: follow-up
+    attributes:
+      label: Follow-up
+      options:
+        - label: I'd like to help improve documentation based on the answer
+        - label: This might be a feature request (if answer is "not currently supported")

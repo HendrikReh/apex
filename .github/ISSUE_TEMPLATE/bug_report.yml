@@ -1,0 +1,149 @@
+name: Bug Report
+description: Report a bug or unexpected behavior in Apex
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please provide as much detail as possible to help us diagnose and fix the issue.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which component is affected?
+      options:
+        - rag-core (Ingestion/Retrieval)
+        - rag-server (REST API)
+        - rag-cli (CLI client)
+        - rag-chunking (Chunking strategies)
+        - agent-core (Agent orchestration)
+        - infrastructure (Docker/Deployment)
+        - documentation
+        - other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How severe is this bug?
+      options:
+        - Critical - Production outage or data loss
+        - High - Major feature broken, no workaround
+        - Medium - Feature partially broken, workaround exists
+        - Low - Minor issue, cosmetic problem
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is
+      placeholder: |
+        What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this bug?
+      placeholder: |
+        1. Start the server with `just run-server`
+        2. Send POST request to `/ingest` with payload: ...
+        3. Observe error: ...
+
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and Error Messages
+      description: Include relevant logs, error messages, or stack traces
+      placeholder: |
+        ```
+        [2026-03-27T10:00:00Z ERROR rag_server] Error message here
+        Stack trace...
+        ```
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: What environment are you running in?
+      value: |
+        - OS: [e.g., macOS 15, Ubuntu 24.04]
+        - Rust version: [output of `rustc --version`]
+        - Apex version: [e.g., v0.1.0 or commit hash]
+        - Deployment: [local, Docker, production]
+        - Auth mode: [none, api-key, oidc]
+        - Embedder: [openai, mock]
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration
+      description: Relevant configuration (redact secrets!)
+      placeholder: |
+        ```toml
+        # config/app.toml (relevant sections)
+        ```
+
+        ```bash
+        # Environment variables
+        EMBEDDER=openai
+        AUTH_MODE=oidc
+        # ... (redact API keys!)
+        ```
+      render: shell
+
+  - type: checkboxes
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: Can you reproduce this bug consistently?
+      options:
+        - label: Bug occurs every time
+        - label: Bug occurs intermittently (< 50% of the time)
+        - label: Bug occurred once, cannot reproduce
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: Is there a temporary workaround for this issue?
+      placeholder: |
+        If you've found a way to work around this bug, please describe it here.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context about the problem
+      placeholder: |
+        - Related issues: #123
+        - Started happening after: [e.g., upgrade to v0.2.0]
+        - Affects: [e.g., only OIDC auth, only large PDFs]
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: I have included sufficient information to reproduce the bug
+          required: true
+        - label: I have redacted any sensitive information (API keys, passwords)
+          required: true

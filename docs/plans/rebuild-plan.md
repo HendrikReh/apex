@@ -1,15 +1,39 @@
 # Apex Accelerator — Rebuild Plan
 
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-03-27
 **Source of truth:** projectAlpha (`/Users/hendrik/Developer/projectAlpha`)
 **Target repo:** apex (`/Users/hendrik/Developer/apex`)
 
 ---
 
+## 0. Rebuild Philosophy
+
+projectAlpha is the behavioral reference — read it to understand *what* the system does and *why*. However, this is a **clean-room rebuild**, not a port. When reimplementing, evaluate each behavior critically:
+
+- **Match projectAlpha** when the behavior is correct and well-designed.
+- **Diverge from projectAlpha** when a correctness bug, design flaw, or unnecessary complexity is identified. Fix it in apex rather than replicating the problem.
+- **Document every intentional divergence** with a brief rationale, so the delta between the two codebases is traceable.
+
+### Divergence Criteria
+
+A divergence is warranted when:
+
+1. **Correctness bug** — projectAlpha produces wrong output (e.g., overlap compounding, normalization applied to wrong code path, budget accounting that ignores overhead).
+2. **Semantic mismatch** — the code doesn't match its documented intent (e.g., a "packing" chunker that doesn't actually pack).
+3. **Unnecessary complexity** — projectAlpha has workarounds or compatibility shims that the clean-room rebuild doesn't need.
+
+A divergence is **not** warranted for subjective style preferences or speculative improvements without a concrete correctness argument.
+
+### Tracking Divergences
+
+Each intentional divergence is recorded as a beads issue (`bd create --type=task --title="divergence: ..."`) so the list stays queryable alongside the rest of the work.
+
+---
+
 ## 1. Current Behavior to Preserve
 
-These are the observable behaviors of the existing system that the rebuild must eventually match. Ordered by user-facing importance.
+These are the observable behaviors of the existing system that the rebuild must eventually match (or intentionally improve upon — see Section 0). Ordered by user-facing importance.
 
 ### 1.1 Core RAG Pipeline
 
@@ -82,12 +106,7 @@ These are the observable behaviors of the existing system that the rebuild must 
 ```
 apex/
 ├── Cargo.toml                    # Workspace root
-├── Justfile                      # Task runner (modular imports from .just/)
-├── .just/
-│   ├── docker.just
-│   ├── server.just
-│   ├── build.just
-│   └── test.just
+├── Justfile                      # Task runner (single file, all recipes)
 ├── config/
 │   ├── app.toml                  # Non-secret configuration
 │   ├── agents/                   # Agent YAML specs (post-MVP)
@@ -218,8 +237,11 @@ apex/
 - Strategy auto-selection based on content heuristics
 
 **Simplified vs matched:**
-- **Matched exactly:** chunking output for identical inputs must match projectAlpha (write comparison tests)
-- **Matched exactly:** boundary normalization behavior
+- **Reference baseline:** projectAlpha chunking output informs expected behavior, but apex diverges where correctness bugs are found (see Section 0)
+- **Kept from projectAlpha:** boundary normalization applied unconditionally in the dispatcher for all strategies — necessary because even "natural boundary" strategies (sentences, paragraphs, markdown) delegate to the token chunker for oversized inputs or overlap, producing mid-word starts
+- **Divergence-aware:** overlap in sentence/recursive chunkers uses original chunks, not compounding overlapped output (fixes a projectAlpha bug)
+- **Divergence-aware:** paragraph chunker packs small paragraphs into shared output chunks (matches documented intent that projectAlpha's implementation missed)
+- **Divergence-aware:** page-aware chunkers reserve label token budget before splitting content (fixes token budget overrun in projectAlpha)
 
 **Key deliverables:**
 - [ ] `ChunkingStrategy` enum with `FromStr`, `as_str`, `all()`
@@ -265,8 +287,8 @@ apex/
 
 **Simplified vs matched:**
 - **Simplified:** 2 migrations instead of 15. Consolidate the schema — no need to replay the historical evolution.
-- **Matched exactly:** document identity semantics (ADR-002)
-- **Matched exactly:** tenant isolation on every query
+- **Matched (or improved):** document identity semantics (ADR-002)
+- **Matched (or improved):** tenant isolation on every query
 - **Deferred:** audit columns (created_at/updated_at/updated_by) — add when needed
 - **Deferred:** prompt, agent, suggestion_feedback, hallucination tables — later phases
 
@@ -311,9 +333,9 @@ apex/
 
 **Simplified vs matched:**
 - **Simplified:** 3 extractors instead of 15. ExtractorRegistry designed for easy addition of more.
-- **Matched exactly:** embedding dimensions (1536 for text-embedding-3-small)
-- **Matched exactly:** BM25 tokenization and sparse vector format (must produce compatible Qdrant sparse vectors)
-- **Matched exactly:** checksum-based skip logic
+- **Matched (or improved):** embedding dimensions (1536 for text-embedding-3-small)
+- **Matched (or improved):** BM25 tokenization and sparse vector format (must produce compatible Qdrant sparse vectors)
+- **Matched (or improved):** checksum-based skip logic
 - **Deferred:** OCR (Tesseract), DOCX/PPTX/XLSX, HTML, CSV, JSON, YAML, XML, code, email, ZIP
 
 **Key deliverables:**
@@ -365,8 +387,8 @@ apex/
 **Simplified vs matched:**
 - **Simplified:** synchronous only (no async queue, no job tracking)
 - **Simplified:** no OCR, no archive extraction, no email parsing
-- **Matched exactly:** the 10-step pipeline sequence (write-before-delete for safety)
-- **Matched exactly:** document identity semantics on re-ingest
+- **Matched (or improved):** the 10-step pipeline sequence (write-before-delete for safety)
+- **Matched (or improved):** document identity semantics on re-ingest
 
 **Key deliverables:**
 - [ ] `IngestService` with full pipeline
@@ -414,9 +436,9 @@ apex/
 **Simplified vs matched:**
 - **Simplified:** no reranking (cross-encoder), no MMR diversity sampling — deferred to post-MVP
 - **Simplified:** 3 dedupe modes instead of 4 (semantic deferred)
-- **Matched exactly:** RRF formula and default parameters
-- **Matched exactly:** token budget enforcement
-- **Matched exactly:** search result format (chunk text + score + document metadata)
+- **Matched (or improved):** RRF formula and default parameters
+- **Matched (or improved):** token budget enforcement
+- **Matched (or improved):** search result format (chunk text + score + document metadata)
 
 **Key deliverables:**
 - [ ] `RetrievalService` with dense, sparse, and hybrid search
@@ -461,8 +483,8 @@ apex/
 - **Simplified:** file-based prompts instead of DB-backed catalog
 - **Simplified:** no guardrails (injection detection, PII redaction) — deferred
 - **Simplified:** no suggestion tracking or feedback endpoints
-- **Matched exactly:** chat request/response format (compatible with projectAlpha's API contract)
-- **Matched exactly:** conversation history inclusion in LLM context
+- **Matched (or improved):** chat request/response format (compatible with projectAlpha's API contract)
+- **Matched (or improved):** conversation history inclusion in LLM context
 
 **Key deliverables:**
 - [ ] `ChatService` with end-to-end RAG chat
@@ -515,9 +537,9 @@ apex/
 - **Simplified:** 6 endpoints instead of ~50. Enough for the MVP user journey.
 - **Simplified:** `auth_mode=none` only. Middleware slot exists but only tenant extraction is active.
 - **Simplified:** no rate limiting, no RBAC enforcement, no license guard, no cancellation tokens
-- **Matched exactly:** endpoint paths and request/response JSON shapes (API compatibility)
-- **Matched exactly:** `X-Tenant` header semantics
-- **Matched exactly:** health/readiness response format
+- **Matched (or improved):** endpoint paths and request/response JSON shapes (API compatibility)
+- **Matched (or improved):** `X-Tenant` header semantics
+- **Matched (or improved):** health/readiness response format
 
 **Key deliverables:**
 - [ ] Axum router with 6 endpoints
@@ -566,8 +588,8 @@ apex/
 
 **Simplified vs matched:**
 - **Simplified:** 3 subcommands instead of 13. MVP-critical only.
-- **Matched exactly:** CLI output format for chat (response + sources)
-- **Matched exactly:** `TenantApiClient` header injection pattern
+- **Matched (or improved):** CLI output format for chat (response + sources)
+- **Matched (or improved):** `TenantApiClient` header injection pattern
 - **Deferred:** `refresh`, `agents`, `runs`, `reindex-bm25`, `reembed`, `api-key`, `keys`, `evidence`, `prompts`, `sbom` subcommands
 
 **Key deliverables:**
@@ -636,9 +658,9 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 **Simplified vs matched:**
 - **Simplified:** no external tool execution (deferred)
 - **Simplified:** no policy check, pricing rules, SQL allowlist tasks (domain-specific, added incrementally)
-- **Matched exactly:** agent spec YAML format (compatibility with existing specs)
-- **Matched exactly:** run lifecycle state machine
-- **Matched exactly:** checkpoint approval/rejection API
+- **Matched (or improved):** agent spec YAML format (compatibility with existing specs)
+- **Matched (or improved):** run lifecycle state machine
+- **Matched (or improved):** checkpoint approval/rejection API
 
 **Key deliverables:**
 - [ ] Agent graph builder from YAML spec
@@ -682,7 +704,7 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 - API key generation utility
 
 **Simplified vs matched:**
-- **Matched exactly:** auth header semantics, role hierarchy, rate limit behavior
+- **Matched (or improved):** auth header semantics, role hierarchy, rate limit behavior
 - **Deferred:** JWKS cache TTL tuning, clock skew leeway (hardening)
 
 **Key deliverables:**
@@ -731,8 +753,8 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 - Chat service integration
 
 **Simplified vs matched:**
-- **Matched exactly:** prompt resolution semantics
-- **Matched exactly:** API endpoints and response shapes
+- **Matched (or improved):** prompt resolution semantics
+- **Matched (or improved):** API endpoints and response shapes
 
 **Key deliverables:**
 - [ ] Prompt CRUD + lifecycle
@@ -778,8 +800,8 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 
 **Simplified vs matched:**
 - **Simplified:** scheduler runs basic stale detection only (no notifications yet)
-- **Matched exactly:** async ingest API contract (job_id polling)
-- **Matched exactly:** admin endpoint paths
+- **Matched (or improved):** async ingest API contract (job_id polling)
+- **Matched (or improved):** admin endpoint paths
 
 **Key deliverables:**
 - [ ] Job queue with in-memory + Redis backends
@@ -827,9 +849,9 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 - Email body extraction with script/style stripping
 
 **Simplified vs matched:**
-- **Matched exactly:** extraction output for each format (same text from same input)
-- **Matched exactly:** ZIP safety limits
-- **Matched exactly:** OCR timeout pattern
+- **Matched (or improved):** extraction output for each format (same text from same input)
+- **Matched (or improved):** ZIP safety limits
+- **Matched (or improved):** OCR timeout pattern
 
 **Key deliverables:**
 - [ ] 12 additional extractors
@@ -875,8 +897,8 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 - Template rendering
 
 **Simplified vs matched:**
-- **Matched exactly:** evidence pack ZIP format and manifest schema
-- **Matched exactly:** Ed25519 signature format (compatible with projectAlpha verification)
+- **Matched (or improved):** evidence pack ZIP format and manifest schema
+- **Matched (or improved):** Ed25519 signature format (compatible with projectAlpha verification)
 - **Deferred:** cloud KMS signing, RFC 3161 timestamping
 
 **Key deliverables:**
@@ -920,8 +942,8 @@ curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: 
 - Cooperative cancellation through pipeline stages
 
 **Simplified vs matched:**
-- **Matched exactly:** guardrail detection accuracy (port test cases)
-- **Matched exactly:** cancellation token hierarchy
+- **Matched (or improved):** guardrail detection accuracy (port test cases)
+- **Matched (or improved):** cancellation token hierarchy
 
 **Key deliverables:**
 - [ ] Guardrail checks integrated into chat and search paths
@@ -986,6 +1008,7 @@ Some phases can overlap:
 | **pdfium native library** | Platform-specific binary, not on crates.io | Vendor in repo or download in build script. Document setup. |
 | **graph-flow crate maintenance** | If unmaintained, agent-core is blocked | Evaluate early (Phase 9 start). Fallback: build minimal DAG runner (~1-2 weeks). |
 | **BM25 quality regression** | Different tokenization → different retrieval quality | Port BM25 tokenization exactly. Run comparative tests against projectAlpha output. |
+| **Untracked divergences** | Apex silently differs from projectAlpha without documentation | Record every intentional divergence as a beads issue. Review divergences when porting dependent code. |
 | **Migration consolidation** | Merging 15 migrations into fewer may miss edge cases | Review each migration carefully. Test against production-like data volume. |
 | **OpenAI API cost during development** | Repeated embedding/chat calls during testing | Use mock embedder and mock LLM for all automated tests. Real API only for manual validation. |
 

@@ -1,0 +1,113 @@
+name: Retrieval Quality Issue
+description: Report problems with search relevance, ranking, or retrieval accuracy
+title: "[Quality] "
+labels: ["rag-core", "retrieval"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to report issues with retrieval quality, such as:
+        - Irrelevant results returned
+        - Expected documents not retrieved
+        - Poor ranking of results
+        - Issues with hybrid retrieval (dense + sparse)
+
+  - type: dropdown
+    id: retrieval-mode
+    attributes:
+      label: Retrieval Mode
+      description: Which retrieval mode exhibits the issue?
+      options:
+        - Dense (vector/semantic search)
+        - Sparse (BM25 keyword search)
+        - Hybrid (RRF fusion)
+        - Auto (system-selected)
+    validations:
+      required: true
+
+  - type: textarea
+    id: query
+    attributes:
+      label: Query
+      description: What query are you searching for?
+      placeholder: |
+        Query text: "How to configure OIDC authentication?"
+        Collection: "docs"
+        top_k: 10
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-results
+    attributes:
+      label: Expected Results
+      description: What documents/chunks should be retrieved?
+
+  - type: textarea
+    id: actual-results
+    attributes:
+      label: Actual Results
+      description: What documents/chunks were actually retrieved?
+      render: shell
+
+  - type: textarea
+    id: scores
+    attributes:
+      label: Scores and Metadata
+      description: Include retrieval scores if available
+      render: json
+
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue Type
+      description: What kind of quality issue is this?
+      options:
+        - Missing expected results (recall issue)
+        - Irrelevant results returned (precision issue)
+        - Poor ranking (expected docs ranked too low)
+        - Duplicate results
+        - Empty results (nothing returned)
+        - Incorrect filtering (tenant/collection)
+    validations:
+      required: true
+
+  - type: textarea
+    id: corpus-info
+    attributes:
+      label: Corpus Information
+      description: Details about your document collection
+      value: |
+        - Collection: [e.g., "docs"]
+        - Total documents: [e.g., 1,500]
+        - Total chunks: [e.g., 45,000]
+        - Embedding model: [e.g., text-embedding-3-small]
+        - Chunking strategy: [e.g., tokens, 600 tokens, 0.15 overlap]
+
+  - type: textarea
+    id: analysis
+    attributes:
+      label: Initial Analysis
+      description: What do you think might be causing the issue?
+
+  - type: checkboxes
+    id: reproducibility
+    attributes:
+      label: Reproducibility
+      description: How consistently does this issue occur?
+      options:
+        - label: Issue occurs for this specific query every time
+        - label: Issue occurs for a class of queries
+        - label: Issue occurs intermittently
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround or Fix Attempts
+      description: Have you tried any workarounds?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information

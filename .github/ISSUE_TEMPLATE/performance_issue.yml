@@ -1,0 +1,96 @@
+name: Performance Issue
+description: Report slow queries, high latency, or resource consumption issues
+title: "[Performance] "
+labels: ["bug", "reliability"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to report performance issues like slow retrieval, high memory usage, or timeouts.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Performance Area
+      description: Which operation is slow?
+      options:
+        - Ingestion (PDF extraction/chunking/embedding)
+        - Retrieval (search/ranking/fusion)
+        - Database queries (Postgres)
+        - Vector search (Qdrant)
+        - API endpoints
+        - Background jobs
+        - Memory/CPU usage
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Performance Metrics
+      description: What are you observing?
+      placeholder: |
+        - Operation: [e.g., /search endpoint]
+        - Current performance: [e.g., P95 latency: 5000ms]
+        - Expected performance: [e.g., P95 latency: < 500ms]
+        - Load: [e.g., 100 req/s, 1000 docs ingested]
+        - Resource usage: [e.g., 8GB RAM, 80% CPU]
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: How to Reproduce
+      description: Steps to observe the performance issue
+      placeholder: |
+        1. Ingest 10,000 PDFs
+        2. Run search query: `curl -X POST .../search -d '{"query": "..."}'`
+        3. Observe response time: 5+ seconds
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: profiling
+    attributes:
+      label: Profiling Data
+      description: Include profiling results if available
+      render: shell
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: System specs and configuration
+      value: |
+        - Corpus size: [e.g., 100K documents, 500K chunks]
+        - Hardware: [e.g., 8 CPU, 16GB RAM]
+        - Postgres pool: [e.g., max_connections=10]
+        - Deployment: [local, Docker, k8s]
+    validations:
+      required: true
+
+  - type: textarea
+    id: analysis
+    attributes:
+      label: Initial Analysis
+      description: What do you think is causing the slowness?
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact
+      description: What is affected by this performance issue?
+      options:
+        - label: Production workload (blocking users)
+        - label: Development/testing workflow
+        - label: Specific use case or query pattern
+        - label: Resource costs (high cloud bills)
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information

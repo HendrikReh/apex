@@ -1,0 +1,117 @@
+name: Feature Request
+description: Suggest a new feature or enhancement for Apex
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest a new feature! Please fill out the form below.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which component does this feature relate to?
+      options:
+        - rag-core (Ingestion/Retrieval)
+        - rag-server (REST API)
+        - rag-cli (CLI client)
+        - rag-chunking (Chunking strategies)
+        - agent-core (Agent orchestration)
+        - infrastructure (Docker/Deployment)
+        - documentation
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? What user need does it address?
+      placeholder: |
+        As a [user type], I want [goal] so that [benefit].
+
+        Currently, [description of current limitation or pain point].
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed Solution
+      description: How should this feature work? Be as specific as possible.
+      placeholder: |
+        The feature should work as follows:
+
+        1. User action...
+        2. System behavior...
+        3. Expected outcome...
+
+        API example (if applicable):
+        ```rust
+        // Example code
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What alternative solutions or workarounds have you considered?
+      placeholder: |
+        - Alternative 1: ...
+        - Alternative 2: ...
+        - Current workaround: ...
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How important is this feature to you?
+      options:
+        - P0 - Critical (blocking production use)
+        - P1 - High (significant user impact)
+        - P2 - Medium (nice to have)
+        - P3 - Low (future enhancement)
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: impact
+    attributes:
+      label: Impact Areas
+      description: Which areas would this feature affect? (Check all that apply)
+      options:
+        - label: Retrieval quality (affects relevance/accuracy)
+        - label: Performance (affects latency/throughput)
+        - label: Security (authentication/authorization/data isolation)
+        - label: Observability (metrics/logging/tracing)
+        - label: Developer experience (API design/documentation)
+        - label: Multi-tenancy (tenant isolation/management)
+        - label: Breaking change (requires migration or config update)
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Add any other context, mockups, or examples
+      placeholder: |
+        - Related issues: #123, #456
+        - Similar feature in other systems: [link]
+        - User stories or use cases: ...
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      description: Please confirm the following
+      options:
+        - label: I have searched existing issues to avoid duplicates
+          required: true
+        - label: I have read the contributing guidelines
+          required: true
+        - label: This feature aligns with the project's goals (RAG/retrieval system)
+          required: true

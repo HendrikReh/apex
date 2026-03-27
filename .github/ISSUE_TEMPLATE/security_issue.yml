@@ -1,0 +1,94 @@
+name: Security Issue
+description: Report a security vulnerability or concern (use private reporting for critical issues)
+title: "[Security] "
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **IMPORTANT**: For critical security vulnerabilities (e.g., data leakage, authentication bypass, injection attacks), please use [GitHub Private Vulnerability Reporting](https://github.com/HendrikReh/apex/security/advisories/new) instead of this public issue.
+
+        Use this template for:
+        - Security hardening suggestions
+        - Non-critical security concerns
+        - Questions about security best practices
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Security Category
+      description: What type of security issue is this?
+      options:
+        - Authentication/Authorization (OIDC, API keys)
+        - Multi-tenancy/Data Isolation
+        - Input Validation (SQL injection, prompt injection)
+        - Secrets Management
+        - Network Security
+        - Dependency Vulnerability
+        - Observability/Logging (sensitive data exposure)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity Assessment
+      description: How severe is this security issue?
+      options:
+        - Critical - Immediate action required (data breach, auth bypass)
+        - High - Significant risk (cross-tenant leakage, privilege escalation)
+        - Medium - Moderate risk (information disclosure, hardening needed)
+        - Low - Minor concern (security best practice)
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Issue Description
+      description: Describe the security issue or concern
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential Impact
+      description: What could happen if this issue is exploited?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Proof of Concept (if applicable)
+      description: Steps to demonstrate the issue (for non-critical issues only)
+
+  - type: textarea
+    id: affected-components
+    attributes:
+      label: Affected Components
+      description: Which parts of the system are affected?
+
+  - type: textarea
+    id: remediation
+    attributes:
+      label: Suggested Remediation
+      description: How should this be fixed?
+
+  - type: checkboxes
+    id: disclosure
+    attributes:
+      label: Disclosure
+      options:
+        - label: This is NOT a critical vulnerability (I confirmed using public issue is appropriate)
+          required: true
+        - label: I have NOT shared details of this issue publicly elsewhere
+          required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
