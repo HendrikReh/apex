@@ -39,9 +39,7 @@ pub fn chunk_text_pages(text: &str, max_tokens: usize, overlap_ratio: f32) -> Ve
         let label = format!("[page {}]\n", page_num);
         let reserved = crate::bpe()
             .map(|bpe| bpe.encode_with_special_tokens(&label).len())
-            .unwrap_or_else(|| {
-                ((label.len() as f32) / crate::CHARS_PER_TOKEN).ceil() as usize
-            });
+            .unwrap_or_else(|| ((label.len() as f32) / crate::CHARS_PER_TOKEN).ceil() as usize);
         let content_budget = max_tokens.saturating_sub(reserved).max(1);
 
         let page_chunks = chunk_text_tokens(trimmed, content_budget, overlap_ratio);
