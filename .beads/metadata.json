@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "apex",
+  "project_id": "af8e9dbd-ec86-42d2-9db8-fe7510a56a72"
+}
