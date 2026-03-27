@@ -1,0 +1,209 @@
+//! Document format extraction primitives.
+//!
+//! The extractor interface is async from the start so OCR- or subprocess-based
+//! extractors can be added later without a breaking trait change.
+
+use std::collections::HashMap;
+
+use anyhow::{Context, Result, anyhow, bail};
+use futures::future::BoxFuture;
+
+/// File formats currently recognized by the extraction layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileType {
+    Pdf,
+    Markdown,
+    Text,
+}
+
+impl FileType {
+    /// Infer a supported file type from a filename extension.
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension.trim_start_matches('.').to_ascii_lowercase().as_str() {
+            "pdf" => Some(Self::Pdf),
+            "md" | "markdown" => Some(Self::Markdown),
+            "txt" | "text" => Some(Self::Text),
+            _ => None,
+        }
+    }
+}
+
+/// Normalized text extracted from a source document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionResult {
+    pub text: String,
+}
+
+/// Async-capable extractor interface for one or more file types.
+pub trait FormatExtractor: Send + Sync {
+    fn supported_types(&self) -> &'static [FileType];
+
+    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>>;
+}
+
+/// Registry that dispatches extraction requests by file type.
+pub struct ExtractorRegistry {
+    extractors: Vec<Box<dyn FormatExtractor>>,
+    by_type: HashMap<FileType, usize>,
+}
+
+impl ExtractorRegistry {
+    /// Build a registry from a concrete set of extractors.
+    pub fn new(extractors: Vec<Box<dyn FormatExtractor>>) -> Result<Self> {
+        let mut by_type = HashMap::new();
+
+        for (index, extractor) in extractors.iter().enumerate() {
+            for file_type in extractor.supported_types() {
+                if by_type.insert(*file_type, index).is_some() {
+                    bail!("duplicate extractor registration for file type {file_type:?}");
+                }
+            }
+        }
+
+        Ok(Self { extractors, by_type })
+    }
+
+    /// Construct the default registry used by the initial extraction pipeline.
+    pub fn with_defaults() -> Result<Self> {
+        Self::new(vec![
+            Box::new(PdfExtractor),
+            Box::new(MarkdownExtractor),
+            Box::new(TextExtractor),
+        ])
+    }
+
+    /// Extract normalized text for the given file type.
+    pub async fn extract(&self, file_type: FileType, content: &[u8]) -> Result<ExtractionResult> {
+        let Some(index) = self.by_type.get(&file_type).copied() else {
+            bail!("no extractor registered for file type {file_type:?}");
+        };
+
+        self.extractors[index]
+            .extract(content)
+            .await
+            .with_context(|| format!("extracting content for file type {file_type:?}"))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TextExtractor;
+
+impl FormatExtractor for TextExtractor {
+    fn supported_types(&self) -> &'static [FileType] {
+        &[FileType::Text]
+    }
+
+    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+        Box::pin(async move { extract_utf8_passthrough(content, "plain text") })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct MarkdownExtractor;
+
+impl FormatExtractor for MarkdownExtractor {
+    fn supported_types(&self) -> &'static [FileType] {
+        &[FileType::Markdown]
+    }
+
+    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+        Box::pin(async move { extract_utf8_passthrough(content, "markdown") })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PdfExtractor;
+
+impl FormatExtractor for PdfExtractor {
+    fn supported_types(&self) -> &'static [FileType] {
+        &[FileType::Pdf]
+    }
+
+    fn extract<'a>(&'a self, _content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+        Box::pin(async move {
+            Err(anyhow!(
+                "PDF extraction is not implemented yet; wire in a pdfium-backed extractor next"
+            ))
+        })
+    }
+}
+
+fn extract_utf8_passthrough(content: &[u8], format_name: &str) -> Result<ExtractionResult> {
+    let text = std::str::from_utf8(content)
+        .with_context(|| format!("decoding {format_name} content as UTF-8"))?
+        .to_owned();
+
+    Ok(ExtractionResult { text })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn text_registry_extracts_utf8_content() {
+        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+
+        let result = registry
+            .extract(FileType::Text, b"hello world")
+            .await
+            .expect("text extraction should succeed");
+
+        assert_eq!(result.text, "hello world");
+    }
+
+    #[tokio::test]
+    async fn markdown_registry_extracts_utf8_content() {
+        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+
+        let result = registry
+            .extract(FileType::Markdown, b"# Title\n\nBody")
+            .await
+            .expect("markdown extraction should succeed");
+
+        assert_eq!(result.text, "# Title\n\nBody");
+    }
+
+    #[tokio::test]
+    async fn registry_rejects_duplicate_file_type_registration() {
+        struct DuplicateTextExtractor;
+
+        impl FormatExtractor for DuplicateTextExtractor {
+            fn supported_types(&self) -> &'static [FileType] {
+                &[FileType::Text]
+            }
+
+            fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+                Box::pin(async move { extract_utf8_passthrough(content, "plain text") })
+            }
+        }
+
+        let err = match ExtractorRegistry::new(vec![
+            Box::new(TextExtractor),
+            Box::new(DuplicateTextExtractor),
+        ]) {
+            Ok(_) => panic!("duplicate file type registration should fail"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("duplicate extractor registration"),
+            "expected duplicate registration error, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn pdf_extractor_is_explicitly_unimplemented() {
+        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+
+        let err = registry
+            .extract(FileType::Pdf, b"%PDF-1.7")
+            .await
+            .expect_err("pdf extraction should fail until pdfium is wired in");
+
+        assert!(
+            err.to_string().contains("not implemented"),
+            "expected unimplemented pdf extraction error, got {err}"
+        );
+    }
+}

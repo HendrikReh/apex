@@ -4,9 +4,14 @@
 //! storage abstractions with tenant-scoped operations.
 
 pub mod config;
+pub mod extract;
 pub mod stores;
 pub mod tenant;
 
 pub use config::AppConfig;
+pub use extract::{
+    ExtractionResult, ExtractorRegistry, FileType, FormatExtractor, MarkdownExtractor,
+    PdfExtractor, TextExtractor,
+};
 pub use stores::Stores;
 pub use tenant::TenantId;
