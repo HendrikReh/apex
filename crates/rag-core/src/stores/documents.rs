@@ -134,24 +134,24 @@ impl Stores {
         let deleted = result.rows_affected() > 0;
 
         // Decrement corpus_stats if the document was previously counted.
-        if deleted {
-            if let Some((Some(token_count), Some(collection))) = doc {
-                sqlx::query(
-                    r#"
+        if deleted
+            && let Some((Some(token_count), Some(collection))) = doc
+        {
+            sqlx::query(
+                r#"
                     UPDATE corpus_stats
                     SET total_docs   = total_docs - 1,
                         total_tokens = total_tokens - $3,
                         updated_at   = now()
                     WHERE tenant = $1 AND collection = $2
                     "#,
-                )
-                .bind(tenant)
-                .bind(&collection)
-                .bind(token_count)
-                .execute(&mut *tx)
-                .await
-                .context("decrementing corpus stats after document delete")?;
-            }
+            )
+            .bind(tenant)
+            .bind(&collection)
+            .bind(token_count)
+            .execute(&mut *tx)
+            .await
+            .context("decrementing corpus stats after document delete")?;
         }
 
         tx.commit().await.context("committing delete_document transaction")?;

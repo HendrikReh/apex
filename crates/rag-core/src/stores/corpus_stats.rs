@@ -72,25 +72,25 @@ impl Stores {
         };
 
         // Decrement old collection if the document is moving.
-        if let Some(ref old_coll) = old_stats_collection {
-            if old_coll != collection {
-                let old_tokens = old_stats_tokens.unwrap_or(0);
-                sqlx::query(
-                    r#"
+        if let Some(ref old_coll) = old_stats_collection
+            && old_coll != collection
+        {
+            let old_tokens = old_stats_tokens.unwrap_or(0);
+            sqlx::query(
+                r#"
                     UPDATE corpus_stats
                     SET total_docs   = total_docs - 1,
                         total_tokens = total_tokens - $3,
                         updated_at   = now()
                     WHERE tenant = $1 AND collection = $2
                     "#,
-                )
-                .bind(tenant)
-                .bind(old_coll)
-                .bind(old_tokens)
-                .execute(&mut *tx)
-                .await
-                .context("decrementing old collection corpus stats")?;
-            }
+            )
+            .bind(tenant)
+            .bind(old_coll)
+            .bind(old_tokens)
+            .execute(&mut *tx)
+            .await
+            .context("decrementing old collection corpus stats")?;
         }
 
         // Compute delta for the target collection.
