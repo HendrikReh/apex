@@ -33,7 +33,9 @@ pub enum AnyEmbedder {
 impl AnyEmbedder {
     pub fn from_config(config: &AppConfig) -> Result<Self> {
         match config.embedder {
-            EmbedderKind::OpenAi => Ok(Self::OpenAi(Box::new(OpenAiEmbedder::from_config(config)?))),
+            EmbedderKind::OpenAi => {
+                Ok(Self::OpenAi(Box::new(OpenAiEmbedder::from_config(config)?)))
+            }
             EmbedderKind::Mock => Ok(Self::Mock(MockEmbedder::from_config(config)?)),
         }
     }
@@ -94,8 +96,7 @@ impl OpenAiEmbedder {
         }
 
         let dim = embedding_dimension_for_model(&model)?;
-        let tokenizer =
-            get_bpe_from_model(&model).with_context(|| format!("loading tokenizer for {model}"))?;
+        let tokenizer = tokenizer_for_model(&model)?;
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
@@ -115,28 +116,9 @@ impl OpenAiEmbedder {
     }
 
     fn batch_ranges(&self, texts: &[String]) -> Result<Vec<Range<usize>>> {
-        let token_counts = texts
-            .iter()
-            .enumerate()
-            .map(|(index, text)| self.count_tokens(index, text))
-            .collect::<Result<Vec<_>>>()?;
+        let token_counts = validate_embedding_inputs(&self.tokenizer, texts)?;
 
         pack_batch_ranges(&token_counts, self.max_batch_tokens, self.max_batch_size)
-    }
-
-    fn count_tokens(&self, index: usize, text: &str) -> Result<usize> {
-        if text.is_empty() {
-            bail!("embedding input at index {index} must not be empty");
-        }
-
-        let token_count = self.tokenizer.encode_ordinary(text).len();
-        if token_count > MAX_EMBED_INPUT_TOKENS {
-            bail!(
-                "embedding input at index {index} exceeds {MAX_EMBED_INPUT_TOKENS} tokens ({token_count})"
-            );
-        }
-
-        Ok(token_count)
     }
 
     async fn embed_one_batch(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
@@ -200,11 +182,15 @@ impl EmbedService for OpenAiEmbedder {
 
 pub struct MockEmbedder {
     dim: usize,
+    tokenizer: CoreBPE,
 }
 
 impl MockEmbedder {
     pub fn from_config(config: &AppConfig) -> Result<Self> {
-        Ok(Self { dim: embedding_dimension_for_model(&config.embedding_model)? })
+        Ok(Self {
+            dim: embedding_dimension_for_model(&config.embedding_model)?,
+            tokenizer: tokenizer_for_model(&config.embedding_model)?,
+        })
     }
 
     pub fn new(dim: usize) -> Result<Self> {
@@ -212,7 +198,7 @@ impl MockEmbedder {
             bail!("mock embedder dimension must be greater than zero");
         }
 
-        Ok(Self { dim })
+        Ok(Self { dim, tokenizer: tokenizer_for_model("text-embedding-3-small")? })
     }
 
     fn embed_one(&self, text: &str) -> Vec<f32> {
@@ -243,7 +229,14 @@ impl EmbedService for MockEmbedder {
     }
 
     fn embed_batch<'a>(&'a self, texts: &'a [String]) -> BoxFuture<'a, Result<Vec<Vec<f32>>>> {
-        Box::pin(async move { Ok(texts.iter().map(|text| self.embed_one(text)).collect()) })
+        Box::pin(async move {
+            if texts.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            validate_embedding_inputs(&self.tokenizer, texts)?;
+            Ok(texts.iter().map(|text| self.embed_one(text)).collect())
+        })
     }
 }
 
@@ -253,6 +246,29 @@ fn embedding_dimension_for_model(model: &str) -> Result<usize> {
         "text-embedding-3-large" => Ok(3_072),
         other => bail!("unsupported embedding model {other:?}"),
     }
+}
+
+fn tokenizer_for_model(model: &str) -> Result<CoreBPE> {
+    get_bpe_from_model(model).with_context(|| format!("loading tokenizer for {model}"))
+}
+
+fn validate_embedding_inputs(tokenizer: &CoreBPE, texts: &[String]) -> Result<Vec<usize>> {
+    texts.iter().enumerate().map(|(index, text)| count_tokens(tokenizer, index, text)).collect()
+}
+
+fn count_tokens(tokenizer: &CoreBPE, index: usize, text: &str) -> Result<usize> {
+    if text.is_empty() {
+        bail!("embedding input at index {index} must not be empty");
+    }
+
+    let token_count = tokenizer.encode_ordinary(text).len();
+    if token_count > MAX_EMBED_INPUT_TOKENS {
+        bail!(
+            "embedding input at index {index} exceeds {MAX_EMBED_INPUT_TOKENS} tokens ({token_count})"
+        );
+    }
+
+    Ok(token_count)
 }
 
 fn pack_batch_ranges(
@@ -367,6 +383,19 @@ mod tests {
     use super::*;
     use crate::config::{AuthMode, EmbedderKind};
 
+    fn over_limit_input() -> String {
+        let tokenizer =
+            tokenizer_for_model("text-embedding-3-small").expect("test tokenizer should load");
+        let mut repeats = MAX_EMBED_INPUT_TOKENS + 1;
+        loop {
+            let text = "token ".repeat(repeats);
+            if tokenizer.encode_ordinary(&text).len() > MAX_EMBED_INPUT_TOKENS {
+                return text;
+            }
+            repeats *= 2;
+        }
+    }
+
     #[tokio::test]
     #[allow(clippy::disallowed_methods)] // test assertions
     async fn mock_embedder_is_deterministic() {
@@ -379,6 +408,28 @@ mod tests {
         assert_eq!(vectors[0].len(), 8);
         assert_eq!(vectors[0], vectors[2]);
         assert_ne!(vectors[0], vectors[1]);
+    }
+
+    #[tokio::test]
+    async fn mock_embedder_rejects_empty_input() {
+        let embedder = MockEmbedder::new(8).expect("mock embedder should build");
+        let texts = vec![String::new()];
+
+        let err =
+            embedder.embed_batch(&texts).await.expect_err("empty embedding input should fail");
+
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn mock_embedder_rejects_over_limit_input() {
+        let embedder = MockEmbedder::new(8).expect("mock embedder should build");
+        let texts = vec![over_limit_input()];
+
+        let err =
+            embedder.embed_batch(&texts).await.expect_err("over-limit embedding input should fail");
+
+        assert!(err.to_string().contains("exceeds 8192 tokens"));
     }
 
     #[test]
