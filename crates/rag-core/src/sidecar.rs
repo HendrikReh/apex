@@ -22,7 +22,6 @@ pub struct Sidecar {
     pub acl: AclInfo,
     pub security: SecurityInfo,
     pub provenance: ProvenanceInfo,
-    #[serde(default)]
     pub ingestion: Option<IngestionConfig>,
 }
 
@@ -160,10 +159,7 @@ impl Sidecar {
             if let Some(ratio) = chunking.overlap_ratio
                 && !(0.0..1.0).contains(&ratio)
             {
-                bail!(
-                    "ingestion.chunking.overlap_ratio must be in [0.0, 1.0), got {}",
-                    ratio
-                );
+                bail!("ingestion.chunking.overlap_ratio must be in [0.0, 1.0), got {}", ratio);
             }
         }
 

@@ -327,6 +327,7 @@ impl IngestService {
             checksum: prepared.checksum,
             source_path: prepared.source_path,
             chunks,
+            actual_max_tokens: max_tokens,
         })
     }
 
@@ -341,7 +342,7 @@ impl IngestService {
             chunk_texts.iter().map(|text| self.bm25.embed_document(text)).collect();
 
         let total_tokens =
-            chunk_texts.len() as i64 * i64::try_from(self.chunking_max_tokens).unwrap_or(600);
+            chunk_texts.len() as i64 * i64::try_from(chunked.actual_max_tokens).unwrap_or(600);
 
         Ok(EmbeddedDocument {
             document_id: chunked.document_id,
@@ -521,6 +522,7 @@ struct ChunkedDocument {
     checksum: String,
     source_path: String,
     chunks: Vec<ChunkWithSection>,
+    actual_max_tokens: usize,
 }
 
 /// Intermediate: chunks embedded (dense + sparse).
@@ -532,6 +534,8 @@ struct EmbeddedDocument {
     source_path: String,
     chunks: Vec<ChunkWithSection>,
     dense_vectors: Vec<Vec<f32>>,
+    // Sparse vectors are computed but not yet persisted to Qdrant named vectors.
+    // Will be wired in when hybrid retrieval (dense + BM25) is implemented.
     #[allow(dead_code)]
     sparse_vectors: Vec<SparseVector>,
     total_tokens: i64,
