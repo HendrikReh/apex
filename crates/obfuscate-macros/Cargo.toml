@@ -1,0 +1,13 @@
+[package]
+name = "obfuscate-macros"
+description = "String obfuscation proc-macros (deferred hardening)"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]

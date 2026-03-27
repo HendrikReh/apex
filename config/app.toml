@@ -1,0 +1,31 @@
+[app]
+# Qdrant (vector database) settings
+qdrant_url = "http://127.0.0.1:6334"                # gRPC endpoint
+qdrant_timeout_secs = 30
+qdrant_connect_timeout_secs = 5
+
+# Postgres settings
+postgres_max_connections = 10
+postgres_connect_timeout_secs = 5
+
+# BM25 sparse vector settings
+bm25_avgdl = 300.0
+bm25_k1 = 1.2
+bm25_b = 0.75
+
+# Collection defaults
+default_collection = "hybrid_docs"
+
+# Embedding settings
+embedding_model = "text-embedding-3-small"          # OpenAI model (1536 dims)
+embedder = "openai"                                 # Options: "openai", "mock"
+embed_timeout_secs = 30
+embed_max_retries = 3
+
+# Server settings
+bind_addr = "0.0.0.0:8080"
+
+# Authentication
+auth_mode = "none"                                  # Options: "none", "api-key", "oidc"
+tenant_header = "x-tenant"
+request_id_header = "x-request-id"

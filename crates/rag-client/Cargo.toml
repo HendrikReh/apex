@@ -1,0 +1,14 @@
+[package]
+name = "rag-client"
+description = "HTTP client for the Apex RAG server API"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

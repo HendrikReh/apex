@@ -1,0 +1,1 @@
+//! SBOM generation (deferred hardening).

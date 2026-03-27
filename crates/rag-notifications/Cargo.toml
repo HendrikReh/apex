@@ -1,0 +1,10 @@
+[package]
+name = "rag-notifications"
+description = "SMTP notifications (post-MVP)"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

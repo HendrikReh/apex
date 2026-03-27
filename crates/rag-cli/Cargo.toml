@@ -1,0 +1,13 @@
+[package]
+name = "rag-cli"
+description = "CLI binary for the Apex RAG pipeline"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rag-client = { path = "../rag-client" }
+clap.workspace = true
+tokio.workspace = true

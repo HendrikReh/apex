@@ -1,0 +1,1 @@
+//! License enforcement (deferred hardening).

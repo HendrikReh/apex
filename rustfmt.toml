@@ -1,0 +1,7 @@
+edition = "2021"
+max_width = 100
+newline_style = "Unix"
+use_small_heuristics = "Max"
+
+# Stable settings only (nightly-only options removed).
+reorder_imports = true
