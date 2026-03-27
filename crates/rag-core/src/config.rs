@@ -247,16 +247,14 @@ impl AppConfig {
             .or_else(|| f.default_collection.clone())
             .unwrap_or_else(|| "hybrid_docs".to_owned());
 
-        let chunking_max_tokens = env_parsed("CHUNKING_MAX_TOKENS")?
-            .or(f.chunking_max_tokens)
-            .unwrap_or(600);
+        let chunking_max_tokens =
+            env_parsed("CHUNKING_MAX_TOKENS")?.or(f.chunking_max_tokens).unwrap_or(600);
         if chunking_max_tokens == 0 {
             anyhow::bail!("chunking_max_tokens must be greater than zero");
         }
 
-        let chunking_overlap_ratio = env_parsed("CHUNKING_OVERLAP_RATIO")?
-            .or(f.chunking_overlap_ratio)
-            .unwrap_or(0.15);
+        let chunking_overlap_ratio =
+            env_parsed("CHUNKING_OVERLAP_RATIO")?.or(f.chunking_overlap_ratio).unwrap_or(0.15);
         if !(0.0..1.0).contains(&chunking_overlap_ratio) {
             anyhow::bail!(
                 "chunking_overlap_ratio must be in [0.0, 1.0), got {chunking_overlap_ratio}"

@@ -4,7 +4,7 @@
 //! metadata such as document info, source provenance, access control,
 //! security classification, and optional ingestion overrides.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -107,10 +107,7 @@ impl Sidecar {
     /// Validate business-rule invariants.
     pub fn validate(&self) -> Result<()> {
         if self.schema_version != 1 {
-            bail!(
-                "unsupported sidecar schema_version: {} (expected 1)",
-                self.schema_version
-            );
+            bail!("unsupported sidecar schema_version: {} (expected 1)", self.schema_version);
         }
 
         if self.document.title.is_empty() {
@@ -152,21 +149,21 @@ impl Sidecar {
             bail!("provenance.retrieved_by must not be empty");
         }
 
-        if let Some(ref ing) = self.ingestion {
-            if let Some(ref chunking) = ing.chunking {
-                if let Some(max) = chunking.max_tokens {
-                    if max == 0 {
-                        bail!("ingestion.chunking.max_tokens must be > 0");
-                    }
-                }
-                if let Some(ratio) = chunking.overlap_ratio {
-                    if !(0.0..1.0).contains(&ratio) {
-                        bail!(
-                            "ingestion.chunking.overlap_ratio must be in [0.0, 1.0), got {}",
-                            ratio
-                        );
-                    }
-                }
+        if let Some(ref ing) = self.ingestion
+            && let Some(ref chunking) = ing.chunking
+        {
+            if let Some(max) = chunking.max_tokens
+                && max == 0
+            {
+                bail!("ingestion.chunking.max_tokens must be > 0");
+            }
+            if let Some(ratio) = chunking.overlap_ratio
+                && !(0.0..1.0).contains(&ratio)
+            {
+                bail!(
+                    "ingestion.chunking.overlap_ratio must be in [0.0, 1.0), got {}",
+                    ratio
+                );
             }
         }
 
@@ -221,8 +218,8 @@ mod tests {
     #[test]
     fn rejects_wrong_schema_version() {
         let json = valid_sidecar_json().replace("\"schema_version\": 1", "\"schema_version\": 2");
-        let err = Sidecar::from_json(json.as_bytes())
-            .expect_err("schema_version 2 should be rejected");
+        let err =
+            Sidecar::from_json(json.as_bytes()).expect_err("schema_version 2 should be rejected");
         assert!(
             err.to_string().contains("unsupported sidecar schema_version"),
             "error should mention schema_version, got: {err}"
@@ -232,8 +229,7 @@ mod tests {
     #[test]
     fn rejects_empty_title() {
         let json = valid_sidecar_json().replace("\"Test Document\"", "\"\"");
-        let err = Sidecar::from_json(json.as_bytes())
-            .expect_err("empty title should be rejected");
+        let err = Sidecar::from_json(json.as_bytes()).expect_err("empty title should be rejected");
         assert!(
             err.to_string().contains("document.title must not be empty"),
             "error should mention title, got: {err}"
@@ -243,8 +239,7 @@ mod tests {
     #[test]
     fn rejects_empty_tags() {
         let json = valid_sidecar_json().replace("[\"test\"]", "[]");
-        let err =
-            Sidecar::from_json(json.as_bytes()).expect_err("empty tags should be rejected");
+        let err = Sidecar::from_json(json.as_bytes()).expect_err("empty tags should be rejected");
         assert!(
             err.to_string().contains("tags must contain at least one entry"),
             "error should mention tags, got: {err}"
@@ -266,8 +261,8 @@ mod tests {
                 "chunking": { "overlap_ratio": 1.5 }
             }
         }"#;
-        let err = Sidecar::from_json(json.as_bytes())
-            .expect_err("overlap_ratio 1.5 should be rejected");
+        let err =
+            Sidecar::from_json(json.as_bytes()).expect_err("overlap_ratio 1.5 should be rejected");
         assert!(
             err.to_string().contains("overlap_ratio must be in"),
             "error should mention overlap_ratio, got: {err}"
@@ -306,12 +301,10 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)]
     fn ignores_unknown_fields() {
-        let json = valid_sidecar_json().replace(
-            "\"schema_version\": 1",
-            "\"future_field\": true, \"schema_version\": 1",
-        );
-        let sc = Sidecar::from_json(json.as_bytes())
-            .expect("unknown fields should be silently ignored");
+        let json = valid_sidecar_json()
+            .replace("\"schema_version\": 1", "\"future_field\": true, \"schema_version\": 1");
+        let sc =
+            Sidecar::from_json(json.as_bytes()).expect("unknown fields should be silently ignored");
         assert_eq!(sc.schema_version, 1);
     }
 }

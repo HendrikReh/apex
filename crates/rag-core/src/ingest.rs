@@ -140,17 +140,11 @@ impl IngestService {
                 .upsert_document(
                     req.tenant.as_str(),
                     &prepared.document_id,
-                    prepared
-                        .sidecar
-                        .as_ref()
-                        .map_or("", |s| &s.document.title),
+                    prepared.sidecar.as_ref().map_or("", |s| &s.document.title),
                     prepared.sidecar.as_ref().map(|s| s.language.as_str()),
                     metadata_json.as_ref(),
                     Some(&prepared.source_path),
-                    prepared
-                        .sidecar
-                        .as_ref()
-                        .and_then(|s| s.document.version.as_deref()),
+                    prepared.sidecar.as_ref().and_then(|s| s.document.version.as_deref()),
                     Some(&prepared.checksum),
                     None,
                     None, // don't update token_count on skip
@@ -193,12 +187,7 @@ impl IngestService {
             );
         }
 
-        Ok(IngestOutcome {
-            document_id,
-            collection,
-            chunks_created: num_chunks,
-            skipped: false,
-        })
+        Ok(IngestOutcome { document_id, collection, chunks_created: num_chunks, skipped: false })
     }
 
     /// Ingest every supported file in a directory tree.
@@ -209,12 +198,8 @@ impl IngestService {
         let pairs = discover_document_pairs(&req.path)
             .with_context(|| format!("discovering documents in {}", req.path.display()))?;
 
-        let mut outcome = IngestBatchOutcome {
-            documents: 0,
-            chunks: 0,
-            skipped: 0,
-            failures: Vec::new(),
-        };
+        let mut outcome =
+            IngestBatchOutcome { documents: 0, chunks: 0, skipped: 0, failures: Vec::new() };
 
         for pair in pairs {
             let file_req = IngestFileRequest {
@@ -232,10 +217,9 @@ impl IngestService {
                     }
                 }
                 Err(e) => {
-                    outcome.failures.push(DocumentFailure {
-                        path: pair.path,
-                        error: format!("{e:#}"),
-                    });
+                    outcome
+                        .failures
+                        .push(DocumentFailure { path: pair.path, error: format!("{e:#}") });
                 }
             }
         }
@@ -257,13 +241,10 @@ impl IngestService {
             .path
             .extension()
             .and_then(|e| e.to_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("file has no extension: {}", req.path.display())
-            })?;
+            .ok_or_else(|| anyhow::anyhow!("file has no extension: {}", req.path.display()))?;
 
-        let file_type = FileType::from_extension(extension).ok_or_else(|| {
-            anyhow::anyhow!("unsupported file extension: {extension}")
-        })?;
+        let file_type = FileType::from_extension(extension)
+            .ok_or_else(|| anyhow::anyhow!("unsupported file extension: {extension}"))?;
 
         let content = tokio::fs::read(&req.path)
             .await
@@ -273,22 +254,14 @@ impl IngestService {
             .extractors
             .extract(file_type, &content)
             .await
-            .with_context(|| {
-                format!("extracting text from {}", req.path.display())
-            })?;
+            .with_context(|| format!("extracting text from {}", req.path.display()))?;
 
         let checksum = extract::checksum(&result.text);
 
         // Document ID: sidecar.document.id > filename stem.
-        let document_id = sidecar
-            .as_ref()
-            .and_then(|s| s.document.id.clone())
-            .unwrap_or_else(|| {
-                req.path
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string()
+        let document_id =
+            sidecar.as_ref().and_then(|s| s.document.id.clone()).unwrap_or_else(|| {
+                req.path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string()
             });
 
         // Collection: request override > sidecar ingestion collection > default.
@@ -327,13 +300,11 @@ impl IngestService {
         let strategy_str = chunking_override.and_then(|c| c.strategy.as_deref());
         let strategy = select_strategy(strategy_str, &prepared.text, None);
 
-        let max_tokens = chunking_override
-            .and_then(|c| c.max_tokens)
-            .unwrap_or(self.chunking_max_tokens);
+        let max_tokens =
+            chunking_override.and_then(|c| c.max_tokens).unwrap_or(self.chunking_max_tokens);
 
-        let overlap_ratio = chunking_override
-            .and_then(|c| c.overlap_ratio)
-            .unwrap_or(self.chunking_overlap_ratio);
+        let overlap_ratio =
+            chunking_override.and_then(|c| c.overlap_ratio).unwrap_or(self.chunking_overlap_ratio);
 
         let chunks = chunk_text_with_strategy_sectioned(
             &prepared.text,
@@ -345,10 +316,7 @@ impl IngestService {
         .await;
 
         if chunks.is_empty() {
-            bail!(
-                "chunking produced zero chunks for document '{}'",
-                prepared.document_id
-            );
+            bail!("chunking produced zero chunks for document '{}'", prepared.document_id);
         }
 
         Ok(ChunkedDocument {
@@ -364,22 +332,16 @@ impl IngestService {
 
     /// Step 3: Generate dense and sparse embeddings for each chunk.
     async fn embed_chunks(&self, chunked: ChunkedDocument) -> Result<EmbeddedDocument> {
-        let chunk_texts: Vec<String> =
-            chunked.chunks.iter().map(|c| c.text.clone()).collect();
+        let chunk_texts: Vec<String> = chunked.chunks.iter().map(|c| c.text.clone()).collect();
 
-        let dense_vectors = self
-            .embedder
-            .embed_batch(&chunk_texts)
-            .await
-            .context("generating dense embeddings")?;
+        let dense_vectors =
+            self.embedder.embed_batch(&chunk_texts).await.context("generating dense embeddings")?;
 
-        let sparse_vectors: Vec<SparseVector> = chunk_texts
-            .iter()
-            .map(|text| self.bm25.embed_document(text))
-            .collect();
+        let sparse_vectors: Vec<SparseVector> =
+            chunk_texts.iter().map(|text| self.bm25.embed_document(text)).collect();
 
-        let total_tokens = chunk_texts.len() as i64
-            * i64::try_from(self.chunking_max_tokens).unwrap_or(600);
+        let total_tokens =
+            chunk_texts.len() as i64 * i64::try_from(self.chunking_max_tokens).unwrap_or(600);
 
         Ok(EmbeddedDocument {
             document_id: chunked.document_id,
@@ -398,12 +360,10 @@ impl IngestService {
     #[allow(clippy::disallowed_methods)] // serde_json::to_value internally uses .expect()
     async fn persist(&self, tenant: &TenantId, doc: &EmbeddedDocument) -> Result<()> {
         let tenant_str = tenant.as_str();
-        let vector_size =
-            u64::try_from(self.embedder.dim()).context("embedder dim exceeds u64")?;
+        let vector_size = u64::try_from(self.embedder.dim()).context("embedder dim exceeds u64")?;
 
         // Ensure the Qdrant collection exists (cached).
-        self.ensure_collection_cached(&doc.collection, vector_size)
-            .await?;
+        self.ensure_collection_cached(&doc.collection, vector_size).await?;
 
         // Upsert document row in Postgres.
         let metadata_json = doc
@@ -414,15 +374,11 @@ impl IngestService {
             .upsert_document(
                 tenant_str,
                 &doc.document_id,
-                doc.sidecar
-                    .as_ref()
-                    .map_or("", |s| &s.document.title),
+                doc.sidecar.as_ref().map_or("", |s| &s.document.title),
                 doc.sidecar.as_ref().map(|s| s.language.as_str()),
                 metadata_json.as_ref(),
                 Some(&doc.source_path),
-                doc.sidecar
-                    .as_ref()
-                    .and_then(|s| s.document.version.as_deref()),
+                doc.sidecar.as_ref().and_then(|s| s.document.version.as_deref()),
                 Some(&doc.checksum),
                 None,
                 Some(doc.total_tokens),
@@ -432,8 +388,7 @@ impl IngestService {
             .context("upserting document row")?;
 
         // Upsert chunks in Postgres.
-        let chunk_texts: Vec<String> =
-            doc.chunks.iter().map(|c| c.text.clone()).collect();
+        let chunk_texts: Vec<String> = doc.chunks.iter().map(|c| c.text.clone()).collect();
         self.stores
             .insert_chunks(tenant_str, &doc.document_id, &chunk_texts)
             .await
@@ -445,26 +400,15 @@ impl IngestService {
             .iter()
             .enumerate()
             .map(|(i, chunk)| {
-                let point_id =
-                    stable_chunk_uuid(tenant_str, &doc.document_id, i);
-                let payload: std::collections::HashMap<
-                    String,
-                    qdrant_client::qdrant::Value,
-                > = [
+                let point_id = stable_chunk_uuid(tenant_str, &doc.document_id, i);
+                let payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = [
                     ("tenant".to_string(), tenant_str.to_string().into()),
-                    (
-                        "document_id".to_string(),
-                        doc.document_id.clone().into(),
-                    ),
+                    ("document_id".to_string(), doc.document_id.clone().into()),
                     ("chunk_index".to_string(), (i as i64).into()),
                     ("text".to_string(), chunk.text.clone().into()),
                 ]
                 .into();
-                PointStruct::new(
-                    point_id.to_string(),
-                    doc.dense_vectors[i].clone(),
-                    payload,
-                )
+                PointStruct::new(point_id.to_string(), doc.dense_vectors[i].clone(), payload)
             })
             .collect();
 
@@ -476,14 +420,8 @@ impl IngestService {
 
         // Delete stale Qdrant points (best-effort).
         let new_count = doc.chunks.len();
-        if let Err(e) = self
-            .delete_stale_points(
-                tenant_str,
-                &doc.document_id,
-                &doc.collection,
-                new_count,
-            )
-            .await
+        if let Err(e) =
+            self.delete_stale_points(tenant_str, &doc.document_id, &doc.collection, new_count).await
         {
             tracing::warn!(
                 document_id = %doc.document_id,
@@ -496,11 +434,7 @@ impl IngestService {
     }
 
     /// Ensure a Qdrant collection exists, caching the result.
-    async fn ensure_collection_cached(
-        &self,
-        collection: &str,
-        vector_size: u64,
-    ) -> Result<()> {
+    async fn ensure_collection_cached(&self, collection: &str, vector_size: u64) -> Result<()> {
         // Fast path: already known.
         {
             let cache = self.known_collections.lock().await;
@@ -510,11 +444,7 @@ impl IngestService {
         }
 
         // Slow path: create/validate the collection.
-        match self
-            .stores
-            .ensure_collection(collection, vector_size, Distance::Cosine)
-            .await
-        {
+        match self.stores.ensure_collection(collection, vector_size, Distance::Cosine).await {
             Ok(()) => {
                 let mut cache = self.known_collections.lock().await;
                 cache.insert(collection.to_string());
@@ -524,9 +454,7 @@ impl IngestService {
                 // Evict from cache on failure.
                 let mut cache = self.known_collections.lock().await;
                 cache.remove(collection);
-                Err(e).with_context(|| {
-                    format!("ensuring Qdrant collection '{collection}'")
-                })
+                Err(e).with_context(|| format!("ensuring Qdrant collection '{collection}'"))
             }
         }
     }
@@ -548,12 +476,9 @@ impl IngestService {
 
     /// Load the optional sidecar metadata file for a document.
     async fn load_sidecar(&self, doc_path: &Path) -> Result<Option<Sidecar>> {
-        let stem = doc_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                anyhow::anyhow!("cannot determine file stem for {}", doc_path.display())
-            })?;
+        let stem = doc_path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+            anyhow::anyhow!("cannot determine file stem for {}", doc_path.display())
+        })?;
         let sidecar_name = format!("{stem}.metadata.json");
         let sidecar_path = doc_path.with_file_name(&sidecar_name);
 
@@ -563,13 +488,10 @@ impl IngestService {
 
         let bytes = tokio::fs::read(&sidecar_path)
             .await
-            .with_context(|| {
-                format!("reading sidecar {}", sidecar_path.display())
-            })?;
+            .with_context(|| format!("reading sidecar {}", sidecar_path.display()))?;
 
-        let sidecar = Sidecar::from_json(&bytes).with_context(|| {
-            format!("parsing sidecar {}", sidecar_path.display())
-        })?;
+        let sidecar = Sidecar::from_json(&bytes)
+            .with_context(|| format!("parsing sidecar {}", sidecar_path.display()))?;
 
         Ok(Some(sidecar))
     }
@@ -642,11 +564,7 @@ pub fn discover_document_pairs(dir: &Path) -> Result<Vec<DocumentPair>> {
         .into_iter()
         .filter_entry(|e| {
             // Prune hidden directories (but not the root entry itself).
-            e.depth() == 0
-                || e.file_name()
-                    .to_str()
-                    .map(|s| !s.starts_with('.'))
-                    .unwrap_or(false)
+            e.depth() == 0 || e.file_name().to_str().map(|s| !s.starts_with('.')).unwrap_or(false)
         })
         .filter_map(|e| e.ok())
     {
@@ -681,8 +599,7 @@ pub fn discover_document_pairs(dir: &Path) -> Result<Vec<DocumentPair>> {
         };
         let sidecar_name = format!("{stem}.metadata.json");
         let sidecar_path = path.with_file_name(&sidecar_name);
-        let sidecar_path =
-            if sidecar_path.exists() { Some(sidecar_path) } else { None };
+        let sidecar_path = if sidecar_path.exists() { Some(sidecar_path) } else { None };
 
         pairs.push(DocumentPair { path: path.to_owned(), sidecar_path });
     }
@@ -718,16 +635,10 @@ mod tests {
 
         assert_eq!(pairs.len(), 2);
 
-        let txt_pair = pairs
-            .iter()
-            .find(|p| p.path.ends_with("doc.txt"))
-            .expect("txt pair");
+        let txt_pair = pairs.iter().find(|p| p.path.ends_with("doc.txt")).expect("txt pair");
         assert!(txt_pair.sidecar_path.is_some());
 
-        let md_pair = pairs
-            .iter()
-            .find(|p| p.path.ends_with("readme.md"))
-            .expect("md pair");
+        let md_pair = pairs.iter().find(|p| p.path.ends_with("readme.md")).expect("md pair");
         assert!(md_pair.sidecar_path.is_none());
     }
 

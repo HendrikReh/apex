@@ -82,11 +82,7 @@ async fn ingest_single_txt_file() {
 async fn reingest_unchanged_file_is_skipped() {
     let (service, dir) = setup().await.expect("setup");
     let suffix = unique_suffix();
-    write_fixture(
-        dir.path(),
-        "stable.txt",
-        "Stable content that does not change between ingests.",
-    );
+    write_fixture(dir.path(), "stable.txt", "Stable content that does not change between ingests.");
     write_sidecar(dir.path(), "stable");
 
     let tenant_str = format!("test-reingest-{suffix}");
