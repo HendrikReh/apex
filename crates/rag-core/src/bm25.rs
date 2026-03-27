@@ -118,6 +118,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     fn document_embeddings_are_canonicalized_and_sorted() {
         let embedder = Bm25Embedder::new(&Bm25Config { k1: 1.2, b: 0.75, avgdl: 300.0 })
             .expect("bm25 embedder should build");
@@ -130,6 +131,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     fn query_b_override_changes_query_embedding() {
         let embedder = Bm25Embedder::new(&Bm25Config { k1: 1.2, b: 0.75, avgdl: 10.0 })
             .expect("bm25 embedder should build");
@@ -142,6 +144,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     fn tokenizer_is_core_only_lowercase_alnum() {
         let embedder = Bm25Embedder::new(&Bm25Config { k1: 1.2, b: 0.75, avgdl: 300.0 })
             .expect("bm25 embedder should build");

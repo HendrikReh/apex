@@ -26,14 +26,14 @@ pub trait EmbedService: Send + Sync {
 }
 
 pub enum AnyEmbedder {
-    OpenAi(OpenAiEmbedder),
+    OpenAi(Box<OpenAiEmbedder>),
     Mock(MockEmbedder),
 }
 
 impl AnyEmbedder {
     pub fn from_config(config: &AppConfig) -> Result<Self> {
         match config.embedder {
-            EmbedderKind::OpenAi => Ok(Self::OpenAi(OpenAiEmbedder::from_config(config)?)),
+            EmbedderKind::OpenAi => Ok(Self::OpenAi(Box::new(OpenAiEmbedder::from_config(config)?))),
             EmbedderKind::Mock => Ok(Self::Mock(MockEmbedder::from_config(config)?)),
         }
     }
@@ -217,7 +217,11 @@ impl MockEmbedder {
 
     fn embed_one(&self, text: &str) -> Vec<f32> {
         let digest = Sha256::digest(text.as_bytes());
-        let mut state = u64::from_le_bytes(digest[..8].try_into().expect("sha256 length is fixed"));
+        // SHA-256 always produces 32 bytes, so this slice is infallible.
+        let Ok(bytes) = digest[..8].try_into() else {
+            unreachable!("SHA-256 digest is always 32 bytes");
+        };
+        let mut state = u64::from_le_bytes(bytes);
         if state == 0 {
             state = 1;
         }
@@ -364,6 +368,7 @@ mod tests {
     use crate::config::{AuthMode, EmbedderKind};
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn mock_embedder_is_deterministic() {
         let embedder = MockEmbedder::new(8).expect("mock embedder should build");
         let texts = vec!["alpha".to_string(), "beta".to_string(), "alpha".to_string()];
@@ -377,6 +382,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     fn pack_batch_ranges_respects_token_and_item_limits() {
         let ranges = pack_batch_ranges(&[3, 4, 5, 2], 8, 2).expect("batch packing should succeed");
         assert_eq!(ranges, vec![0..2, 2..4]);
@@ -392,6 +398,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     fn any_embedder_from_config_selects_mock() {
         let config = AppConfig {
             qdrant_url: "http://127.0.0.1:6334".to_string(),

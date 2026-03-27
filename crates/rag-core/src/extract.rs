@@ -147,6 +147,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn text_registry_extracts_utf8_content() {
         let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
 
@@ -159,6 +160,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn markdown_registry_extracts_utf8_content() {
         let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
 
@@ -171,6 +173,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn registry_rejects_duplicate_file_type_registration() {
         struct DuplicateTextExtractor;
 
@@ -199,6 +202,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn pdf_extractor_is_explicitly_unimplemented() {
         let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
 
