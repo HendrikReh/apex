@@ -40,7 +40,7 @@ impl Tokenizer for CoreTokenizer {
         input_text
             .split(|ch: char| !ch.is_alphanumeric())
             .filter(|token| !token.is_empty())
-            .map(|token| token.to_ascii_lowercase())
+            .map(|token| token.to_lowercase())
             .collect()
     }
 }
@@ -106,7 +106,7 @@ fn build_embedder(config: Bm25Config, b: f32) -> Embedder<u32, CoreTokenizer> {
 fn to_sparse_vector(embedding: Embedding<u32>) -> SparseVector {
     let mut merged = BTreeMap::<u32, f32>::new();
     for token in embedding.0 {
-        *merged.entry(token.index).or_insert(0.0) += token.value;
+        merged.entry(token.index).or_insert(token.value);
     }
 
     let (indices, values): (Vec<u32>, Vec<f32>) = merged.into_iter().unzip();
@@ -132,6 +132,30 @@ mod tests {
 
     #[test]
     #[allow(clippy::disallowed_methods)] // test assertions
+    fn duplicate_terms_do_not_double_count_bm25_weight() {
+        let config = Bm25Config { k1: 1.2, b: 0.75, avgdl: 300.0 };
+        let embedder = Bm25Embedder::new(&config).expect("bm25 embedder should build");
+        let raw_embedding = build_embedder(config, config.b).embed("alpha alpha");
+
+        assert_eq!(raw_embedding.0.len(), 2, "expected repeated term postings from bm25 crate");
+        assert!(
+            raw_embedding
+                .0
+                .windows(2)
+                .all(|pair| pair[0].index == pair[1].index && pair[0].value == pair[1].value),
+            "expected duplicate postings to share one index/value"
+        );
+
+        let sparse = embedder.embed_document("alpha alpha");
+
+        assert_eq!(sparse.indices.len(), 1);
+        assert_eq!(sparse.values.len(), 1);
+        assert_eq!(sparse.indices[0], raw_embedding.0[0].index);
+        assert_eq!(sparse.values[0], raw_embedding.0[0].value);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     fn query_b_override_changes_query_embedding() {
         let embedder = Bm25Embedder::new(&Bm25Config { k1: 1.2, b: 0.75, avgdl: 10.0 })
             .expect("bm25 embedder should build");
@@ -151,6 +175,18 @@ mod tests {
 
         let sparse_a = embedder.embed_document("Hello, WORLD!");
         let sparse_b = embedder.embed_document("hello world");
+
+        assert_eq!(sparse_a, sparse_b);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
+    fn tokenizer_lowercases_unicode_letters() {
+        let embedder = Bm25Embedder::new(&Bm25Config { k1: 1.2, b: 0.75, avgdl: 300.0 })
+            .expect("bm25 embedder should build");
+
+        let sparse_a = embedder.embed_document("Äpfel");
+        let sparse_b = embedder.embed_document("äpfel");
 
         assert_eq!(sparse_a, sparse_b);
     }
