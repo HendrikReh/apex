@@ -97,6 +97,8 @@ struct AppSection {
     bm25_b: Option<f32>,
     bm25_query_b: Option<f32>,
     default_collection: Option<String>,
+    chunking_max_tokens: Option<usize>,
+    chunking_overlap_ratio: Option<f32>,
     embedding_model: Option<String>,
     embedder: Option<String>,
     embed_timeout_secs: Option<u64>,
@@ -136,6 +138,9 @@ pub struct AppConfig {
     pub bm25_query_b: f32,
     // Collections
     pub default_collection: String,
+    // Chunking defaults (overridable per-document via sidecar)
+    pub chunking_max_tokens: usize,
+    pub chunking_overlap_ratio: f32,
     // Embedding
     pub embedding_model: String,
     pub embedder: EmbedderKind,
@@ -242,6 +247,22 @@ impl AppConfig {
             .or_else(|| f.default_collection.clone())
             .unwrap_or_else(|| "hybrid_docs".to_owned());
 
+        let chunking_max_tokens = env_parsed("CHUNKING_MAX_TOKENS")?
+            .or(f.chunking_max_tokens)
+            .unwrap_or(600);
+        if chunking_max_tokens == 0 {
+            anyhow::bail!("chunking_max_tokens must be greater than zero");
+        }
+
+        let chunking_overlap_ratio = env_parsed("CHUNKING_OVERLAP_RATIO")?
+            .or(f.chunking_overlap_ratio)
+            .unwrap_or(0.15);
+        if !(0.0..1.0).contains(&chunking_overlap_ratio) {
+            anyhow::bail!(
+                "chunking_overlap_ratio must be in [0.0, 1.0), got {chunking_overlap_ratio}"
+            );
+        }
+
         let embedding_model = env_string("EMBEDDING_MODEL")
             .or_else(|| f.embedding_model.clone())
             .unwrap_or_else(|| "text-embedding-3-small".to_owned());
@@ -297,6 +318,8 @@ impl AppConfig {
             bm25_b,
             bm25_query_b,
             default_collection,
+            chunking_max_tokens,
+            chunking_overlap_ratio,
             embedding_model,
             embedder,
             embed_timeout_secs,
@@ -352,6 +375,8 @@ mod tests {
             std::env::remove_var("AUTH_MODE");
             std::env::remove_var("TENANT_HEADER");
             std::env::remove_var("REQUEST_ID_HEADER");
+            std::env::remove_var("CHUNKING_MAX_TOKENS");
+            std::env::remove_var("CHUNKING_OVERLAP_RATIO");
         }
     }
 
@@ -381,6 +406,8 @@ mod tests {
         assert!((cfg.bm25_b - 0.75).abs() < f32::EPSILON);
         assert!((cfg.bm25_query_b - 0.3).abs() < f32::EPSILON);
         assert_eq!(cfg.default_collection, "hybrid_docs");
+        assert_eq!(cfg.chunking_max_tokens, 600);
+        assert!((cfg.chunking_overlap_ratio - 0.15).abs() < f32::EPSILON);
         assert_eq!(cfg.embedding_model, "text-embedding-3-small");
         assert_eq!(cfg.embedder, EmbedderKind::OpenAi);
         assert_eq!(cfg.embed_timeout_secs, 30);
