@@ -148,7 +148,7 @@ sqlx macros verify SQL at compile time. **NEVER run migration SQL files with raw
 
 ## Project Policies
 
-- No backward compatibility required — delete unused code, don't add shims
+- No backward compatibility required — code, data schema, API contracts, or persisted data (`data/docker/`). Delete unused code, don't add shims or migration paths. Reinitialize services from scratch when needed (`just down-v && just up`)
 - Do what has been asked; nothing more, nothing less
 - NEVER create files unless absolutely necessary; prefer editing existing files
 - NEVER proactively create documentation files (*.md) unless explicitly requested
