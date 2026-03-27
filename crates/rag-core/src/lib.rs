@@ -7,6 +7,7 @@ pub mod bm25;
 pub mod config;
 pub mod embed;
 pub mod extract;
+pub mod ingest;
 pub mod sidecar;
 pub mod stores;
 pub mod tenant;
