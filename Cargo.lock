@@ -1884,6 +1884,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "dotenvy",
  "hex",
  "qdrant-client",
  "rag-chunking",
