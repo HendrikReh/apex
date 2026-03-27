@@ -22,6 +22,12 @@ use crate::tenant::TenantId;
 
 use rag_chunking::{ChunkWithSection, chunk_text_with_strategy_sectioned, select_strategy};
 
+/// Maximum character window used by rag-chunking's semantic strategy fallback.
+///
+/// This only applies when semantic chunking is explicitly selected; the Phase 4
+/// ingest path otherwise uses token or markdown chunking.
+const DEFAULT_SEMANTIC_MAX_CHARS: usize = 20_000;
+
 // ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
@@ -71,7 +77,6 @@ pub struct DocumentFailure {
 #[derive(Debug)]
 pub struct DocumentPair {
     pub path: PathBuf,
-    pub sidecar_path: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +316,7 @@ impl IngestService {
             strategy,
             max_tokens,
             overlap_ratio,
-            20_000,
+            DEFAULT_SEMANTIC_MAX_CHARS,
         )
         .await;
 
@@ -323,7 +328,6 @@ impl IngestService {
             document_id: prepared.document_id,
             collection: prepared.collection,
             sidecar: prepared.sidecar,
-            text: prepared.text,
             checksum: prepared.checksum,
             source_path: prepared.source_path,
             chunks,
@@ -395,23 +399,7 @@ impl IngestService {
             .await
             .context("upserting chunks")?;
 
-        // Build Qdrant points.
-        let points: Vec<PointStruct> = doc
-            .chunks
-            .iter()
-            .enumerate()
-            .map(|(i, chunk)| {
-                let point_id = stable_chunk_uuid(tenant_str, &doc.document_id, i);
-                let payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = [
-                    ("tenant".to_string(), tenant_str.to_string().into()),
-                    ("document_id".to_string(), doc.document_id.clone().into()),
-                    ("chunk_index".to_string(), (i as i64).into()),
-                    ("text".to_string(), chunk.text.clone().into()),
-                ]
-                .into();
-                PointStruct::new(point_id.to_string(), doc.dense_vectors[i].clone(), payload)
-            })
-            .collect();
+        let points = build_qdrant_points(tenant_str, doc)?;
 
         // Upsert vectors to Qdrant.
         self.stores
@@ -517,8 +505,6 @@ struct ChunkedDocument {
     document_id: String,
     collection: String,
     sidecar: Option<Sidecar>,
-    #[allow(dead_code)]
-    text: String,
     checksum: String,
     source_path: String,
     chunks: Vec<ChunkWithSection>,
@@ -550,6 +536,33 @@ struct EmbeddedDocument {
 fn stable_chunk_uuid(tenant: &str, document_id: &str, chunk_index: usize) -> Uuid {
     let input = format!("{tenant}:{document_id}:{chunk_index}");
     Uuid::new_v5(&Uuid::NAMESPACE_OID, input.as_bytes())
+}
+
+fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<PointStruct>> {
+    if doc.dense_vectors.len() != doc.chunks.len() {
+        bail!(
+            "embedder returned {} vectors for {} chunks",
+            doc.dense_vectors.len(),
+            doc.chunks.len()
+        );
+    }
+
+    Ok(doc
+        .chunks
+        .iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            let point_id = stable_chunk_uuid(tenant, &doc.document_id, i);
+            let payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = [
+                ("tenant".to_string(), tenant.to_string().into()),
+                ("document_id".to_string(), doc.document_id.clone().into()),
+                ("chunk_index".to_string(), (i as i64).into()),
+                ("text".to_string(), chunk.text.clone().into()),
+            ]
+            .into();
+            PointStruct::new(point_id.to_string(), doc.dense_vectors[i].clone(), payload)
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -597,15 +610,7 @@ pub fn discover_document_pairs(dir: &Path) -> Result<Vec<DocumentPair>> {
         }
 
         // Check for a companion sidecar.
-        let stem = match path.file_stem().and_then(|s| s.to_str()) {
-            Some(s) => s,
-            None => continue,
-        };
-        let sidecar_name = format!("{stem}.metadata.json");
-        let sidecar_path = path.with_file_name(&sidecar_name);
-        let sidecar_path = if sidecar_path.exists() { Some(sidecar_path) } else { None };
-
-        pairs.push(DocumentPair { path: path.to_owned(), sidecar_path });
+        pairs.push(DocumentPair { path: path.to_owned() });
     }
 
     Ok(pairs)
@@ -639,11 +644,8 @@ mod tests {
 
         assert_eq!(pairs.len(), 2);
 
-        let txt_pair = pairs.iter().find(|p| p.path.ends_with("doc.txt")).expect("txt pair");
-        assert!(txt_pair.sidecar_path.is_some());
-
-        let md_pair = pairs.iter().find(|p| p.path.ends_with("readme.md")).expect("md pair");
-        assert!(md_pair.sidecar_path.is_none());
+        assert!(pairs.iter().any(|p| p.path.ends_with("doc.txt")));
+        assert!(pairs.iter().any(|p| p.path.ends_with("readme.md")));
     }
 
     #[test]
@@ -666,5 +668,33 @@ mod tests {
         let id_c = stable_chunk_uuid("default", "doc-1", 1);
         assert_eq!(id_a, id_b, "same inputs should produce same UUID");
         assert_ne!(id_a, id_c, "different chunk index should differ");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
+    fn build_qdrant_points_rejects_dense_vector_length_mismatch() {
+        let doc = EmbeddedDocument {
+            document_id: "doc-1".to_string(),
+            collection: "test".to_string(),
+            sidecar: None,
+            checksum: "checksum".to_string(),
+            source_path: "/tmp/doc.txt".to_string(),
+            chunks: vec![
+                ChunkWithSection {
+                    text: "chunk one".to_string(),
+                    section: rag_chunking::SectionInfo::default(),
+                },
+                ChunkWithSection {
+                    text: "chunk two".to_string(),
+                    section: rag_chunking::SectionInfo::default(),
+                },
+            ],
+            dense_vectors: vec![vec![0.1, 0.2, 0.3]],
+            sparse_vectors: Vec::new(),
+            total_tokens: 0,
+        };
+
+        let err = build_qdrant_points("tenant", &doc).expect_err("mismatched vectors should fail");
+        assert!(err.to_string().contains("embedder returned 1 vectors for 2 chunks"));
     }
 }
