@@ -35,7 +35,16 @@ pub fn chunk_text_pages(text: &str, max_tokens: usize, overlap_ratio: f32) -> Ve
             continue;
         }
         let page_num = page_idx + 1;
-        let page_chunks = chunk_text_tokens(trimmed, max_tokens, overlap_ratio);
+        // Reserve tokens for the label so content stays within budget.
+        let label = format!("[page {}]\n", page_num);
+        let reserved = crate::bpe()
+            .map(|bpe| bpe.encode_with_special_tokens(&label).len())
+            .unwrap_or_else(|| {
+                ((label.len() as f32) / crate::CHARS_PER_TOKEN).ceil() as usize
+            });
+        let content_budget = max_tokens.saturating_sub(reserved).max(1);
+
+        let page_chunks = chunk_text_tokens(trimmed, content_budget, overlap_ratio);
         for ch in page_chunks {
             chunks.push(format!("[page {}]\n{}", page_num, ch));
         }
@@ -69,12 +78,17 @@ mod tests {
 
     #[test]
     fn page_labels_use_source_page_number() {
+        // Use a generous budget so the label reservation doesn't dominate.
         let text = "Short.\u{0c}This is a longer page with many words that should produce chunks.";
-        let chunks = chunk_text_pages(text, 5, 0.0);
-        for chunk in &chunks[1..] {
+        let chunks = chunk_text_pages(text, 50, 0.0);
+        assert!(chunks.len() >= 2);
+        assert!(chunks[0].starts_with("[page 1]\n"));
+        assert!(chunks[1].starts_with("[page 2]\n"));
+        // All chunks must carry a valid page label.
+        for chunk in &chunks {
             assert!(
-                chunk.starts_with("[page 2]\n"),
-                "expected [page 2] label but got: {}",
+                chunk.starts_with("[page 1]\n") || chunk.starts_with("[page 2]\n"),
+                "unexpected label: {}",
                 chunk.chars().take(20).collect::<String>()
             );
         }

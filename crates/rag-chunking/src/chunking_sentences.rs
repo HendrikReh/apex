@@ -64,8 +64,8 @@ pub fn chunk_text_sentences(text: &str, max_tokens: usize, overlap_ratio: f32) -
                 overlapped.push(ch.clone());
                 continue;
             }
-            let prev = overlapped.last().cloned().unwrap_or_default();
-            let prev_tokens = bpe.encode_with_special_tokens(&prev);
+            let prev = &chunks[i - 1];
+            let prev_tokens = bpe.encode_with_special_tokens(prev);
             let keep = prev_tokens.iter().rev().take(overlap).rev().cloned().collect::<Vec<_>>();
             let keep_text = bpe.decode(keep).unwrap_or_default();
             let merged = format!("{keep_text} {ch}");
@@ -151,7 +151,7 @@ fn chunk_sentences_char_budget(text: &str, max_tokens: usize, overlap_ratio: f32
                 overlapped.push(ch.clone());
                 continue;
             }
-            let prev = overlapped.last().cloned().unwrap_or_default();
+            let prev = &chunks[i - 1];
             let keep: String = prev
                 .chars()
                 .rev()
