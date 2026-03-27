@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures::future::BoxFuture;
+use sha2::{Digest, Sha256};
 
 /// File formats currently recognized by the extraction layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,6 +33,11 @@ impl FileType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractionResult {
     pub text: String,
+}
+
+/// Compute a SHA-256 checksum over extracted text.
+pub fn checksum(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 /// Async-capable extractor interface for one or more file types.
@@ -204,6 +210,14 @@ mod tests {
         assert!(
             err.to_string().contains("not implemented"),
             "expected unimplemented pdf extraction error, got {err}"
+        );
+    }
+
+    #[test]
+    fn checksum_is_stable_for_extracted_text() {
+        assert_eq!(
+            checksum("hello world"),
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
     }
 }
