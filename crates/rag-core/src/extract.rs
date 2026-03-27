@@ -87,7 +87,7 @@ impl ExtractorRegistry {
         self.extractors[index]
             .extract(content)
             .await
-            .map_err(|err| anyhow!("extracting content for file type {file_type:?}: {err}"))
+            .map_err(|err| err.context(format!("extracting content for file type {file_type:?}")))
     }
 }
 
@@ -212,12 +212,34 @@ mod tests {
             .expect_err("pdf extraction should fail until pdfium is wired in");
 
         assert!(
-            err.to_string().contains("not implemented"),
-            "expected unimplemented pdf extraction error, got {err}"
+            format!("{err:#}").contains("not implemented"),
+            "expected unimplemented pdf extraction cause in error chain, got {err:#}"
         );
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
+    async fn extractor_errors_keep_registry_context_and_original_cause() {
+        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+
+        let err = registry
+            .extract(FileType::Pdf, b"%PDF-1.7")
+            .await
+            .expect_err("pdf extraction should fail until pdfium is wired in");
+
+        let chained = format!("{err:#}");
+        assert!(
+            chained.contains("extracting content for file type Pdf"),
+            "expected registry context in chained error, got {chained}"
+        );
+        assert!(
+            chained.contains("PDF extraction is not implemented yet"),
+            "expected original extractor message in chained error, got {chained}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn invalid_utf8_errors_keep_decode_cause_visible() {
         let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
 
@@ -227,8 +249,12 @@ mod tests {
             .expect_err("invalid UTF-8 should fail");
 
         assert!(
-            err.to_string().contains("decoding plain text content as UTF-8"),
-            "expected UTF-8 decode cause in error, got {err}"
+            format!("{err:#}").contains("decoding plain text content as UTF-8"),
+            "expected UTF-8 decode cause in error chain, got {err:#}"
+        );
+        assert!(
+            err.chain().any(|cause| cause.is::<std::str::Utf8Error>()),
+            "expected underlying Utf8Error to remain in the chain, got {err:#}"
         );
     }
 
