@@ -23,6 +23,7 @@ pub struct DocumentRow {
     pub stats_collection: Option<String>,
     pub stats_token_count: Option<i64>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl Stores {
@@ -60,7 +61,8 @@ impl Stores {
                 checksum      = EXCLUDED.checksum,
                 ingest_run_id = EXCLUDED.ingest_run_id,
                 token_count   = EXCLUDED.token_count,
-                collection    = EXCLUDED.collection
+                collection    = EXCLUDED.collection,
+                updated_at    = now()
             "#,
         )
         .bind(tenant)
@@ -86,7 +88,10 @@ impl Stores {
     /// Returns `None` if no matching row exists.
     pub async fn get_document(&self, tenant: &str, id: &str) -> Result<Option<DocumentRow>> {
         let row = sqlx::query_as::<_, DocumentRow>(
-            "SELECT * FROM documents WHERE tenant = $1 AND id = $2",
+            "SELECT tenant, id, title, language, metadata, source_path, \
+             version, checksum, ingest_run_id, token_count, collection, \
+             stats_collection, stats_token_count, created_at, updated_at \
+             FROM documents WHERE tenant = $1 AND id = $2",
         )
         .bind(tenant)
         .bind(id)
@@ -104,23 +109,25 @@ impl Stores {
     /// Corpus statistics are decremented if the document had a recorded
     /// `token_count` and `collection`.
     pub async fn delete_document(&self, tenant: &str, id: &str) -> Result<bool> {
-        // Read stats_token_count and stats_collection before deleting so we
-        // can adjust corpus_stats. Both columns are only written by
-        // update_corpus_stats, so they reflect what was actually counted.
+        let mut tx = self.pool.begin().await.context("starting delete_document transaction")?;
+
+        // Lock the row and read stats columns atomically so a concurrent
+        // update_corpus_stats cannot change them between our read and delete.
         let doc: Option<(Option<i64>, Option<String>)> = sqlx::query_as(
             "SELECT stats_token_count, stats_collection FROM documents \
-             WHERE tenant = $1 AND id = $2",
+             WHERE tenant = $1 AND id = $2 \
+             FOR UPDATE",
         )
         .bind(tenant)
         .bind(id)
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await
         .context("fetching document before delete for corpus stats adjustment")?;
 
         let result = sqlx::query("DELETE FROM documents WHERE tenant = $1 AND id = $2")
             .bind(tenant)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .context("deleting document")?;
 
@@ -141,11 +148,13 @@ impl Stores {
                 .bind(tenant)
                 .bind(&collection)
                 .bind(token_count)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .context("decrementing corpus stats after document delete")?;
             }
         }
+
+        tx.commit().await.context("committing delete_document transaction")?;
 
         Ok(deleted)
     }

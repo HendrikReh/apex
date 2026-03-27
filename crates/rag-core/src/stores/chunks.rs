@@ -30,29 +30,31 @@ impl Stores {
         document_id: &str,
         chunks: &[String],
     ) -> Result<()> {
-        for (idx, text) in chunks.iter().enumerate() {
-            let chunk_index: i32 = idx.try_into().context("chunk index exceeds i32::MAX")?;
+        let indices: Vec<i32> = (0..chunks.len())
+            .map(|i| i32::try_from(i).context("chunk index exceeds i32::MAX"))
+            .collect::<Result<Vec<_>>>()?;
+        let texts: Vec<&str> = chunks.iter().map(String::as_str).collect();
 
-            sqlx::query(
-                r#"
-                INSERT INTO chunks (tenant, document_id, chunk_index, text)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (tenant, document_id, chunk_index)
-                DO UPDATE SET text = EXCLUDED.text
-                "#,
-            )
-            .bind(tenant)
-            .bind(document_id)
-            .bind(chunk_index)
-            .bind(text)
-            .execute(&self.pool)
-            .await
-            .with_context(|| format!("inserting chunk {chunk_index} for document {document_id}"))?;
-        }
+        // Batch upsert all chunks in a single round-trip.
+        sqlx::query(
+            r#"
+            INSERT INTO chunks (tenant, document_id, chunk_index, text)
+            SELECT $1, $2, unnest($3::int[]), unnest($4::text[])
+            ON CONFLICT (tenant, document_id, chunk_index)
+            DO UPDATE SET text = EXCLUDED.text
+            "#,
+        )
+        .bind(tenant)
+        .bind(document_id)
+        .bind(&indices)
+        .bind(&texts)
+        .execute(&self.pool)
+        .await
+        .with_context(|| format!("batch inserting chunks for document {document_id}"))?;
 
         // Remove stale chunks left over from a previous ingestion that
         // produced more chunks than the current one.
-        let new_count: i32 = chunks.len().try_into().context("chunk count exceeds i32::MAX")?;
+        let new_count: i32 = i32::try_from(chunks.len()).context("chunk count exceeds i32::MAX")?;
         sqlx::query(
             "DELETE FROM chunks WHERE tenant = $1 AND document_id = $2 AND chunk_index >= $3",
         )

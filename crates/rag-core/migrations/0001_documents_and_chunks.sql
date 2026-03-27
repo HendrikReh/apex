@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS documents (
     stats_collection  TEXT,
     stats_token_count BIGINT,
     created_at    TIMESTAMPTZ DEFAULT now(),
+    updated_at    TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY (tenant, id)
 );
 

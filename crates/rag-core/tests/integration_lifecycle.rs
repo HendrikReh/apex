@@ -31,13 +31,13 @@ async fn full_document_lifecycle() {
     let tenant = "test-tenant";
     let doc_id = "doc-1";
 
-    // 3. Ensure Qdrant collection (needed because some doc fields reference it).
+    // 1. Ensure Qdrant collection (needed because some doc fields reference it).
     stores
         .ensure_collection(&collection, 4, Distance::Cosine)
         .await
         .expect("ensure_collection should succeed");
 
-    // 4. Upsert a document (token_count left as None — update_corpus_stats sets it).
+    // 2. Upsert a document (token_count left as None — update_corpus_stats sets it).
     stores
         .upsert_document(
             tenant,
@@ -55,17 +55,17 @@ async fn full_document_lifecycle() {
         .await
         .expect("upsert_document should succeed");
 
-    // 5. Insert chunks.
+    // 3. Insert chunks.
     let chunks = vec!["chunk 0".to_string(), "chunk 1".to_string()];
     stores.insert_chunks(tenant, doc_id, &chunks).await.expect("insert_chunks should succeed");
 
-    // 6. Update corpus stats.
+    // 4. Update corpus stats.
     stores
         .update_corpus_stats(tenant, &collection, doc_id, 100)
         .await
         .expect("update_corpus_stats should succeed");
 
-    // 7. Get document -- verify fields.
+    // 5. Get document -- verify fields.
     let doc = stores
         .get_document(tenant, doc_id)
         .await
@@ -81,7 +81,7 @@ async fn full_document_lifecycle() {
     assert_eq!(doc.token_count, Some(100)); // set by update_corpus_stats
     assert_eq!(doc.collection.as_deref(), Some(collection.as_str()));
 
-    // 8. Get chunks -- verify count and order.
+    // 6. Get chunks -- verify count and order.
     let fetched_chunks = stores
         .get_chunks_by_document(tenant, doc_id)
         .await
@@ -93,39 +93,39 @@ async fn full_document_lifecycle() {
     assert_eq!(fetched_chunks[1].chunk_index, 1);
     assert_eq!(fetched_chunks[1].text, "chunk 1");
 
-    // 9. Get avgdl -- should return the stored value (100 tokens / 1 doc = 100.0).
+    // 7. Get avgdl -- should return the stored value (100 tokens / 1 doc = 100.0).
     let avgdl =
         stores.get_avgdl(tenant, &collection, 300.0).await.expect("get_avgdl should not error");
 
     assert!((avgdl - 100.0).abs() < f64::EPSILON, "expected avgdl 100.0, got {avgdl}");
 
-    // 10. Tenant isolation: different tenant sees nothing.
+    // 8. Tenant isolation: different tenant sees nothing.
     let other = stores
         .get_document("other-tenant", doc_id)
         .await
         .expect("get_document for other tenant should not error");
     assert!(other.is_none(), "other tenant should not see the document");
 
-    // 11. Delete document -- cascades to chunks.
+    // 9. Delete document -- cascades to chunks.
     let deleted =
         stores.delete_document(tenant, doc_id).await.expect("delete_document should succeed");
     assert!(deleted, "delete should report a row was removed");
 
-    // 12. Chunks should be gone (CASCADE).
+    // 10. Chunks should be gone (CASCADE).
     let remaining_chunks = stores
         .get_chunks_by_document(tenant, doc_id)
         .await
         .expect("get_chunks_by_document after delete should not error");
     assert!(remaining_chunks.is_empty(), "chunks should be cascade-deleted");
 
-    // 13. Document should be gone.
+    // 11. Document should be gone.
     let gone = stores
         .get_document(tenant, doc_id)
         .await
         .expect("get_document after delete should not error");
     assert!(gone.is_none(), "document should be deleted");
 
-    // 14. Cleanup: remove the Qdrant collection.
+    // 12. Cleanup: remove the Qdrant collection.
     stores.delete_collection(&collection).await.expect("delete_collection cleanup should succeed");
 }
 
@@ -142,22 +142,22 @@ async fn qdrant_collection_lifecycle() {
     let tenant = "test-tenant";
     let doc_id = "doc-1";
 
-    // 2. Create collection.
+    // 1. Create collection.
     stores
         .ensure_collection(&collection, 4, Distance::Cosine)
         .await
         .expect("ensure_collection should succeed");
 
-    // 3. collection_exists -> true.
+    // 2. collection_exists -> true.
     let exists =
         stores.collection_exists(&collection).await.expect("collection_exists should not error");
     assert!(exists, "collection should exist after creation");
 
-    // 4. list_collections -> contains our collection.
+    // 3. list_collections -> contains our collection.
     let collections = stores.list_collections().await.expect("list_collections should not error");
     assert!(collections.contains(&collection), "list_collections should include '{collection}'");
 
-    // 5. Upsert a test point.
+    // 4. Upsert a test point.
     let point_id = Uuid::new_v4().to_string();
     let payload = Payload::try_from(serde_json::json!({
         "tenant": tenant,
@@ -170,27 +170,27 @@ async fn qdrant_collection_lifecycle() {
     let point = PointStruct::new(point_id, vec![0.1_f32, 0.2, 0.3, 0.4], payload);
     stores.upsert_points(&collection, vec![point]).await.expect("upsert_points should succeed");
 
-    // 6. search_dense -> returns our point.
+    // 5. search_dense -> returns our point.
     let results = stores
         .search_dense(&collection, vec![0.1_f32, 0.2, 0.3, 0.4], tenant, 10)
         .await
         .expect("search_dense should not error");
     assert_eq!(results.len(), 1, "search should return exactly 1 point");
 
-    // 7. delete_document_points -> removes the point.
+    // 6. delete_document_points -> removes the point.
     stores
         .delete_document_points(&collection, doc_id, tenant)
         .await
         .expect("delete_document_points should succeed");
 
-    // 8. search_dense -> empty.
+    // 7. search_dense -> empty.
     let results = stores
         .search_dense(&collection, vec![0.1_f32, 0.2, 0.3, 0.4], tenant, 10)
         .await
         .expect("search_dense after delete should not error");
     assert!(results.is_empty(), "search should return no points after deletion");
 
-    // 9. Cleanup: delete collection.
+    // 8. Cleanup: delete collection.
     stores.delete_collection(&collection).await.expect("delete_collection cleanup should succeed");
 }
 

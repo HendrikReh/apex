@@ -177,9 +177,21 @@ impl AppConfig {
 
         let f = &file_settings;
 
-        // Helper: read env var as a parsed value.
-        fn env_parsed<T: FromStr>(name: &str) -> Option<T> {
-            std::env::var(name).ok().and_then(|v| v.parse().ok())
+        // Helper: read env var as a parsed value. Returns Err if the var
+        // is set but cannot be parsed (catches operator typos).
+        fn env_parsed<T: FromStr>(name: &str) -> Result<Option<T>>
+        where
+            T::Err: std::fmt::Display,
+        {
+            match std::env::var(name) {
+                Ok(v) if !v.is_empty() => {
+                    let parsed = v.parse::<T>().map_err(|e| {
+                        anyhow::anyhow!("invalid value for env var {name}={v:?}: {e}")
+                    })?;
+                    Ok(Some(parsed))
+                }
+                _ => Ok(None),
+            }
         }
 
         fn env_string(name: &str) -> Option<String> {
@@ -193,9 +205,9 @@ impl AppConfig {
         let qdrant_api_key = env_string("QDRANT_API_KEY").or_else(|| f.qdrant_api_key.clone());
 
         let qdrant_timeout_secs =
-            env_parsed("QDRANT_TIMEOUT_SECS").or(f.qdrant_timeout_secs).unwrap_or(30);
+            env_parsed("QDRANT_TIMEOUT_SECS")?.or(f.qdrant_timeout_secs).unwrap_or(30);
 
-        let qdrant_connect_timeout_secs = env_parsed("QDRANT_CONNECT_TIMEOUT_SECS")
+        let qdrant_connect_timeout_secs = env_parsed("QDRANT_CONNECT_TIMEOUT_SECS")?
             .or(f.qdrant_connect_timeout_secs)
             .unwrap_or(5);
 
@@ -204,17 +216,17 @@ impl AppConfig {
             .unwrap_or_else(|| "postgres://postgres:postgres@127.0.0.1:5432/postgres".to_owned());
 
         let postgres_max_connections =
-            env_parsed("POSTGRES_MAX_CONNECTIONS").or(f.postgres_max_connections).unwrap_or(10);
+            env_parsed("POSTGRES_MAX_CONNECTIONS")?.or(f.postgres_max_connections).unwrap_or(10);
 
-        let postgres_connect_timeout_secs = env_parsed("POSTGRES_CONNECT_TIMEOUT_SECS")
+        let postgres_connect_timeout_secs = env_parsed("POSTGRES_CONNECT_TIMEOUT_SECS")?
             .or(f.postgres_connect_timeout_secs)
             .unwrap_or(5);
 
-        let bm25_avgdl = env_parsed("BM25_AVGDL").or(f.bm25_avgdl).unwrap_or(300.0);
+        let bm25_avgdl = env_parsed("BM25_AVGDL")?.or(f.bm25_avgdl).unwrap_or(300.0);
 
-        let bm25_k1 = env_parsed("BM25_K1").or(f.bm25_k1).unwrap_or(1.2);
+        let bm25_k1 = env_parsed("BM25_K1")?.or(f.bm25_k1).unwrap_or(1.2);
 
-        let bm25_b = env_parsed("BM25_B").or(f.bm25_b).unwrap_or(0.75);
+        let bm25_b = env_parsed("BM25_B")?.or(f.bm25_b).unwrap_or(0.75);
 
         let default_collection = env_string("DEFAULT_COLLECTION")
             .or_else(|| f.default_collection.clone())
@@ -232,10 +244,10 @@ impl AppConfig {
             .with_context(|| format!("parsing embedder from {embedder_str:?}"))?;
 
         let embed_timeout_secs =
-            env_parsed("EMBED_TIMEOUT_SECS").or(f.embed_timeout_secs).unwrap_or(30);
+            env_parsed("EMBED_TIMEOUT_SECS")?.or(f.embed_timeout_secs).unwrap_or(30);
 
         let embed_max_retries =
-            env_parsed("EMBED_MAX_RETRIES").or(f.embed_max_retries).unwrap_or(3);
+            env_parsed("EMBED_MAX_RETRIES")?.or(f.embed_max_retries).unwrap_or(3);
 
         let bind_addr = env_string("BIND_ADDR")
             .or_else(|| f.bind_addr.clone())

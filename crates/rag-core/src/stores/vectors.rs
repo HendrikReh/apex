@@ -81,11 +81,18 @@ impl Stores {
         } else {
             let builder = CreateCollectionBuilder::new(name)
                 .vectors_config(VectorParamsBuilder::new(vector_size, distance));
-            self.qdrant
-                .create_collection(builder)
-                .await
-                .with_context(|| format!("creating Qdrant collection '{name}'"))?;
-            Ok(())
+            match self.qdrant.create_collection(builder).await {
+                Ok(_) => Ok(()),
+                Err(e) => {
+                    // Handle TOCTOU race: another caller may have created
+                    // the collection between our exists check and create.
+                    if self.qdrant.collection_exists(name).await.unwrap_or(false) {
+                        Ok(())
+                    } else {
+                        Err(e).with_context(|| format!("creating Qdrant collection '{name}'"))
+                    }
+                }
+            }
         }
     }
 
