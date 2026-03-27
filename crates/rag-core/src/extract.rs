@@ -87,7 +87,7 @@ impl ExtractorRegistry {
         self.extractors[index]
             .extract(content)
             .await
-            .with_context(|| format!("extracting content for file type {file_type:?}"))
+            .map_err(|err| anyhow!("extracting content for file type {file_type:?}: {err}"))
     }
 }
 
@@ -214,6 +214,21 @@ mod tests {
         assert!(
             err.to_string().contains("not implemented"),
             "expected unimplemented pdf extraction error, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_errors_keep_decode_cause_visible() {
+        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+
+        let err = registry
+            .extract(FileType::Text, &[0xff, 0xfe, 0xfd])
+            .await
+            .expect_err("invalid UTF-8 should fail");
+
+        assert!(
+            err.to_string().contains("decoding plain text content as UTF-8"),
+            "expected UTF-8 decode cause in error, got {err}"
         );
     }
 
