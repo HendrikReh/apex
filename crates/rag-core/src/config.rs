@@ -95,6 +95,7 @@ struct AppSection {
     bm25_avgdl: Option<f32>,
     bm25_k1: Option<f32>,
     bm25_b: Option<f32>,
+    bm25_query_b: Option<f32>,
     default_collection: Option<String>,
     embedding_model: Option<String>,
     embedder: Option<String>,
@@ -132,6 +133,7 @@ pub struct AppConfig {
     pub bm25_avgdl: f32,
     pub bm25_k1: f32,
     pub bm25_b: f32,
+    pub bm25_query_b: f32,
     // Collections
     pub default_collection: String,
     // Embedding
@@ -234,6 +236,8 @@ impl AppConfig {
 
         let bm25_b = env_parsed("BM25_B")?.or(f.bm25_b).unwrap_or(0.75);
 
+        let bm25_query_b = env_parsed("BM25_QUERY_B")?.or(f.bm25_query_b).unwrap_or(0.3);
+
         let default_collection = env_string("DEFAULT_COLLECTION")
             .or_else(|| f.default_collection.clone())
             .unwrap_or_else(|| "hybrid_docs".to_owned());
@@ -291,6 +295,7 @@ impl AppConfig {
             bm25_avgdl,
             bm25_k1,
             bm25_b,
+            bm25_query_b,
             default_collection,
             embedding_model,
             embedder,
@@ -334,6 +339,7 @@ mod tests {
             std::env::remove_var("BM25_AVGDL");
             std::env::remove_var("BM25_K1");
             std::env::remove_var("BM25_B");
+            std::env::remove_var("BM25_QUERY_B");
             std::env::remove_var("DEFAULT_COLLECTION");
             std::env::remove_var("EMBEDDING_MODEL");
             std::env::remove_var("RAG_EMBEDDER");
@@ -373,6 +379,7 @@ mod tests {
         assert!((cfg.bm25_avgdl - 300.0).abs() < f32::EPSILON);
         assert!((cfg.bm25_k1 - 1.2).abs() < f32::EPSILON);
         assert!((cfg.bm25_b - 0.75).abs() < f32::EPSILON);
+        assert!((cfg.bm25_query_b - 0.3).abs() < f32::EPSILON);
         assert_eq!(cfg.default_collection, "hybrid_docs");
         assert_eq!(cfg.embedding_model, "text-embedding-3-small");
         assert_eq!(cfg.embedder, EmbedderKind::OpenAi);

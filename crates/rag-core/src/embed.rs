@@ -404,6 +404,7 @@ mod tests {
             bm25_avgdl: 300.0,
             bm25_k1: 1.2,
             bm25_b: 0.75,
+            bm25_query_b: 0.3,
             default_collection: "hybrid_docs".to_string(),
             embedding_model: "text-embedding-3-small".to_string(),
             embedder: EmbedderKind::Mock,

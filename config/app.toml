@@ -12,6 +12,7 @@ postgres_connect_timeout_secs = 5
 bm25_avgdl = 300.0
 bm25_k1 = 1.2
 bm25_b = 0.75
+bm25_query_b = 0.3
 
 # Collection defaults
 default_collection = "hybrid_docs"
