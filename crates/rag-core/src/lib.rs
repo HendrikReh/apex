@@ -10,6 +10,7 @@ pub mod embed;
 pub mod extract;
 pub mod fusion;
 pub mod ingest;
+pub mod retrieval;
 pub mod sidecar;
 pub mod stores;
 pub mod tenant;
@@ -20,6 +21,7 @@ pub use context::{
     DedupeStrategy,
 };
 pub use fusion::{rrf_fusion, FusedChunk, RetrievedChunk};
+pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 pub use config::AppConfig;
 pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
 pub use extract::{
