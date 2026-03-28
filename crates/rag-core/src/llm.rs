@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use async_openai::config::{Config as OpenAiConfigTrait, OpenAIConfig};
+use async_openai::error::OpenAIError;
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
@@ -214,7 +215,7 @@ impl ChatBackend {
 
         for attempt in 0..=max_retries {
             if attempt > 0 {
-                let backoff = Duration::from_millis(retry_backoff_ms * 2u64.pow(attempt - 1));
+                let backoff = retry_delay(attempt, retry_backoff_ms);
                 tokio::time::sleep(backoff).await;
             }
 
@@ -241,6 +242,12 @@ impl ChatBackend {
 
         Err(last_err.unwrap_or_else(|| anyhow!("retry loop exhausted"))).context(provider_name)
     }
+}
+
+fn retry_delay(attempt: u32, retry_backoff_ms: u64) -> Duration {
+    let shift = (attempt - 1).min(63);
+    let multiplier = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
+    Duration::from_millis(retry_backoff_ms.saturating_mul(multiplier))
 }
 
 fn build_openai_client(
@@ -270,9 +277,34 @@ fn build_openai_backoff() -> backoff::ExponentialBackoff {
 /// (for example `"429 Too Many Requests"`). Extract the numeric code from the
 /// first parenthesized segment so transient errors still retry.
 fn is_transient_error(err: &anyhow::Error) -> bool {
+    if is_transient_openai_error(err) {
+        return true;
+    }
+
     err.chain().any(|cause| {
         let msg = cause.to_string();
         extract_status_code(&msg).is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504))
+    })
+}
+
+fn is_transient_openai_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        let Some(openai_err) = cause.downcast_ref::<OpenAIError>() else {
+            return false;
+        };
+
+        let OpenAIError::ApiError(api_error) = openai_err else {
+            return false;
+        };
+
+        let is_rate_limited = matches!(api_error.code.as_deref(), Some("rate_limit_exceeded"))
+            || matches!(api_error.r#type.as_deref(), Some("rate_limit_exceeded"));
+        let is_server_error = matches!(api_error.code.as_deref(), Some("server_error"))
+            || matches!(api_error.r#type.as_deref(), Some("server_error"));
+        let is_quota_error = matches!(api_error.code.as_deref(), Some("insufficient_quota"))
+            || matches!(api_error.r#type.as_deref(), Some("insufficient_quota"));
+
+        (is_rate_limited && !is_quota_error) || is_server_error
     })
 }
 
@@ -600,6 +632,41 @@ mod tests {
         let err = anyhow!("Anthropic API error (503 Service Unavailable): overloaded")
             .context("Anthropic completion");
         assert!(is_transient_error(&err));
+    }
+
+    #[test]
+    fn is_transient_error_detects_openai_rate_limit_and_server_errors() {
+        let rate_limit = OpenAIError::ApiError(async_openai::error::ApiError {
+            message: "too many requests".into(),
+            r#type: Some("rate_limit_exceeded".into()),
+            param: None,
+            code: Some("rate_limit_exceeded".into()),
+        });
+        assert!(is_transient_error(&anyhow!(rate_limit)));
+
+        let server_error = OpenAIError::ApiError(async_openai::error::ApiError {
+            message: "backend unavailable".into(),
+            r#type: Some("server_error".into()),
+            param: None,
+            code: None,
+        });
+        assert!(is_transient_error(&anyhow!(server_error)));
+
+        let quota_error = OpenAIError::ApiError(async_openai::error::ApiError {
+            message: "quota exhausted".into(),
+            r#type: Some("insufficient_quota".into()),
+            param: None,
+            code: Some("insufficient_quota".into()),
+        });
+        assert!(!is_transient_error(&anyhow!(quota_error)));
+    }
+
+    #[test]
+    fn retry_delay_uses_saturating_math() {
+        assert_eq!(retry_delay(1, 500), Duration::from_millis(500));
+        assert_eq!(retry_delay(2, 500), Duration::from_millis(1_000));
+        assert_eq!(retry_delay(4, 500), Duration::from_millis(4_000));
+        assert_eq!(retry_delay(100, u64::MAX), Duration::from_millis(u64::MAX));
     }
 
     #[test]
