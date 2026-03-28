@@ -293,18 +293,25 @@ fn is_transient_openai_error(err: &anyhow::Error) -> bool {
             return false;
         };
 
-        let OpenAIError::ApiError(api_error) = openai_err else {
-            return false;
-        };
+        match openai_err {
+            OpenAIError::Reqwest(_) => return true,
+            OpenAIError::ApiError(api_error) => {
+                let is_rate_limited =
+                    matches!(api_error.code.as_deref(), Some("rate_limit_exceeded"))
+                        || matches!(api_error.r#type.as_deref(), Some("rate_limit_exceeded"));
+                let is_server_error =
+                    matches!(api_error.code.as_deref(), Some("server_error"))
+                        || matches!(api_error.r#type.as_deref(), Some("server_error"));
+                let is_quota_error =
+                    matches!(api_error.code.as_deref(), Some("insufficient_quota"))
+                        || matches!(api_error.r#type.as_deref(), Some("insufficient_quota"));
 
-        let is_rate_limited = matches!(api_error.code.as_deref(), Some("rate_limit_exceeded"))
-            || matches!(api_error.r#type.as_deref(), Some("rate_limit_exceeded"));
-        let is_server_error = matches!(api_error.code.as_deref(), Some("server_error"))
-            || matches!(api_error.r#type.as_deref(), Some("server_error"));
-        let is_quota_error = matches!(api_error.code.as_deref(), Some("insufficient_quota"))
-            || matches!(api_error.r#type.as_deref(), Some("insufficient_quota"));
+                return (is_rate_limited && !is_quota_error) || is_server_error;
+            }
+            _ => {}
+        }
 
-        (is_rate_limited && !is_quota_error) || is_server_error
+        false
     })
 }
 
@@ -471,7 +478,9 @@ async fn complete_anthropic(
         stop_sequences: request.stop.clone(),
     };
 
-    let url = format!("{}/v1/messages", base_url.trim_end_matches('/'));
+    let base = base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    let url = format!("{base}/v1/messages");
     let http_response =
         client.post(&url).json(&body).send().await.context("Anthropic HTTP request")?;
 
@@ -711,5 +720,37 @@ mod tests {
     fn openai_internal_backoff_is_disabled() {
         let mut backoff = build_openai_backoff();
         assert_eq!(backoff.next_backoff(), None);
+    }
+
+    #[test]
+    fn is_transient_error_detects_openai_reqwest_transport_failures() {
+        // Build a reqwest error by attempting to parse an invalid URL.
+        let reqwest_err = reqwest::Client::new()
+            .get("http://[::0:0:0:0:0:0:0:0:0:0:invalid")
+            .build()
+            .expect_err("should produce a reqwest error");
+        let openai_err = OpenAIError::Reqwest(reqwest_err);
+        assert!(is_transient_error(&anyhow!(openai_err)));
+    }
+
+    #[test]
+    fn anthropic_url_strips_duplicate_v1_suffix() {
+        // base_url already contains /v1 — should NOT produce /v1/v1/messages
+        let base = "https://api.anthropic.com/v1";
+        let trimmed = base.trim_end_matches('/');
+        let trimmed = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+        assert_eq!(format!("{trimmed}/v1/messages"), "https://api.anthropic.com/v1/messages");
+
+        // base_url without /v1 — should produce /v1/messages
+        let base = "https://api.anthropic.com";
+        let trimmed = base.trim_end_matches('/');
+        let trimmed = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+        assert_eq!(format!("{trimmed}/v1/messages"), "https://api.anthropic.com/v1/messages");
+
+        // base_url with trailing slash and /v1
+        let base = "https://api.anthropic.com/v1/";
+        let trimmed = base.trim_end_matches('/');
+        let trimmed = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
+        assert_eq!(format!("{trimmed}/v1/messages"), "https://api.anthropic.com/v1/messages");
     }
 }
