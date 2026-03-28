@@ -167,7 +167,9 @@ insert_message(tenant, conversation_id, role: MessageRole, content, metadata) ->
 get_messages(tenant, conversation_id, limit: i64) -> Result<Vec<MessageRow>>
 ```
 
-**`insert_message`:** Validates tenant ownership via `INSERT INTO messages (...) SELECT ... FROM conversations WHERE tenant = $1 AND id = $2`. Returns an explicit error ("conversation not found for tenant") if the conversation doesn't exist or belongs to a different tenant. Validates `limit > 0` at the API boundary.
+**`insert_message`:** Validates tenant ownership via `INSERT INTO messages (...) SELECT ... FROM conversations WHERE tenant = $1 AND id = $2`. Returns an explicit error ("conversation not found for tenant") if the conversation doesn't exist or belongs to a different tenant.
+
+**`get_messages`:** Validates `limit > 0` at the API boundary.
 
 **`get_messages`:** Inner query selects latest N by `created_at DESC, id DESC`, outer query re-orders ascending. Stable tie-breaking, chronological output.
 
@@ -200,7 +202,7 @@ pub struct ChatDefaults {
 }
 ```
 
-**Stores sharing:** `ChatService` is constructed with one `Stores` handle. `RetrievalService` is built from that same handle — not from a fresh `Stores::new()`. Only one `Stores::new()` call happens at application startup.
+**Stores sharing:** `Stores` will be made `Clone` (it wraps `PgPool`, which is internally `Arc`-based, and `Arc<Qdrant>` — both cheap to clone). One `Stores::new()` call at application startup. `ChatService` constructor clones its `Stores` handle to build `RetrievalService`, then keeps the original for conversation operations. This requires adding `#[derive(Clone)]` to `Stores` in `stores/mod.rs`.
 
 ### 4.2 Request/Response
 
@@ -274,7 +276,22 @@ prompt_template_path = "config/prompts/chat_system.hbs"
 
 ### 5.2 Environment Variables
 
-`LLM_API_KEY` — from environment only, never in TOML (it is a secret).
+All `[llm]` fields can be overridden by environment variables, following the existing pattern in `config.rs`:
+
+| TOML field | Env var | Notes |
+|-----------|---------|-------|
+| — | `LLM_API_KEY` | Env only, never in TOML (secret) |
+| `provider` | `LLM_PROVIDER` | `"openai-compatible"` or `"anthropic"` |
+| `model` | `LLM_MODEL` | |
+| `base_url` | `LLM_BASE_URL` | |
+| `temperature` | `LLM_TEMPERATURE` | |
+| `max_tokens` | `LLM_MAX_TOKENS` | |
+| `timeout_secs` | `LLM_TIMEOUT_SECS` | |
+| `max_retries` | `LLM_MAX_RETRIES` | |
+| `retry_backoff_ms` | `LLM_RETRY_BACKOFF_MS` | |
+| `prompt_template_path` | `LLM_PROMPT_TEMPLATE_PATH` | |
+
+Precedence: Environment variables > `app.toml` > hardcoded defaults.
 
 ### 5.3 Provider Defaults for base_url
 
@@ -288,8 +305,6 @@ prompt_template_path = "config/prompts/chat_system.hbs"
 - `max_tokens > 0`.
 - `temperature >= 0.0 && temperature.is_finite()` (reject NaN and infinity).
 - `timeout_secs > 0`.
-
-Precedence: Environment variables > `app.toml` > hardcoded defaults.
 
 ---
 
