@@ -6,12 +6,12 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::stores::vectors::{DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME};
 use anyhow::{Context, Result, bail};
+use qdrant_client::qdrant::SparseVector as QdrantSparseVector;
 use qdrant_client::qdrant::{
     DenseVector, Distance, NamedVectors, PointStruct, Vector as QdrantVector, Vectors,
 };
-use qdrant_client::qdrant::SparseVector as QdrantSparseVector;
-use crate::stores::vectors::{DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -571,9 +571,7 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
             .into();
 
             // Build named vectors with both dense and sparse.
-            let dense = QdrantVector::from(DenseVector {
-                data: doc.dense_vectors[i].clone(),
-            });
+            let dense = QdrantVector::from(DenseVector { data: doc.dense_vectors[i].clone() });
             let sparse = QdrantVector::from(QdrantSparseVector {
                 indices: doc.sparse_vectors[i].indices.clone(),
                 values: doc.sparse_vectors[i].values.clone(),

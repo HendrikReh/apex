@@ -350,8 +350,7 @@ impl AppConfig {
         if context_max_tokens == 0 {
             anyhow::bail!("context_max_tokens must be greater than zero");
         }
-        let context_max_chunks =
-            env_parsed("CONTEXT_MAX_CHUNKS")?.or(ctx.max_chunks).unwrap_or(50);
+        let context_max_chunks = env_parsed("CONTEXT_MAX_CHUNKS")?.or(ctx.max_chunks).unwrap_or(50);
         if context_max_chunks == 0 {
             anyhow::bail!("context_max_chunks must be greater than zero");
         }

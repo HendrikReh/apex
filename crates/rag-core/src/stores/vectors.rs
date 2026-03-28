@@ -14,8 +14,7 @@ use qdrant_client::qdrant::{
     Condition, CreateCollection, DeletePointsBuilder, Distance, Filter, Modifier, PointStruct,
     ScoredPoint, SearchPoints, SparseIndices, SparseVectorConfig, SparseVectorParams,
     UpsertPointsBuilder, VectorParams, VectorParamsMap, VectorsConfig, WithPayloadSelector,
-    vectors_config::Config as VectorsConfigVariant,
-    with_payload_selector::SelectorOptions,
+    vectors_config::Config as VectorsConfigVariant, with_payload_selector::SelectorOptions,
 };
 
 use super::Stores;
@@ -53,9 +52,7 @@ impl Stores {
         match &vectors_config.config {
             Some(VectorsConfigVariant::ParamsMap(map)) => {
                 let dense_params = map.map.get(DENSE_VECTOR_NAME).ok_or_else(|| {
-                    anyhow!(
-                        "collection '{name}' is missing named vector '{DENSE_VECTOR_NAME}'"
-                    )
+                    anyhow!("collection '{name}' is missing named vector '{DENSE_VECTOR_NAME}'")
                 })?;
                 if dense_params.size != dense_size {
                     return Err(anyhow!(
@@ -80,9 +77,7 @@ impl Stores {
         let sparse_config = params
             .sparse_vectors_config
             .as_ref()
-            .ok_or_else(|| {
-                anyhow!("collection '{name}' is missing sparse_vectors_config")
-            })?;
+            .ok_or_else(|| anyhow!("collection '{name}' is missing sparse_vectors_config"))?;
         let sparse_params = sparse_config.map.get(SPARSE_VECTOR_NAME).ok_or_else(|| {
             anyhow!("collection '{name}' is missing sparse vector '{SPARSE_VECTOR_NAME}'")
         })?;
@@ -121,20 +116,13 @@ impl Stores {
             let mut dense_map = HashMap::new();
             dense_map.insert(
                 DENSE_VECTOR_NAME.to_string(),
-                VectorParams {
-                    size: dense_size,
-                    distance: distance.into(),
-                    ..Default::default()
-                },
+                VectorParams { size: dense_size, distance: distance.into(), ..Default::default() },
             );
 
             let mut sparse_map = HashMap::new();
             sparse_map.insert(
                 SPARSE_VECTOR_NAME.to_string(),
-                SparseVectorParams {
-                    index: None,
-                    modifier: Some(Modifier::Idf.into()),
-                },
+                SparseVectorParams { index: None, modifier: Some(Modifier::Idf.into()) },
             );
 
             let request = CreateCollection {
@@ -157,16 +145,11 @@ impl Stores {
                         .qdrant
                         .collection_exists(name)
                         .await
-                        .context(
-                            "rechecking Qdrant collection after create race",
-                        )?
+                        .context("rechecking Qdrant collection after create race")?
                     {
-                        self.validate_collection_config(name, dense_size, distance)
-                            .await
+                        self.validate_collection_config(name, dense_size, distance).await
                     } else {
-                        Err(e).with_context(|| {
-                            format!("creating Qdrant collection '{name}'")
-                        })
+                        Err(e).with_context(|| format!("creating Qdrant collection '{name}'"))
                     }
                 }
             }
@@ -243,10 +226,7 @@ impl Stores {
         let request = SearchPoints {
             collection_name: collection.to_string(),
             vector,
-            filter: Some(Filter::must([Condition::matches(
-                "tenant",
-                tenant.to_string(),
-            )])),
+            filter: Some(Filter::must([Condition::matches("tenant", tenant.to_string())])),
             limit,
             vector_name: Some(DENSE_VECTOR_NAME.to_string()),
             with_payload: Some(WithPayloadSelector {
@@ -255,13 +235,12 @@ impl Stores {
             ..Default::default()
         };
 
-        let response =
-            self.qdrant.search_points(request).await.with_context(|| {
-                format!(
-                    "searching dense vectors in collection '{collection}' \
+        let response = self.qdrant.search_points(request).await.with_context(|| {
+            format!(
+                "searching dense vectors in collection '{collection}' \
                      for tenant '{tenant}'"
-                )
-            })?;
+            )
+        })?;
 
         Ok(response.result)
     }
@@ -285,10 +264,7 @@ impl Stores {
             collection_name: collection.to_string(),
             vector: values,
             sparse_indices: Some(SparseIndices { data: indices }),
-            filter: Some(Filter::must([Condition::matches(
-                "tenant",
-                tenant.to_string(),
-            )])),
+            filter: Some(Filter::must([Condition::matches("tenant", tenant.to_string())])),
             limit,
             vector_name: Some(SPARSE_VECTOR_NAME.to_string()),
             with_payload: Some(WithPayloadSelector {
@@ -297,13 +273,12 @@ impl Stores {
             ..Default::default()
         };
 
-        let response =
-            self.qdrant.search_points(request).await.with_context(|| {
-                format!(
-                    "searching sparse vectors in collection '{collection}' \
+        let response = self.qdrant.search_points(request).await.with_context(|| {
+            format!(
+                "searching sparse vectors in collection '{collection}' \
                      for tenant '{tenant}'"
-                )
-            })?;
+            )
+        })?;
 
         Ok(response.result)
     }
