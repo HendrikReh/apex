@@ -93,6 +93,12 @@ pub struct ContextBuilder {
     tokenizer: Arc<CoreBPE>,
 }
 
+impl Default for ContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContextBuilder {
     /// Create a builder with the default `cl100k_base` tokenizer.
     pub fn new() -> Self {
@@ -113,6 +119,8 @@ impl ContextBuilder {
         let input_count = chunks.len();
 
         // Step 1: Sort by fused_score desc, chunk_id asc.
+        // This is defensive: callers are not required to pass pre-sorted input,
+        // even though `rrf_fusion` already emits this ordering.
         let mut sorted = chunks;
         sorted.sort_by(|a, b| {
             b.fused_score
