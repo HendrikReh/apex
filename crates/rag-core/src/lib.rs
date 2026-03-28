@@ -34,4 +34,5 @@ pub use prompt::{PromptContext, PromptRenderer, render_context_chunks};
 pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 pub use sidecar::Sidecar;
 pub use stores::Stores;
+pub use stores::conversations::{ConversationRow, MessageRole, MessageRow};
 pub use tenant::TenantId;
