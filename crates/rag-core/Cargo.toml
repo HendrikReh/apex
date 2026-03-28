@@ -12,6 +12,7 @@ rag-chunking = { path = "../rag-chunking" }
 anyhow.workspace = true
 async-trait.workspace = true
 async-openai.workspace = true
+backoff.workspace = true
 bm25.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true

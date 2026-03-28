@@ -2032,6 +2032,7 @@ dependencies = [
  "anyhow",
  "async-openai",
  "async-trait",
+ "backoff",
  "bm25",
  "chrono",
  "dotenvy",

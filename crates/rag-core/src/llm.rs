@@ -10,7 +10,7 @@ use async_openai::config::{Config as OpenAiConfigTrait, OpenAIConfig};
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-    CreateChatCompletionRequestArgs,
+    CreateChatCompletionRequest, CreateChatCompletionRequestArgs,
 };
 use reqwest::header::{AUTHORIZATION, HeaderMap};
 use secrecy::{ExposeSecret, SecretString};
@@ -158,13 +158,7 @@ impl ChatBackend {
                         Box::new(OpenAiCompatibleConfig::new(config.llm_base_url.clone(), None))
                     }
                 };
-                let http_client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(config.llm_timeout_secs))
-                    .build()
-                    .context("building OpenAI HTTP client")?;
-                let client = Box::new(
-                    async_openai::Client::with_config(oai_config).with_http_client(http_client),
-                );
+                let client = build_openai_client(oai_config, config.llm_timeout_secs)?;
                 Ok(Self::OpenAiCompatible { client, model: config.llm_model.clone() })
             }
             LlmProvider::Anthropic => {
@@ -249,6 +243,26 @@ impl ChatBackend {
     }
 }
 
+fn build_openai_client(
+    config: Box<dyn OpenAiConfigTrait>,
+    timeout_secs: u64,
+) -> Result<Box<async_openai::Client<Box<dyn OpenAiConfigTrait>>>> {
+    let http_client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .context("building OpenAI HTTP client")?;
+
+    // Disable async-openai's internal retries so the outer retry loop remains
+    // the single source of truth for llm_max_retries.
+    Ok(Box::new(async_openai::Client::build(http_client, config, build_openai_backoff())))
+}
+
+fn build_openai_backoff() -> backoff::ExponentialBackoff {
+    let mut backoff = backoff::ExponentialBackoffBuilder::new();
+    backoff.with_max_elapsed_time(Some(Duration::ZERO));
+    backoff.build()
+}
+
 /// Check if an error is transient (retryable): 429, 500, 502, 503, 504.
 ///
 /// Anthropic errors are formatted as `"Anthropic API error ({status}): ..."`,
@@ -280,6 +294,25 @@ async fn complete_openai(
     request: &CompletionRequest<'_>,
     messages: &[ChatMessage],
 ) -> Result<LlmResponse> {
+    let oai_request = build_openai_request(model, request, messages)?;
+    let response = client.chat().create(oai_request).await?;
+
+    let choice = response.choices.first().ok_or_else(|| anyhow!("OpenAI returned no choices"))?;
+    let text = choice.message.content.clone().unwrap_or_default();
+
+    let usage = response.usage.map_or(TokenUsage::default(), |u| TokenUsage {
+        prompt_tokens: u.prompt_tokens,
+        completion_tokens: u.completion_tokens,
+    });
+
+    Ok(LlmResponse { text, usage, model: response.model })
+}
+
+fn build_openai_request(
+    model: &str,
+    request: &CompletionRequest<'_>,
+    messages: &[ChatMessage],
+) -> Result<CreateChatCompletionRequest> {
     let mut oai_messages: Vec<ChatCompletionRequestMessage> = Vec::new();
 
     if !request.system.is_empty() {
@@ -313,24 +346,13 @@ async fn complete_openai(
         .model(model)
         .messages(oai_messages)
         .temperature(request.temperature)
-        .max_completion_tokens(request.max_tokens);
+        .max_tokens(request.max_tokens);
 
     if !request.stop.is_empty() {
         req_builder.stop(request.stop.clone());
     }
 
-    let oai_request = req_builder.build().context("building OpenAI request")?;
-    let response = client.chat().create(oai_request).await?;
-
-    let choice = response.choices.first().ok_or_else(|| anyhow!("OpenAI returned no choices"))?;
-    let text = choice.message.content.clone().unwrap_or_default();
-
-    let usage = response.usage.map_or(TokenUsage::default(), |u| TokenUsage {
-        prompt_tokens: u.prompt_tokens,
-        completion_tokens: u.completion_tokens,
-    });
-
-    Ok(LlmResponse { text, usage, model: response.model })
+    req_builder.build().context("building OpenAI request")
 }
 
 // ---------------------------------------------------------------------------
@@ -453,6 +475,7 @@ async fn complete_anthropic(
 mod tests {
     use super::*;
     use crate::config::AuthMode;
+    use backoff::backoff::Backoff;
 
     fn test_config() -> AppConfig {
         AppConfig {
@@ -598,5 +621,28 @@ mod tests {
             Err(err) => err,
         };
         assert!(err.to_string().contains("LLM_API_KEY must be set for anthropic"));
+    }
+
+    #[test]
+    fn build_openai_request_uses_max_tokens_field() {
+        let request = CompletionRequest {
+            system: "You are a helpful assistant.",
+            messages: &[ChatMessage { role: ChatRole::User, content: "hello".into() }],
+            temperature: 0.0,
+            max_tokens: 123,
+            stop: vec![],
+        };
+
+        let built = build_openai_request("gpt-4o", &request, request.messages).expect("request");
+        let json = serde_json::to_value(&built).expect("serialize request");
+
+        assert_eq!(json.get("max_tokens").and_then(serde_json::Value::as_u64), Some(123));
+        assert!(json.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn openai_internal_backoff_is_disabled() {
+        let mut backoff = build_openai_backoff();
+        assert_eq!(backoff.next_backoff(), None);
     }
 }
