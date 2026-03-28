@@ -150,7 +150,7 @@ fn scored_points_to_chunks(
 ) -> Vec<RetrievedChunk> {
     scored
         .into_iter()
-        .filter_map(|point| {
+        .map(|point| {
             let payload = &point.payload;
             let chunk_id = point.id.as_ref().map(extract_point_id).unwrap_or_default();
             let document_id = payload
@@ -168,13 +168,13 @@ fn scored_points_to_chunks(
                 .map_or("", |v| v)
                 .to_string();
 
-            Some(RetrievedChunk {
+            RetrievedChunk {
                 chunk_id,
                 document_id,
                 chunk_index,
                 text,
                 score: point.score,
-            })
+            }
         })
         .collect()
 }

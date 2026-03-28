@@ -14,8 +14,9 @@ use crate::fusion::FusedChunk;
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::disallowed_methods)] // LazyLock init requires expect
-static CL100K_TOKENIZER: LazyLock<Arc<CoreBPE>> =
-    LazyLock::new(|| Arc::new(tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must load")));
+static CL100K_TOKENIZER: LazyLock<Arc<CoreBPE>> = LazyLock::new(|| {
+    Arc::new(tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must load"))
+});
 
 fn count_tokens(tokenizer: &CoreBPE, text: &str) -> usize {
     tokenizer.encode_ordinary(text).len()
