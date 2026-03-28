@@ -1,6 +1,6 @@
 //! Retrieval service orchestrating dense, sparse, and hybrid search.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 use crate::bm25::Bm25Embedder;
 use crate::config::AppConfig;
@@ -116,9 +116,17 @@ impl RetrievalService {
         overrides: Option<HybridOverrides>,
     ) -> Result<Vec<FusedChunk>> {
         let ov = overrides.unwrap_or_default();
-        let dense_k = ov.dense_top_k.unwrap_or(self.defaults.dense_top_k);
-        let sparse_k = ov.sparse_top_k.unwrap_or(self.defaults.sparse_top_k);
-        let rrf_k = ov.rrf_k.unwrap_or(self.defaults.rrf_k);
+        let dense_k = resolve_override_u64(
+            ov.dense_top_k,
+            self.defaults.dense_top_k,
+            "dense_top_k",
+        )?;
+        let sparse_k = resolve_override_u64(
+            ov.sparse_top_k,
+            self.defaults.sparse_top_k,
+            "sparse_top_k",
+        )?;
+        let rrf_k = resolve_override_u32(ov.rrf_k, self.defaults.rrf_k, "rrf_k")?;
 
         let (dense_result, sparse_result) = tokio::join!(
             self.search_dense(collection, query, tenant, dense_k),
@@ -136,12 +144,28 @@ impl RetrievalService {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn extract_point_id(id: &qdrant_client::qdrant::PointId) -> String {
+fn resolve_override_u64(value: Option<u64>, default: u64, field: &str) -> Result<u64> {
+    match value {
+        Some(0) => Err(anyhow!("{field} override must be greater than 0")),
+        Some(value) => Ok(value),
+        None => Ok(default),
+    }
+}
+
+fn resolve_override_u32(value: Option<u32>, default: u32, field: &str) -> Result<u32> {
+    match value {
+        Some(0) => Err(anyhow!("{field} override must be greater than 0")),
+        Some(value) => Ok(value),
+        None => Ok(default),
+    }
+}
+
+fn extract_point_id(id: &qdrant_client::qdrant::PointId) -> Option<String> {
     use qdrant_client::qdrant::point_id::PointIdOptions;
     match &id.point_id_options {
-        Some(PointIdOptions::Uuid(s)) => s.clone(),
-        Some(PointIdOptions::Num(n)) => n.to_string(),
-        None => String::new(),
+        Some(PointIdOptions::Uuid(s)) => Some(s.clone()),
+        Some(PointIdOptions::Num(n)) => Some(n.to_string()),
+        None => None,
     }
 }
 
@@ -150,9 +174,11 @@ fn scored_points_to_chunks(
 ) -> Vec<RetrievedChunk> {
     scored
         .into_iter()
-        .map(|point| {
+        .filter_map(|point| {
+            // Fusion and citations rely on stable chunk IDs, so skip malformed
+            // search results that do not include a usable Qdrant point ID.
             let payload = &point.payload;
-            let chunk_id = point.id.as_ref().map(extract_point_id).unwrap_or_default();
+            let chunk_id = point.id.as_ref().and_then(extract_point_id)?;
             let document_id = payload
                 .get("document_id")
                 .and_then(|v| v.as_str())
@@ -168,13 +194,37 @@ fn scored_points_to_chunks(
                 .map_or("", |v| v)
                 .to_string();
 
-            RetrievedChunk {
+            Some(RetrievedChunk {
                 chunk_id,
                 document_id,
                 chunk_index,
                 text,
                 score: point.score,
-            }
+            })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_override_u32, resolve_override_u64};
+
+    #[test]
+    fn zero_u64_override_is_rejected() {
+        let err =
+            resolve_override_u64(Some(0), 10, "dense_top_k").expect_err("zero override must fail");
+        assert!(err.to_string().contains("dense_top_k"));
+    }
+
+    #[test]
+    fn zero_u32_override_is_rejected() {
+        let err = resolve_override_u32(Some(0), 60, "rrf_k").expect_err("zero override must fail");
+        assert!(err.to_string().contains("rrf_k"));
+    }
+
+    #[test]
+    fn missing_override_uses_default() {
+        assert_eq!(resolve_override_u64(None, 10, "dense_top_k").unwrap(), 10);
+        assert_eq!(resolve_override_u32(None, 60, "rrf_k").unwrap(), 60);
+    }
 }

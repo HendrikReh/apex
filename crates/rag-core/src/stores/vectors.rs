@@ -83,9 +83,14 @@ impl Stores {
             .ok_or_else(|| {
                 anyhow!("collection '{name}' is missing sparse_vectors_config")
             })?;
-        if !sparse_config.map.contains_key(SPARSE_VECTOR_NAME) {
+        let sparse_params = sparse_config.map.get(SPARSE_VECTOR_NAME).ok_or_else(|| {
+            anyhow!("collection '{name}' is missing sparse vector '{SPARSE_VECTOR_NAME}'")
+        })?;
+        if sparse_params.modifier != Some(Modifier::Idf.into()) {
             return Err(anyhow!(
-                "collection '{name}' is missing sparse vector '{SPARSE_VECTOR_NAME}'"
+                "collection '{name}' sparse vector '{SPARSE_VECTOR_NAME}' modifier {:?}, expected {:?}",
+                sparse_params.modifier,
+                Modifier::Idf,
             ));
         }
 

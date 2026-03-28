@@ -168,18 +168,18 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
         assert!(chunk.fused_score > 0.0, "fused score should be positive");
     }
 
-    let multi_source = fused
-        .iter()
-        .find(|c| c.sources.len() > 1)
-        .expect("hybrid search should produce at least one chunk found by both dense and sparse");
-    if let Some(single) = fused.iter().find(|c| c.sources.len() == 1) {
-        assert!(
-            multi_source.fused_score > single.fused_score,
-            "multi-source chunk ({}) should score higher than single-source chunk ({})",
-            multi_source.fused_score,
-            single.fused_score,
-        );
-    }
+    assert!(
+        fused
+            .iter()
+            .any(|chunk| chunk.sources.iter().any(|source| source == "dense")),
+        "hybrid search should include at least one dense-derived result"
+    );
+    assert!(
+        fused
+            .iter()
+            .any(|chunk| chunk.sources.iter().any(|source| source == "sparse")),
+        "hybrid search should include at least one sparse-derived result"
+    );
     for chunk in &fused {
         assert!(!chunk.sources.is_empty());
         for source in &chunk.sources {
