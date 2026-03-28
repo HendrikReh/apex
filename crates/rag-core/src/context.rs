@@ -102,9 +102,7 @@ impl Default for ContextBuilder {
 impl ContextBuilder {
     /// Create a builder with the default `cl100k_base` tokenizer.
     pub fn new() -> Self {
-        Self {
-            tokenizer: Arc::clone(&CL100K_TOKENIZER),
-        }
+        Self { tokenizer: Arc::clone(&CL100K_TOKENIZER) }
     }
 
     /// Create a builder with a custom tokenizer.
@@ -196,7 +194,8 @@ impl ContextBuilder {
         }
 
         // Step 4: Build top-level citations.
-        let citations: Vec<Citation> = final_chunks.iter().filter_map(|c| c.citation.clone()).collect();
+        let citations: Vec<Citation> =
+            final_chunks.iter().filter_map(|c| c.citation.clone()).collect();
 
         // Step 5: Assemble context string.
         let text = final_chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n\n");
@@ -253,10 +252,7 @@ mod tests {
             fused("c2", "doc1", 1, 0.5, "second chunk of doc1"),
             fused("c3", "doc2", 0, 0.7, "first chunk of doc2"),
         ];
-        let config = ContextConfig {
-            dedupe_strategy: DedupeStrategy::ByDocId,
-            ..default_config()
-        };
+        let config = ContextConfig { dedupe_strategy: DedupeStrategy::ByDocId, ..default_config() };
         let result = ContextBuilder::new().build(chunks, &config);
         assert_eq!(result.stats.input_count, 3);
         assert_eq!(result.stats.after_dedupe, 2);
@@ -274,10 +270,8 @@ mod tests {
             fused("c1", "doc1", 0, 0.5, "duplicate c1"),
             fused("c2", "doc1", 1, 0.7, "second chunk same doc"),
         ];
-        let config = ContextConfig {
-            dedupe_strategy: DedupeStrategy::ByChunkId,
-            ..default_config()
-        };
+        let config =
+            ContextConfig { dedupe_strategy: DedupeStrategy::ByChunkId, ..default_config() };
         let result = ContextBuilder::new().build(chunks, &config);
         assert_eq!(result.stats.dedupe_dropped, 1);
         assert_eq!(result.chunks.len(), 2);
@@ -285,10 +279,8 @@ mod tests {
 
     #[test]
     fn none_dedupe_keeps_all() {
-        let chunks = vec![
-            fused("c1", "doc1", 0, 0.9, "first"),
-            fused("c2", "doc1", 1, 0.5, "second"),
-        ];
+        let chunks =
+            vec![fused("c1", "doc1", 0, 0.9, "first"), fused("c2", "doc1", 1, 0.5, "second")];
         let result = ContextBuilder::new().build(chunks, &default_config());
         assert_eq!(result.stats.dedupe_dropped, 0);
         assert_eq!(result.chunks.len(), 2);
@@ -302,10 +294,7 @@ mod tests {
             fused("c2", "doc1", 1, 0.8, &big_text),
             fused("c3", "doc2", 0, 0.7, &big_text),
         ];
-        let config = ContextConfig {
-            max_tokens: 1100,
-            ..default_config()
-        };
+        let config = ContextConfig { max_tokens: 1100, ..default_config() };
         let result = ContextBuilder::new().build(chunks, &config);
         assert!(result.stats.final_count <= 2);
         assert!(result.stats.budget_dropped >= 1);
@@ -320,10 +309,7 @@ mod tests {
             fused("c2", "doc2", 0, 0.8, &big),
             fused("c3", "doc3", 0, 0.7, small),
         ];
-        let config = ContextConfig {
-            max_tokens: 100,
-            ..default_config()
-        };
+        let config = ContextConfig { max_tokens: 100, ..default_config() };
         let result = ContextBuilder::new().build(chunks, &config);
         assert_eq!(result.stats.budget_dropped, 1);
         let ids: Vec<&str> = result.chunks.iter().map(|c| c.chunk_id.as_str()).collect();
@@ -339,10 +325,7 @@ mod tests {
             fused("c2", "doc2", 0, 0.8, "b"),
             fused("c3", "doc3", 0, 0.7, "c"),
         ];
-        let config = ContextConfig {
-            max_chunks: 2,
-            ..default_config()
-        };
+        let config = ContextConfig { max_chunks: 2, ..default_config() };
         let result = ContextBuilder::new().build(chunks, &config);
         assert_eq!(result.stats.final_count, 2);
         assert_eq!(result.stats.budget_dropped, 1);
@@ -351,10 +334,7 @@ mod tests {
     #[test]
     fn citations_included_when_enabled() {
         let chunks = vec![fused("c1", "doc1", 0, 0.9, "text")];
-        let config = ContextConfig {
-            include_citations: true,
-            ..default_config()
-        };
+        let config = ContextConfig { include_citations: true, ..default_config() };
         let result = ContextBuilder::new().build(chunks, &config);
         assert_eq!(result.citations.len(), 1);
         assert_eq!(result.citations[0].chunk_id, "c1");
@@ -392,10 +372,8 @@ mod tests {
 
     #[test]
     fn assembled_text_joins_with_double_newline() {
-        let chunks = vec![
-            fused("c1", "doc1", 0, 0.9, "first"),
-            fused("c2", "doc2", 0, 0.8, "second"),
-        ];
+        let chunks =
+            vec![fused("c1", "doc1", 0, 0.9, "first"), fused("c2", "doc2", 0, 0.8, "second")];
         let result = ContextBuilder::new().build(chunks, &default_config());
         assert_eq!(result.text, "first\n\nsecond");
     }

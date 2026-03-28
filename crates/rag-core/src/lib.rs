@@ -16,18 +16,18 @@ pub mod stores;
 pub mod tenant;
 
 pub use bm25::{Bm25Config, Bm25Embedder, SparseVector};
+pub use config::AppConfig;
 pub use context::{
     Citation, ContextBuilder, ContextChunk, ContextConfig, ContextResult, ContextStats,
     DedupeStrategy,
 };
-pub use fusion::{rrf_fusion, FusedChunk, RetrievedChunk};
-pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
-pub use config::AppConfig;
 pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
 pub use extract::{
     ExtractionResult, ExtractorRegistry, FileType, FormatExtractor, MarkdownExtractor,
     PdfExtractor, TextExtractor,
 };
+pub use fusion::{FusedChunk, RetrievedChunk, rrf_fusion};
+pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 pub use sidecar::Sidecar;
 pub use stores::Stores;
 pub use tenant::TenantId;

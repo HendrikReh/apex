@@ -445,8 +445,10 @@ impl AppConfig {
 
         let llm_temperature: f32 =
             env_parsed("LLM_TEMPERATURE")?.or(llm.temperature).unwrap_or(0.1);
-        if llm_temperature < 0.0 || !llm_temperature.is_finite() {
-            anyhow::bail!("llm_temperature must be >= 0.0 and finite, got {llm_temperature}");
+        if !(0.0..=2.0).contains(&llm_temperature) || !llm_temperature.is_finite() {
+            anyhow::bail!(
+                "llm_temperature must be in [0.0, 2.0] and finite, got {llm_temperature}"
+            );
         }
 
         let llm_max_tokens = env_parsed("LLM_MAX_TOKENS")?.or(llm.max_tokens).unwrap_or(4096);
@@ -714,5 +716,18 @@ mod tests {
         assert!(result.is_err());
         let err = result.expect_err("expected error").to_string();
         assert!(err.contains("llm_max_tokens"), "error: {err}");
+    }
+
+    #[test]
+    fn llm_temperature_above_upper_bound_rejected() {
+        // SAFETY: test-only env manipulation; single logical test avoids races.
+        unsafe { clear_config_env() };
+        unsafe {
+            std::env::set_var("LLM_TEMPERATURE", "3.0");
+        }
+        let result = AppConfig::from_current_env();
+        assert!(result.is_err());
+        let err = result.expect_err("expected error").to_string();
+        assert!(err.contains("llm_temperature"), "error: {err}");
     }
 }

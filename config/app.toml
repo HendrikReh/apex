@@ -48,7 +48,7 @@ max_tokens = 8000                                   # Token budget for assembled
 max_chunks = 50                                     # Max chunks in assembled context
 
 [llm]
-provider = "openai-compatible"                      # Options: "openai-compatible", "anthropic"
+provider = "openai-compatible"                      # Options: "openai-compatible" (or "openai"), "anthropic"
 model = "gpt-4o"
 # base_url = "https://api.openai.com/v1"            # Default per provider
 temperature = 0.1
