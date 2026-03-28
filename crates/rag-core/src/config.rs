@@ -74,6 +74,34 @@ impl fmt::Display for AuthMode {
     }
 }
 
+/// LLM provider backend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmProvider {
+    OpenAiCompatible,
+    Anthropic,
+}
+
+impl FromStr for LlmProvider {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "openai-compatible" | "openai" => Ok(Self::OpenAiCompatible),
+            "anthropic" => Ok(Self::Anthropic),
+            other => Err(anyhow::anyhow!("unknown LLM provider: {other:?}")),
+        }
+    }
+}
+
+impl fmt::Display for LlmProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OpenAiCompatible => f.write_str("openai-compatible"),
+            Self::Anthropic => f.write_str("anthropic"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TOML intermediate structs
 // ---------------------------------------------------------------------------
@@ -83,6 +111,7 @@ struct AppSettings {
     app: Option<AppSection>,
     retrieval: Option<RetrievalSection>,
     context: Option<ContextSection>,
+    llm: Option<LlmSection>,
 }
 
 #[derive(Deserialize, Default)]
@@ -96,6 +125,19 @@ struct RetrievalSection {
 struct ContextSection {
     max_tokens: Option<usize>,
     max_chunks: Option<usize>,
+}
+
+#[derive(Deserialize, Default)]
+struct LlmSection {
+    provider: Option<String>,
+    model: Option<String>,
+    base_url: Option<String>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    timeout_secs: Option<u64>,
+    max_retries: Option<u32>,
+    retry_backoff_ms: Option<u64>,
+    prompt_template_path: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -177,6 +219,17 @@ pub struct AppConfig {
     // Context assembly
     pub context_max_tokens: usize,
     pub context_max_chunks: usize,
+    // LLM
+    pub llm_provider: LlmProvider,
+    pub llm_api_key: Option<String>,
+    pub llm_model: String,
+    pub llm_base_url: String,
+    pub llm_temperature: f32,
+    pub llm_max_tokens: u32,
+    pub llm_timeout_secs: u64,
+    pub llm_max_retries: u32,
+    pub llm_retry_backoff_ms: u64,
+    pub llm_prompt_template_path: String,
 }
 
 impl AppConfig {
@@ -200,7 +253,7 @@ impl AppConfig {
         let config_path =
             std::env::var("APP_CONFIG_PATH").unwrap_or_else(|_| "config/app.toml".to_owned());
 
-        let (file_settings, retrieval_settings, context_settings) =
+        let (file_settings, retrieval_settings, context_settings, llm_settings) =
             if std::path::Path::new(&config_path).exists() {
                 let contents = std::fs::read_to_string(&config_path)
                     .with_context(|| format!("reading config file {config_path}"))?;
@@ -210,9 +263,15 @@ impl AppConfig {
                     settings.app.unwrap_or_default(),
                     settings.retrieval.unwrap_or_default(),
                     settings.context.unwrap_or_default(),
+                    settings.llm.unwrap_or_default(),
                 )
             } else {
-                (AppSection::default(), RetrievalSection::default(), ContextSection::default())
+                (
+                    AppSection::default(),
+                    RetrievalSection::default(),
+                    ContextSection::default(),
+                    LlmSection::default(),
+                )
             };
 
         let f = &file_settings;
@@ -350,11 +409,64 @@ impl AppConfig {
         if context_max_tokens == 0 {
             anyhow::bail!("context_max_tokens must be greater than zero");
         }
-        let context_max_chunks =
-            env_parsed("CONTEXT_MAX_CHUNKS")?.or(ctx.max_chunks).unwrap_or(50);
+        let context_max_chunks = env_parsed("CONTEXT_MAX_CHUNKS")?.or(ctx.max_chunks).unwrap_or(50);
         if context_max_chunks == 0 {
             anyhow::bail!("context_max_chunks must be greater than zero");
         }
+
+        let llm = &llm_settings;
+
+        let llm_provider_str = env_string("LLM_PROVIDER")
+            .or_else(|| llm.provider.clone())
+            .unwrap_or_else(|| "openai-compatible".to_owned());
+        let llm_provider = llm_provider_str
+            .parse::<LlmProvider>()
+            .with_context(|| format!("parsing LLM provider from {llm_provider_str:?}"))?;
+
+        let llm_api_key = env_string("LLM_API_KEY");
+
+        let llm_model = env_string("LLM_MODEL")
+            .or_else(|| llm.model.clone())
+            .unwrap_or_else(|| "gpt-4o".to_owned());
+        if llm_model.is_empty() {
+            anyhow::bail!("llm_model must not be empty");
+        }
+
+        let default_base_url = match llm_provider {
+            LlmProvider::OpenAiCompatible => "https://api.openai.com/v1",
+            LlmProvider::Anthropic => "https://api.anthropic.com",
+        };
+        let llm_base_url = env_string("LLM_BASE_URL")
+            .or_else(|| llm.base_url.clone())
+            .unwrap_or_else(|| default_base_url.to_owned());
+        if llm_base_url.is_empty() {
+            anyhow::bail!("llm_base_url must not be empty");
+        }
+
+        let llm_temperature: f32 =
+            env_parsed("LLM_TEMPERATURE")?.or(llm.temperature).unwrap_or(0.1);
+        if llm_temperature < 0.0 || !llm_temperature.is_finite() {
+            anyhow::bail!("llm_temperature must be >= 0.0 and finite, got {llm_temperature}");
+        }
+
+        let llm_max_tokens = env_parsed("LLM_MAX_TOKENS")?.or(llm.max_tokens).unwrap_or(4096);
+        if llm_max_tokens == 0 {
+            anyhow::bail!("llm_max_tokens must be greater than zero");
+        }
+
+        let llm_timeout_secs = env_parsed("LLM_TIMEOUT_SECS")?.or(llm.timeout_secs).unwrap_or(60);
+        if llm_timeout_secs == 0 {
+            anyhow::bail!("llm_timeout_secs must be greater than zero");
+        }
+
+        let llm_max_retries = env_parsed("LLM_MAX_RETRIES")?.or(llm.max_retries).unwrap_or(3);
+
+        let llm_retry_backoff_ms =
+            env_parsed("LLM_RETRY_BACKOFF_MS")?.or(llm.retry_backoff_ms).unwrap_or(500);
+
+        let llm_prompt_template_path = env_string("LLM_PROMPT_TEMPLATE_PATH")
+            .or_else(|| llm.prompt_template_path.clone())
+            .unwrap_or_else(|| "config/prompts/chat_system.hbs".to_owned());
 
         Ok(Self {
             qdrant_url,
@@ -387,6 +499,16 @@ impl AppConfig {
             sparse_top_k,
             context_max_tokens,
             context_max_chunks,
+            llm_provider,
+            llm_api_key,
+            llm_model,
+            llm_base_url,
+            llm_temperature,
+            llm_max_tokens,
+            llm_timeout_secs,
+            llm_max_retries,
+            llm_retry_backoff_ms,
+            llm_prompt_template_path,
         })
     }
 }
@@ -438,6 +560,16 @@ mod tests {
             std::env::remove_var("SPARSE_TOP_K");
             std::env::remove_var("CONTEXT_MAX_TOKENS");
             std::env::remove_var("CONTEXT_MAX_CHUNKS");
+            std::env::remove_var("LLM_PROVIDER");
+            std::env::remove_var("LLM_API_KEY");
+            std::env::remove_var("LLM_MODEL");
+            std::env::remove_var("LLM_BASE_URL");
+            std::env::remove_var("LLM_TEMPERATURE");
+            std::env::remove_var("LLM_MAX_TOKENS");
+            std::env::remove_var("LLM_TIMEOUT_SECS");
+            std::env::remove_var("LLM_MAX_RETRIES");
+            std::env::remove_var("LLM_RETRY_BACKOFF_MS");
+            std::env::remove_var("LLM_PROMPT_TEMPLATE_PATH");
         }
     }
 
@@ -485,6 +617,16 @@ mod tests {
         assert_eq!(cfg.sparse_top_k, 20);
         assert_eq!(cfg.context_max_tokens, 8000);
         assert_eq!(cfg.context_max_chunks, 50);
+        assert_eq!(cfg.llm_provider, LlmProvider::OpenAiCompatible);
+        assert!(cfg.llm_api_key.is_none());
+        assert_eq!(cfg.llm_model, "gpt-4o");
+        assert_eq!(cfg.llm_base_url, "https://api.openai.com/v1");
+        assert!((cfg.llm_temperature - 0.1).abs() < f32::EPSILON);
+        assert_eq!(cfg.llm_max_tokens, 4096);
+        assert_eq!(cfg.llm_timeout_secs, 60);
+        assert_eq!(cfg.llm_max_retries, 3);
+        assert_eq!(cfg.llm_retry_backoff_ms, 500);
+        assert_eq!(cfg.llm_prompt_template_path, "config/prompts/chat_system.hbs");
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };
@@ -521,5 +663,56 @@ mod tests {
         assert_eq!("OIDC".parse::<AuthMode>().ok(), Some(AuthMode::Oidc));
         // Invalid value.
         assert!("invalid".parse::<AuthMode>().is_err());
+    }
+
+    #[test]
+    fn llm_provider_parsing() {
+        assert_eq!(
+            "openai-compatible".parse::<LlmProvider>().ok(),
+            Some(LlmProvider::OpenAiCompatible)
+        );
+        assert_eq!("openai".parse::<LlmProvider>().ok(), Some(LlmProvider::OpenAiCompatible));
+        assert_eq!("anthropic".parse::<LlmProvider>().ok(), Some(LlmProvider::Anthropic));
+        assert_eq!("ANTHROPIC".parse::<LlmProvider>().ok(), Some(LlmProvider::Anthropic));
+        assert!("invalid".parse::<LlmProvider>().is_err());
+    }
+
+    #[test]
+    fn llm_empty_model_rejected() {
+        // SAFETY: test-only env manipulation; single logical test avoids races.
+        unsafe { clear_config_env() };
+        unsafe {
+            std::env::set_var("LLM_MODEL", "");
+        }
+        let result = AppConfig::from_current_env();
+        assert!(result.is_err());
+        let err = result.expect_err("expected error").to_string();
+        assert!(err.contains("llm_model must not be empty"), "error: {err}");
+    }
+
+    #[test]
+    fn llm_negative_temperature_rejected() {
+        // SAFETY: test-only env manipulation; single logical test avoids races.
+        unsafe { clear_config_env() };
+        unsafe {
+            std::env::set_var("LLM_TEMPERATURE", "-1.0");
+        }
+        let result = AppConfig::from_current_env();
+        assert!(result.is_err());
+        let err = result.expect_err("expected error").to_string();
+        assert!(err.contains("llm_temperature"), "error: {err}");
+    }
+
+    #[test]
+    fn llm_zero_max_tokens_rejected() {
+        // SAFETY: test-only env manipulation; single logical test avoids races.
+        unsafe { clear_config_env() };
+        unsafe {
+            std::env::set_var("LLM_MAX_TOKENS", "0");
+        }
+        let result = AppConfig::from_current_env();
+        assert!(result.is_err());
+        let err = result.expect_err("expected error").to_string();
+        assert!(err.contains("llm_max_tokens"), "error: {err}");
     }
 }
