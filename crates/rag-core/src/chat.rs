@@ -259,6 +259,9 @@ impl ChatService {
                         "collection is required for the first message in a conversation"
                     )
                 })?;
+                if collection.is_empty() {
+                    bail!("collection must not be empty for the first message in a conversation");
+                }
 
                 let conv = self
                     .stores

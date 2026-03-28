@@ -283,7 +283,8 @@ fn is_transient_error(err: &anyhow::Error) -> bool {
 
     err.chain().any(|cause| {
         let msg = cause.to_string();
-        extract_status_code(&msg).is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504))
+        extract_status_code(&msg)
+            .is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504 | 529))
     })
 }
 
@@ -619,6 +620,9 @@ mod tests {
             "Anthropic API error (503 Service Unavailable): overloaded"
         )));
         assert!(is_transient_error(&anyhow!("Anthropic API error (504 Gateway Timeout): timeout")));
+        assert!(is_transient_error(&anyhow!(
+            "Anthropic API error (529 Overloaded): overloaded"
+        )));
 
         // Bare numeric code also remains supported.
         assert!(is_transient_error(&anyhow!("Anthropic API error (429): rate limited")));
