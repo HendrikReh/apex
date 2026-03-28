@@ -107,7 +107,13 @@ impl ChatBackend {
             LlmProvider::OpenAiCompatible => {
                 let oai_config =
                     OpenAIConfig::new().with_api_key(api_key).with_api_base(&config.llm_base_url);
-                let client = Box::new(async_openai::Client::with_config(oai_config));
+                let http_client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(config.llm_timeout_secs))
+                    .build()
+                    .context("building OpenAI HTTP client")?;
+                let client = Box::new(
+                    async_openai::Client::with_config(oai_config).with_http_client(http_client),
+                );
                 Ok(Self::OpenAiCompatible { client, model: config.llm_model.clone() })
             }
             LlmProvider::Anthropic => {
@@ -323,11 +329,9 @@ async fn complete_anthropic(
     request: &CompletionRequest<'_>,
     messages: &[ChatMessage],
 ) -> Result<LlmResponse> {
-    if messages.is_empty() {
-        bail!("Anthropic requires at least one message");
-    }
-
-    let anthropic_messages: Vec<AnthropicMessage> = messages
+    // Anthropic requires at least one message. For system-only prompts
+    // (empty messages), synthesize a minimal user turn so the API accepts it.
+    let mut anthropic_messages: Vec<AnthropicMessage> = messages
         .iter()
         .map(|m| AnthropicMessage {
             role: match m.role {
@@ -337,6 +341,10 @@ async fn complete_anthropic(
             content: m.content.clone(),
         })
         .collect();
+    if anthropic_messages.is_empty() {
+        anthropic_messages
+            .push(AnthropicMessage { role: "user".to_owned(), content: ".".to_owned() });
+    }
 
     let body = AnthropicRequest {
         model,

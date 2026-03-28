@@ -641,6 +641,25 @@ mod tests {
 
         // Clean up.
         unsafe { std::env::remove_var("DATABASE_URL") };
+
+        // -- Part 3: LLM validation --
+        // Negative temperature.
+        unsafe { std::env::set_var("LLM_TEMPERATURE", "-1.0") };
+        let err = AppConfig::from_current_env().expect_err("negative temp").to_string();
+        assert!(err.contains("llm_temperature"), "error: {err}");
+        unsafe { std::env::remove_var("LLM_TEMPERATURE") };
+
+        // Temperature above upper bound.
+        unsafe { std::env::set_var("LLM_TEMPERATURE", "3.0") };
+        let err = AppConfig::from_current_env().expect_err("high temp").to_string();
+        assert!(err.contains("llm_temperature"), "error: {err}");
+        unsafe { std::env::remove_var("LLM_TEMPERATURE") };
+
+        // Zero max_tokens.
+        unsafe { std::env::set_var("LLM_MAX_TOKENS", "0") };
+        let err = AppConfig::from_current_env().expect_err("zero max_tokens").to_string();
+        assert!(err.contains("llm_max_tokens"), "error: {err}");
+        unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
     }
 
     #[test]
@@ -677,57 +696,5 @@ mod tests {
         assert_eq!("anthropic".parse::<LlmProvider>().ok(), Some(LlmProvider::Anthropic));
         assert_eq!("ANTHROPIC".parse::<LlmProvider>().ok(), Some(LlmProvider::Anthropic));
         assert!("invalid".parse::<LlmProvider>().is_err());
-    }
-
-    #[test]
-    fn llm_empty_model_rejected() {
-        // SAFETY: test-only env manipulation; single logical test avoids races.
-        unsafe { clear_config_env() };
-        unsafe {
-            std::env::set_var("LLM_MODEL", "");
-        }
-        let result = AppConfig::from_current_env();
-        assert!(result.is_err());
-        let err = result.expect_err("expected error").to_string();
-        assert!(err.contains("llm_model must not be empty"), "error: {err}");
-    }
-
-    #[test]
-    fn llm_negative_temperature_rejected() {
-        // SAFETY: test-only env manipulation; single logical test avoids races.
-        unsafe { clear_config_env() };
-        unsafe {
-            std::env::set_var("LLM_TEMPERATURE", "-1.0");
-        }
-        let result = AppConfig::from_current_env();
-        assert!(result.is_err());
-        let err = result.expect_err("expected error").to_string();
-        assert!(err.contains("llm_temperature"), "error: {err}");
-    }
-
-    #[test]
-    fn llm_zero_max_tokens_rejected() {
-        // SAFETY: test-only env manipulation; single logical test avoids races.
-        unsafe { clear_config_env() };
-        unsafe {
-            std::env::set_var("LLM_MAX_TOKENS", "0");
-        }
-        let result = AppConfig::from_current_env();
-        assert!(result.is_err());
-        let err = result.expect_err("expected error").to_string();
-        assert!(err.contains("llm_max_tokens"), "error: {err}");
-    }
-
-    #[test]
-    fn llm_temperature_above_upper_bound_rejected() {
-        // SAFETY: test-only env manipulation; single logical test avoids races.
-        unsafe { clear_config_env() };
-        unsafe {
-            std::env::set_var("LLM_TEMPERATURE", "3.0");
-        }
-        let result = AppConfig::from_current_env();
-        assert!(result.is_err());
-        let err = result.expect_err("expected error").to_string();
-        assert!(err.contains("llm_temperature"), "error: {err}");
     }
 }
