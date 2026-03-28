@@ -17,6 +17,10 @@ bm25_query_b = 0.3
 # Collection defaults
 default_collection = "hybrid_docs"
 
+# Chunking defaults (overridable per-document via sidecar)
+chunking_max_tokens = 600
+chunking_overlap_ratio = 0.15
+
 # Embedding settings
 embedding_model = "text-embedding-3-small"          # OpenAI model (1536 dims)
 embedder = "openai"                                 # Options: "openai", "mock"

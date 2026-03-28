@@ -383,6 +383,7 @@ mod tests {
     use super::*;
     use crate::config::{AuthMode, EmbedderKind};
 
+    #[allow(clippy::disallowed_methods)]
     fn over_limit_input() -> String {
         let tokenizer =
             tokenizer_for_model("text-embedding-3-small").expect("test tokenizer should load");
@@ -411,6 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn mock_embedder_rejects_empty_input() {
         let embedder = MockEmbedder::new(8).expect("mock embedder should build");
         let texts = vec![String::new()];
@@ -422,6 +424,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
     async fn mock_embedder_rejects_over_limit_input() {
         let embedder = MockEmbedder::new(8).expect("mock embedder should build");
         let texts = vec![over_limit_input()];
@@ -464,6 +467,8 @@ mod tests {
             bm25_b: 0.75,
             bm25_query_b: 0.3,
             default_collection: "hybrid_docs".to_string(),
+            chunking_max_tokens: 600,
+            chunking_overlap_ratio: 0.15,
             embedding_model: "text-embedding-3-small".to_string(),
             embedder: EmbedderKind::Mock,
             embed_timeout_secs: 30,

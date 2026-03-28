@@ -31,6 +31,7 @@ Required tools: Rust (edition 2024), [just](https://github.com/casey/just) task 
 ### Build & Test
 
 ```bash
+cargo check                # Quick compile check (use before commits)
 just test                  # Full suite: fmt check -> clippy -> cargo test
 just fmt                   # Check formatting (no changes)
 just clippy                # Clippy with strict settings
@@ -73,6 +74,7 @@ rag-server -> rag-core -> rag-chunking
 | `rag-server` | `rag-core`, `agent-core`, `rag-evidence`, `rag-notifications` | `rag-cli` |
 | `rag-client` | None (reqwest only) | Any workspace crate |
 | `rag-cli` | `rag-client`, `rag-evidence` | `rag-core`, `rag-server` |
+| `obfuscate-macros` | None (proc-macro) | Any workspace crate |
 | `test-support` | `axum`, `tokio` | Any workspace crate |
 
 ### Key Design Decisions (carried from projectAlpha)
@@ -96,7 +98,7 @@ rag-server -> rag-core -> rag-chunking
 
 ### Formatting
 
-`rustfmt.toml`: `max_width = 100`, `edition = "2021"`, Unix newlines, `reorder_imports = true`.
+`rustfmt.toml`: `max_width = 100`, `edition = "2024"`, Unix newlines, `reorder_imports = true`.
 
 ### Configuration
 
@@ -123,18 +125,7 @@ Lessons learned from projectAlpha — avoid these in the rebuild:
 
 ## Task Tracking (Beads)
 
-Use **beads** (`bd` CLI) for all task/issue tracking. Do NOT use `TaskCreate`, `TodoWrite`, or markdown task files.
-
-```bash
-bd ready                   # Show unblocked work
-bd create --title="..." --description="..." --type=task --priority=2
-bd update <id> --status=in_progress
-bd close <id>              # Mark complete
-bd show <id>               # Full details + dependencies
-bd dep add <issue> <depends-on>
-```
-
-Create a beads issue **before** writing code. Data lives in `.beads/` (Dolt-backed, git-native). Never use `bd edit` — it opens `$EDITOR` and blocks agents. Use `bd update` with inline flags.
+See `AGENTS.md` for full beads workflow. Key rule: create a `bd` issue **before** writing code. Never use `bd edit` (blocks agents) — use `bd update` with inline flags.
 
 ## Verification & Testing Policies
 
