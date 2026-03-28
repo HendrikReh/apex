@@ -4,6 +4,7 @@
 //! storage abstractions with tenant-scoped operations.
 
 pub mod bm25;
+pub mod chat;
 pub mod config;
 pub mod context;
 pub mod embed;
@@ -18,6 +19,7 @@ pub mod stores;
 pub mod tenant;
 
 pub use bm25::{Bm25Config, Bm25Embedder, SparseVector};
+pub use chat::{ChatDefaults, ChatRequest, ChatResponse, ChatService};
 pub use config::AppConfig;
 pub use context::{
     Citation, ContextBuilder, ContextChunk, ContextConfig, ContextResult, ContextStats,
