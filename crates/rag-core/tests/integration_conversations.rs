@@ -87,6 +87,27 @@ async fn insert_and_get_messages_role_roundtrip() -> Result<()> {
 #[tokio::test]
 #[ignore] // requires Postgres (`just up`)
 #[allow(clippy::disallowed_methods)] // .expect_err() used intentionally in test assertions
+async fn system_role_roundtrip() -> Result<()> {
+    let stores = setup().await?;
+    let tenant = unique_tenant();
+
+    let conv = stores.create_conversation(&tenant, None, Some("coll")).await?;
+
+    let system_msg =
+        stores.insert_message(&tenant, conv.id, MessageRole::System, "System note", None).await?;
+    assert_eq!(system_msg.role, MessageRole::System);
+
+    let messages = stores.get_messages(&tenant, conv.id, 10).await?;
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, MessageRole::System);
+    assert_eq!(messages[0].content, "System note");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // requires Postgres (`just up`)
+#[allow(clippy::disallowed_methods)] // .expect_err() used intentionally in test assertions
 async fn get_messages_limit_respected() -> Result<()> {
     let stores = setup().await?;
     let tenant = unique_tenant();

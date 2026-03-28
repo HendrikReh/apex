@@ -20,6 +20,7 @@ use super::Stores;
 pub enum MessageRole {
     User,
     Assistant,
+    System,
 }
 
 impl MessageRole {
@@ -27,6 +28,7 @@ impl MessageRole {
         match self {
             Self::User => "user",
             Self::Assistant => "assistant",
+            Self::System => "system",
         }
     }
 
@@ -34,6 +36,7 @@ impl MessageRole {
         match s {
             "user" => Ok(Self::User),
             "assistant" => Ok(Self::Assistant),
+            "system" => Ok(Self::System),
             other => bail!("unknown message role from DB: {other:?}"),
         }
     }

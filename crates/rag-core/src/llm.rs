@@ -192,20 +192,21 @@ impl ChatBackend {
 
 /// Check if an error is transient (retryable): 429, 500, 502, 503, 504.
 ///
-/// Matches parenthesized status codes like `"(429)"` to avoid false positives
-/// from bare numbers embedded in other text (e.g. `"50200"` matching `"502"`).
-/// The Anthropic path formats errors as `"Anthropic API error ({status}): ..."`,
-/// so this pattern is reliable. For OpenAI-compatible, `async_openai` handles
-/// retries internally via its backoff configuration, so this outer retry is
-/// primarily a safety net for the Anthropic path.
+/// Anthropic errors are formatted as `"Anthropic API error ({status}): ..."`,
+/// where `{status}` includes both the numeric code and reason phrase
+/// (for example `"429 Too Many Requests"`). Extract the numeric code from the
+/// first parenthesized segment so transient errors still retry.
 fn is_transient_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string();
-    for code in ["(429)", "(500)", "(502)", "(503)", "(504)"] {
-        if msg.contains(code) {
-            return true;
-        }
-    }
-    false
+    extract_status_code(&msg).is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504))
+}
+
+fn extract_status_code(message: &str) -> Option<u16> {
+    let start = message.find('(')?;
+    let rest = &message[start + 1..];
+    let end = rest.find(')')?;
+    let token = rest[..end].split_whitespace().next()?;
+    token.parse().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -434,17 +435,30 @@ mod tests {
     }
 
     #[test]
-    fn is_transient_error_detects_parenthesized_codes() {
+    fn is_transient_error_detects_numeric_status_prefix() {
         // Anthropic-formatted transient errors should be detected.
+        assert!(is_transient_error(&anyhow!(
+            "Anthropic API error (429 Too Many Requests): rate limited"
+        )));
+        assert!(is_transient_error(&anyhow!(
+            "Anthropic API error (500 Internal Server Error): internal"
+        )));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (502 Bad Gateway): bad gateway")));
+        assert!(is_transient_error(&anyhow!(
+            "Anthropic API error (503 Service Unavailable): overloaded"
+        )));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (504 Gateway Timeout): timeout")));
+
+        // Bare numeric code also remains supported.
         assert!(is_transient_error(&anyhow!("Anthropic API error (429): rate limited")));
-        assert!(is_transient_error(&anyhow!("Anthropic API error (500): internal")));
-        assert!(is_transient_error(&anyhow!("Anthropic API error (502): bad gateway")));
-        assert!(is_transient_error(&anyhow!("Anthropic API error (503): overloaded")));
-        assert!(is_transient_error(&anyhow!("Anthropic API error (504): timeout")));
 
         // Non-transient errors should not match.
-        assert!(!is_transient_error(&anyhow!("Anthropic API error (400): bad request")));
-        assert!(!is_transient_error(&anyhow!("Anthropic API error (401): unauthorized")));
+        assert!(!is_transient_error(&anyhow!(
+            "Anthropic API error (400 Bad Request): bad request"
+        )));
+        assert!(!is_transient_error(&anyhow!(
+            "Anthropic API error (401 Unauthorized): unauthorized"
+        )));
 
         // Bare numbers embedded in text must not false-positive.
         assert!(!is_transient_error(&anyhow!("requested 50200 tokens")));
