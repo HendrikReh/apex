@@ -231,6 +231,9 @@ impl ChatService {
                 let stored_collection = conv.collection.unwrap_or_default();
                 let collection = match &request.collection {
                     Some(req_coll) => {
+                        if req_coll.is_empty() {
+                            bail!("collection must not be empty");
+                        }
                         if !stored_collection.is_empty() && req_coll != &stored_collection {
                             bail!(
                                 "collection mismatch: conversation has {stored_collection:?}, \

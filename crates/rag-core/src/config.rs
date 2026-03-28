@@ -478,9 +478,27 @@ impl AppConfig {
         let llm_retry_backoff_ms =
             env_parsed("LLM_RETRY_BACKOFF_MS")?.or(llm.retry_backoff_ms).unwrap_or(500);
 
-        let llm_prompt_template_path = env_string("LLM_PROMPT_TEMPLATE_PATH")
-            .or_else(|| llm.prompt_template_path.clone())
-            .unwrap_or_else(|| "config/prompts/chat_system.hbs".to_owned());
+        let llm_prompt_template_path = {
+            let raw = env_string("LLM_PROMPT_TEMPLATE_PATH")
+                .or_else(|| llm.prompt_template_path.clone())
+                .unwrap_or_else(|| "config/prompts/chat_system.hbs".to_owned());
+            let path = std::path::Path::new(&raw);
+            if path.is_absolute() {
+                raw
+            } else if let Some(parent) = std::path::Path::new(&config_path).parent() {
+                // Anchor relative paths to the config file's directory.
+                let anchored = parent.join(path);
+                if anchored.exists() {
+                    anchored.to_string_lossy().into_owned()
+                } else {
+                    // Fall back to cwd-relative if the anchored path does not exist,
+                    // preserving backwards compatibility with the default layout.
+                    raw
+                }
+            } else {
+                raw
+            }
+        };
 
         Ok(Self {
             qdrant_url,
