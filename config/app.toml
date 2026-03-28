@@ -37,3 +37,12 @@ bind_addr = "0.0.0.0:8080"
 auth_mode = "none"                                  # Options: "none", "api-key", "oidc"
 tenant_header = "x-tenant"
 request_id_header = "x-request-id"
+
+[retrieval]
+rrf_k = 60                                          # RRF fusion k parameter
+dense_top_k = 20                                    # Dense search result limit
+sparse_top_k = 20                                   # Sparse/BM25 search result limit
+
+[context]
+max_tokens = 8000                                   # Token budget for assembled context
+max_chunks = 50                                     # Max chunks in assembled context

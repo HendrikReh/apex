@@ -5,14 +5,23 @@
 
 pub mod bm25;
 pub mod config;
+pub mod context;
 pub mod embed;
 pub mod extract;
+pub mod fusion;
 pub mod ingest;
+pub mod retrieval;
 pub mod sidecar;
 pub mod stores;
 pub mod tenant;
 
 pub use bm25::{Bm25Config, Bm25Embedder, SparseVector};
+pub use context::{
+    Citation, ContextBuilder, ContextChunk, ContextConfig, ContextResult, ContextStats,
+    DedupeStrategy,
+};
+pub use fusion::{rrf_fusion, FusedChunk, RetrievedChunk};
+pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 pub use config::AppConfig;
 pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
 pub use extract::{

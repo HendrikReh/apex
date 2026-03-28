@@ -7,7 +7,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use qdrant_client::qdrant::{Distance, PointStruct};
+use qdrant_client::qdrant::{
+    DenseVector, Distance, NamedVectors, PointStruct, Vector as QdrantVector, Vectors,
+};
+use qdrant_client::qdrant::SparseVector as QdrantSparseVector;
+use crate::stores::vectors::{DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -520,9 +524,6 @@ struct EmbeddedDocument {
     source_path: String,
     chunks: Vec<ChunkWithSection>,
     dense_vectors: Vec<Vec<f32>>,
-    // Sparse vectors are computed but not yet persisted to Qdrant named vectors.
-    // Will be wired in when hybrid retrieval (dense + BM25) is implemented.
-    #[allow(dead_code)]
     sparse_vectors: Vec<SparseVector>,
     total_tokens: i64,
 }
@@ -541,8 +542,15 @@ fn stable_chunk_uuid(tenant: &str, document_id: &str, chunk_index: usize) -> Uui
 fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<PointStruct>> {
     if doc.dense_vectors.len() != doc.chunks.len() {
         bail!(
-            "embedder returned {} vectors for {} chunks",
+            "embedder returned {} dense vectors for {} chunks",
             doc.dense_vectors.len(),
+            doc.chunks.len()
+        );
+    }
+    if doc.sparse_vectors.len() != doc.chunks.len() {
+        bail!(
+            "BM25 embedder returned {} sparse vectors for {} chunks",
+            doc.sparse_vectors.len(),
             doc.chunks.len()
         );
     }
@@ -553,6 +561,7 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
         .enumerate()
         .map(|(i, chunk)| {
             let point_id = stable_chunk_uuid(tenant, &doc.document_id, i);
+
             let payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = [
                 ("tenant".to_string(), tenant.to_string().into()),
                 ("document_id".to_string(), doc.document_id.clone().into()),
@@ -560,7 +569,25 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
                 ("text".to_string(), chunk.text.clone().into()),
             ]
             .into();
-            PointStruct::new(point_id.to_string(), doc.dense_vectors[i].clone(), payload)
+
+            // Build named vectors with both dense and sparse.
+            let dense = QdrantVector::from(DenseVector {
+                data: doc.dense_vectors[i].clone(),
+            });
+            let sparse = QdrantVector::from(QdrantSparseVector {
+                indices: doc.sparse_vectors[i].indices.clone(),
+                values: doc.sparse_vectors[i].values.clone(),
+            });
+
+            let mut named = std::collections::HashMap::new();
+            named.insert(DENSE_VECTOR_NAME.to_string(), dense);
+            named.insert(SPARSE_VECTOR_NAME.to_string(), sparse);
+
+            PointStruct {
+                id: Some(point_id.to_string().into()),
+                payload,
+                vectors: Some(Vectors::from(NamedVectors { vectors: named })),
+            }
         })
         .collect())
 }
@@ -695,6 +722,6 @@ mod tests {
         };
 
         let err = build_qdrant_points("tenant", &doc).expect_err("mismatched vectors should fail");
-        assert!(err.to_string().contains("embedder returned 1 vectors for 2 chunks"));
+        assert!(err.to_string().contains("embedder returned 1 dense vectors for 2 chunks"));
     }
 }
