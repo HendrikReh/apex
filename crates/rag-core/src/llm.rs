@@ -158,6 +158,10 @@ impl ChatBackend {
     ) -> Result<LlmResponse> {
         let messages = coalesce_messages(request.messages);
         let mut last_err = None;
+        let provider_name = match self {
+            Self::OpenAiCompatible { .. } => "OpenAI-compatible completion",
+            Self::Anthropic { .. } => "Anthropic completion",
+        };
 
         for attempt in 0..=max_retries {
             if attempt > 0 {
@@ -181,12 +185,12 @@ impl ChatBackend {
                         last_err = Some(e);
                         continue;
                     }
-                    return Err(e);
+                    return Err(e).context(provider_name);
                 }
             }
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow!("retry loop exhausted")))
+        Err(last_err.unwrap_or_else(|| anyhow!("retry loop exhausted"))).context(provider_name)
     }
 }
 
@@ -197,8 +201,10 @@ impl ChatBackend {
 /// (for example `"429 Too Many Requests"`). Extract the numeric code from the
 /// first parenthesized segment so transient errors still retry.
 fn is_transient_error(err: &anyhow::Error) -> bool {
-    let msg = err.to_string();
-    extract_status_code(&msg).is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504))
+    err.chain().any(|cause| {
+        let msg = cause.to_string();
+        extract_status_code(&msg).is_some_and(|code| matches!(code, 429 | 500 | 502 | 503 | 504))
+    })
 }
 
 fn extract_status_code(message: &str) -> Option<u16> {
@@ -259,7 +265,7 @@ async fn complete_openai(
     }
 
     let oai_request = req_builder.build().context("building OpenAI request")?;
-    let response = client.chat().create(oai_request).await.context("OpenAI chat completion")?;
+    let response = client.chat().create(oai_request).await?;
 
     let choice = response.choices.first().ok_or_else(|| anyhow!("OpenAI returned no choices"))?;
     let text = choice.message.content.clone().unwrap_or_default();
@@ -463,5 +469,12 @@ mod tests {
         // Bare numbers embedded in text must not false-positive.
         assert!(!is_transient_error(&anyhow!("requested 50200 tokens")));
         assert!(!is_transient_error(&anyhow!("model limit is 429000 tokens")));
+    }
+
+    #[test]
+    fn is_transient_error_checks_wrapped_causes() {
+        let err = anyhow!("Anthropic API error (503 Service Unavailable): overloaded")
+            .context("Anthropic completion");
+        assert!(is_transient_error(&err));
     }
 }

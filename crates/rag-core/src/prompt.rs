@@ -156,4 +156,24 @@ mod tests {
         // Empty language_instruction should not leave artifacts.
         assert!(!result.contains("{{"));
     }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions
+    fn prompt_renderer_preserves_unescaped_context_with_triple_stash() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let path = dir.path().join("test.hbs");
+        std::fs::write(&path, "Assistant.\n\n{{{context}}}").expect("write");
+
+        let renderer = PromptRenderer::from_file(path.to_str().expect("path")).expect("from_file");
+        let raw_context = "[1] if a < b && c > d { say \"x & y\" }";
+        let result = renderer
+            .render_system_prompt(&PromptContext { context: raw_context, language_instruction: "" })
+            .expect("render");
+
+        assert!(result.contains(raw_context));
+        assert!(!result.contains("&lt;"));
+        assert!(!result.contains("&gt;"));
+        assert!(!result.contains("&amp;"));
+        assert!(!result.contains("&quot;"));
+    }
 }
