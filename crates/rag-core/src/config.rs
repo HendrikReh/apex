@@ -81,6 +81,21 @@ impl fmt::Display for AuthMode {
 #[derive(Deserialize, Default)]
 struct AppSettings {
     app: Option<AppSection>,
+    retrieval: Option<RetrievalSection>,
+    context: Option<ContextSection>,
+}
+
+#[derive(Deserialize, Default)]
+struct RetrievalSection {
+    rrf_k: Option<u32>,
+    dense_top_k: Option<u64>,
+    sparse_top_k: Option<u64>,
+}
+
+#[derive(Deserialize, Default)]
+struct ContextSection {
+    max_tokens: Option<usize>,
+    max_chunks: Option<usize>,
 }
 
 #[derive(Deserialize, Default)]
@@ -155,6 +170,13 @@ pub struct AppConfig {
     pub auth_mode: AuthMode,
     pub tenant_header: String,
     pub request_id_header: String,
+    // Retrieval
+    pub rrf_k: u32,
+    pub dense_top_k: u64,
+    pub sparse_top_k: u64,
+    // Context assembly
+    pub context_max_tokens: usize,
+    pub context_max_chunks: usize,
 }
 
 impl AppConfig {
@@ -178,15 +200,20 @@ impl AppConfig {
         let config_path =
             std::env::var("APP_CONFIG_PATH").unwrap_or_else(|_| "config/app.toml".to_owned());
 
-        let file_settings = if std::path::Path::new(&config_path).exists() {
-            let contents = std::fs::read_to_string(&config_path)
-                .with_context(|| format!("reading config file {config_path}"))?;
-            let settings: AppSettings = toml::from_str(&contents)
-                .with_context(|| format!("parsing config file {config_path}"))?;
-            settings.app.unwrap_or_default()
-        } else {
-            AppSection::default()
-        };
+        let (file_settings, retrieval_settings, context_settings) =
+            if std::path::Path::new(&config_path).exists() {
+                let contents = std::fs::read_to_string(&config_path)
+                    .with_context(|| format!("reading config file {config_path}"))?;
+                let settings: AppSettings = toml::from_str(&contents)
+                    .with_context(|| format!("parsing config file {config_path}"))?;
+                (
+                    settings.app.unwrap_or_default(),
+                    settings.retrieval.unwrap_or_default(),
+                    settings.context.unwrap_or_default(),
+                )
+            } else {
+                (AppSection::default(), RetrievalSection::default(), ContextSection::default())
+            };
 
         let f = &file_settings;
 
@@ -303,6 +330,29 @@ impl AppConfig {
             .or_else(|| f.request_id_header.clone())
             .unwrap_or_else(|| "x-request-id".to_owned());
 
+        let r = &retrieval_settings;
+        let ctx = &context_settings;
+
+        let rrf_k = env_parsed("RRF_K")?.or(r.rrf_k).unwrap_or(60);
+        if rrf_k == 0 {
+            anyhow::bail!("rrf_k must be greater than zero");
+        }
+        let dense_top_k = env_parsed("DENSE_TOP_K")?.or(r.dense_top_k).unwrap_or(20);
+        if dense_top_k == 0 {
+            anyhow::bail!("dense_top_k must be greater than zero");
+        }
+        let sparse_top_k = env_parsed("SPARSE_TOP_K")?.or(r.sparse_top_k).unwrap_or(20);
+        if sparse_top_k == 0 {
+            anyhow::bail!("sparse_top_k must be greater than zero");
+        }
+        let context_max_tokens =
+            env_parsed("CONTEXT_MAX_TOKENS")?.or(ctx.max_tokens).unwrap_or(8000);
+        if context_max_tokens == 0 {
+            anyhow::bail!("context_max_tokens must be greater than zero");
+        }
+        let context_max_chunks =
+            env_parsed("CONTEXT_MAX_CHUNKS")?.or(ctx.max_chunks).unwrap_or(50);
+
         Ok(Self {
             qdrant_url,
             qdrant_api_key,
@@ -329,6 +379,11 @@ impl AppConfig {
             auth_mode,
             tenant_header,
             request_id_header,
+            rrf_k,
+            dense_top_k,
+            sparse_top_k,
+            context_max_tokens,
+            context_max_chunks,
         })
     }
 }
@@ -375,6 +430,11 @@ mod tests {
             std::env::remove_var("REQUEST_ID_HEADER");
             std::env::remove_var("CHUNKING_MAX_TOKENS");
             std::env::remove_var("CHUNKING_OVERLAP_RATIO");
+            std::env::remove_var("RRF_K");
+            std::env::remove_var("DENSE_TOP_K");
+            std::env::remove_var("SPARSE_TOP_K");
+            std::env::remove_var("CONTEXT_MAX_TOKENS");
+            std::env::remove_var("CONTEXT_MAX_CHUNKS");
         }
     }
 
@@ -417,6 +477,11 @@ mod tests {
         assert_eq!(cfg.auth_mode, AuthMode::None);
         assert_eq!(cfg.tenant_header, "x-tenant");
         assert_eq!(cfg.request_id_header, "x-request-id");
+        assert_eq!(cfg.rrf_k, 60);
+        assert_eq!(cfg.dense_top_k, 20);
+        assert_eq!(cfg.sparse_top_k, 20);
+        assert_eq!(cfg.context_max_tokens, 8000);
+        assert_eq!(cfg.context_max_chunks, 50);
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };

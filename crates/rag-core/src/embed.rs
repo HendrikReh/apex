@@ -480,6 +480,11 @@ mod tests {
             auth_mode: AuthMode::None,
             tenant_header: "x-tenant".to_string(),
             request_id_header: "x-request-id".to_string(),
+            rrf_k: 60,
+            dense_top_k: 20,
+            sparse_top_k: 20,
+            context_max_tokens: 8000,
+            context_max_chunks: 50,
         };
 
         let embedder = AnyEmbedder::from_config(&config).expect("mock embedder should build");
