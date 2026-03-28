@@ -2041,6 +2041,7 @@ dependencies = [
  "qdrant-client",
  "rag-chunking",
  "reqwest",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2",

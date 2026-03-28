@@ -6,12 +6,14 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use async_openai::config::OpenAIConfig;
+use async_openai::config::{Config as OpenAiConfigTrait, OpenAIConfig};
 use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
     CreateChatCompletionRequestArgs,
 };
+use reqwest::header::{AUTHORIZATION, HeaderMap};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{AppConfig, LlmProvider};
@@ -87,7 +89,7 @@ pub fn coalesce_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
 /// LLM provider backend.
 pub enum ChatBackend {
     OpenAiCompatible {
-        client: Box<async_openai::Client<async_openai::config::OpenAIConfig>>,
+        client: Box<async_openai::Client<Box<dyn OpenAiConfigTrait>>>,
         model: String,
     },
     Anthropic {
@@ -97,16 +99,65 @@ pub enum ChatBackend {
     },
 }
 
+#[derive(Clone, Debug)]
+struct OpenAiCompatibleConfig {
+    api_base: String,
+    api_key: SecretString,
+}
+
+impl OpenAiCompatibleConfig {
+    fn new(api_base: String, api_key: Option<&str>) -> Self {
+        Self { api_base, api_key: SecretString::from(api_key.unwrap_or_default().to_owned()) }
+    }
+}
+
+impl OpenAiConfigTrait for OpenAiCompatibleConfig {
+    fn headers(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        let api_key = self.api_key.expose_secret();
+        if !api_key.is_empty() {
+            headers.insert(
+                AUTHORIZATION,
+                format!("Bearer {api_key}")
+                    .parse()
+                    .expect("OpenAI-compatible API key should be a valid header value"),
+            );
+        }
+        headers
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{}", self.api_base, path)
+    }
+
+    fn query(&self) -> Vec<(&str, &str)> {
+        vec![]
+    }
+
+    fn api_base(&self) -> &str {
+        &self.api_base
+    }
+
+    fn api_key(&self) -> &SecretString {
+        &self.api_key
+    }
+}
+
 impl ChatBackend {
     /// Construct a backend from application config.
     pub fn from_config(config: &AppConfig) -> Result<Self> {
-        let api_key =
-            config.llm_api_key.as_deref().ok_or_else(|| anyhow!("LLM_API_KEY must be set"))?;
-
         match config.llm_provider {
             LlmProvider::OpenAiCompatible => {
-                let oai_config =
-                    OpenAIConfig::new().with_api_key(api_key).with_api_base(&config.llm_base_url);
+                let oai_config: Box<dyn OpenAiConfigTrait> = match config.llm_api_key.as_deref() {
+                    Some(api_key) => Box::new(
+                        OpenAIConfig::new()
+                            .with_api_key(api_key)
+                            .with_api_base(&config.llm_base_url),
+                    ),
+                    None => {
+                        Box::new(OpenAiCompatibleConfig::new(config.llm_base_url.clone(), None))
+                    }
+                };
                 let http_client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(config.llm_timeout_secs))
                     .build()
@@ -117,6 +168,10 @@ impl ChatBackend {
                 Ok(Self::OpenAiCompatible { client, model: config.llm_model.clone() })
             }
             LlmProvider::Anthropic => {
+                let api_key = config
+                    .llm_api_key
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("LLM_API_KEY must be set for anthropic"))?;
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(config.llm_timeout_secs))
                     .default_headers({
@@ -220,7 +275,7 @@ fn extract_status_code(message: &str) -> Option<u16> {
 // ---------------------------------------------------------------------------
 
 async fn complete_openai(
-    client: &async_openai::Client<OpenAIConfig>,
+    client: &async_openai::Client<Box<dyn OpenAiConfigTrait>>,
     model: &str,
     request: &CompletionRequest<'_>,
     messages: &[ChatMessage],
@@ -397,6 +452,52 @@ async fn complete_anthropic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::AuthMode;
+
+    fn test_config() -> AppConfig {
+        AppConfig {
+            qdrant_url: "http://127.0.0.1:6334".to_string(),
+            qdrant_api_key: None,
+            qdrant_timeout_secs: 30,
+            qdrant_connect_timeout_secs: 5,
+            postgres_url: "postgres://postgres:postgres@127.0.0.1:5432/postgres".to_string(),
+            postgres_max_connections: 10,
+            postgres_connect_timeout_secs: 5,
+            bm25_avgdl: 300.0,
+            bm25_k1: 1.2,
+            bm25_b: 0.75,
+            bm25_query_b: 0.3,
+            default_collection: "hybrid_docs".to_string(),
+            chunking_max_tokens: 600,
+            chunking_overlap_ratio: 0.15,
+            embedding_model: "text-embedding-3-small".to_string(),
+            embedder: crate::config::EmbedderKind::Mock,
+            embed_timeout_secs: 30,
+            embed_max_retries: 3,
+            embed_retry_backoff_ms: 500,
+            embed_max_batch_tokens: 8_192,
+            embed_max_batch_size: 32,
+            bind_addr: "0.0.0.0:8080".to_string(),
+            auth_mode: AuthMode::None,
+            tenant_header: "x-tenant".to_string(),
+            request_id_header: "x-request-id".to_string(),
+            rrf_k: 60,
+            dense_top_k: 20,
+            sparse_top_k: 20,
+            context_max_tokens: 8000,
+            context_max_chunks: 50,
+            llm_provider: LlmProvider::OpenAiCompatible,
+            llm_api_key: None,
+            llm_model: "gpt-4o".to_string(),
+            llm_base_url: "http://127.0.0.1:11434/v1".to_string(),
+            llm_temperature: 0.1,
+            llm_max_tokens: 4096,
+            llm_timeout_secs: 60,
+            llm_max_retries: 3,
+            llm_retry_backoff_ms: 500,
+            llm_prompt_template_path: "config/prompts/chat_system.hbs".to_string(),
+        }
+    }
 
     #[test]
     fn coalesce_alternating_roles_unchanged() {
@@ -476,5 +577,26 @@ mod tests {
         let err = anyhow!("Anthropic API error (503 Service Unavailable): overloaded")
             .context("Anthropic completion");
         assert!(is_transient_error(&err));
+    }
+
+    #[test]
+    fn from_config_allows_keyless_openai_compatible_backend() {
+        let cfg = test_config();
+        let backend = ChatBackend::from_config(&cfg).expect("keyless openai-compatible backend");
+        assert!(matches!(backend, ChatBackend::OpenAiCompatible { .. }));
+    }
+
+    #[test]
+    fn from_config_requires_api_key_for_anthropic() {
+        let mut cfg = test_config();
+        cfg.llm_provider = LlmProvider::Anthropic;
+        cfg.llm_model = "claude-sonnet-4-20250514".to_string();
+        cfg.llm_base_url = "https://api.anthropic.com".to_string();
+
+        let err = match ChatBackend::from_config(&cfg) {
+            Ok(_) => panic!("anthropic should require API key"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("LLM_API_KEY must be set for anthropic"));
     }
 }

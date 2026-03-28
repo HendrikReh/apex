@@ -20,6 +20,7 @@ handlebars.workspace = true
 hex.workspace = true
 qdrant-client.workspace = true
 reqwest.workspace = true
+secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

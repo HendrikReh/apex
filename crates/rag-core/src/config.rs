@@ -102,6 +102,22 @@ impl fmt::Display for LlmProvider {
     }
 }
 
+impl LlmProvider {
+    fn default_model(&self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => "gpt-4o",
+            Self::Anthropic => "claude-sonnet-4-20250514",
+        }
+    }
+
+    fn default_base_url(&self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => "https://api.openai.com/v1",
+            Self::Anthropic => "https://api.anthropic.com",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TOML intermediate structs
 // ---------------------------------------------------------------------------
@@ -427,18 +443,14 @@ impl AppConfig {
 
         let llm_model = env_string("LLM_MODEL")
             .or_else(|| llm.model.clone())
-            .unwrap_or_else(|| "gpt-4o".to_owned());
+            .unwrap_or_else(|| llm_provider.default_model().to_owned());
         if llm_model.is_empty() {
             anyhow::bail!("llm_model must not be empty");
         }
 
-        let default_base_url = match llm_provider {
-            LlmProvider::OpenAiCompatible => "https://api.openai.com/v1",
-            LlmProvider::Anthropic => "https://api.anthropic.com",
-        };
         let llm_base_url = env_string("LLM_BASE_URL")
             .or_else(|| llm.base_url.clone())
-            .unwrap_or_else(|| default_base_url.to_owned());
+            .unwrap_or_else(|| llm_provider.default_base_url().to_owned());
         if llm_base_url.is_empty() {
             anyhow::bail!("llm_base_url must not be empty");
         }
@@ -643,6 +655,14 @@ mod tests {
         unsafe { std::env::remove_var("DATABASE_URL") };
 
         // -- Part 3: LLM validation --
+        unsafe { std::env::set_var("LLM_PROVIDER", "anthropic") };
+        let cfg = AppConfig::from_current_env().expect("anthropic defaults");
+        assert_eq!(cfg.llm_provider, LlmProvider::Anthropic);
+        assert!(cfg.llm_api_key.is_none());
+        assert_eq!(cfg.llm_model, "claude-sonnet-4-20250514");
+        assert_eq!(cfg.llm_base_url, "https://api.anthropic.com");
+        unsafe { std::env::remove_var("LLM_PROVIDER") };
+
         // Negative temperature.
         unsafe { std::env::set_var("LLM_TEMPERATURE", "-1.0") };
         let err = AppConfig::from_current_env().expect_err("negative temp").to_string();
