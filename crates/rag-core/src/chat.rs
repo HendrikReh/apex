@@ -165,7 +165,7 @@ impl ChatService {
             .context("rendering system prompt")?;
 
         // Step 7: Call LLM.
-        messages.push(ChatMessage { role: ChatRole::User, content: request.query.clone() });
+        messages.push(ChatMessage { role: ChatRole::User, content: request.query });
         let llm_response = self
             .backend
             .complete(

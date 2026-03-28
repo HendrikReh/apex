@@ -186,13 +186,15 @@ impl ChatBackend {
 
 /// Check if an error is transient (retryable): 429, 500, 502, 503, 504.
 ///
-/// For Anthropic (raw reqwest), this matches the status code embedded in our
-/// error messages. For OpenAI-compatible, `async_openai` handles retries
-/// internally via its backoff configuration, so this outer retry is primarily
-/// a safety net for the Anthropic path.
+/// Matches parenthesized status codes like `"(429)"` to avoid false positives
+/// from bare numbers embedded in other text (e.g. `"50200"` matching `"502"`).
+/// The Anthropic path formats errors as `"Anthropic API error ({status}): ..."`,
+/// so this pattern is reliable. For OpenAI-compatible, `async_openai` handles
+/// retries internally via its backoff configuration, so this outer retry is
+/// primarily a safety net for the Anthropic path.
 fn is_transient_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string();
-    for code in ["429", "500", "502", "503", "504"] {
+    for code in ["(429)", "(500)", "(502)", "(503)", "(504)"] {
         if msg.contains(code) {
             return true;
         }
@@ -421,5 +423,23 @@ mod tests {
         let result = coalesce_messages(&msgs);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].content, "Solo");
+    }
+
+    #[test]
+    fn is_transient_error_detects_parenthesized_codes() {
+        // Anthropic-formatted transient errors should be detected.
+        assert!(is_transient_error(&anyhow!("Anthropic API error (429): rate limited")));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (500): internal")));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (502): bad gateway")));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (503): overloaded")));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (504): timeout")));
+
+        // Non-transient errors should not match.
+        assert!(!is_transient_error(&anyhow!("Anthropic API error (400): bad request")));
+        assert!(!is_transient_error(&anyhow!("Anthropic API error (401): unauthorized")));
+
+        // Bare numbers embedded in text must not false-positive.
+        assert!(!is_transient_error(&anyhow!("requested 50200 tokens")));
+        assert!(!is_transient_error(&anyhow!("model limit is 429000 tokens")));
     }
 }
