@@ -6,7 +6,7 @@
 
 **Architecture:** Migrate Qdrant collections to named vectors (`"dense"` + `"bm25_sparse"`), add three new modules (`fusion.rs`, `context.rs`, `retrieval.rs`) to `rag-core`. Fusion and context are pure logic (TDD first). Retrieval orchestrates search and delegates to fusion. Infrastructure changes to `vectors.rs` and `ingest.rs` wire up the new Qdrant schema.
 
-**Tech Stack:** Rust (edition 2024), qdrant-client 1.16, tiktoken-rs (cl100k_base), tokio (parallel search), anyhow (errors).
+**Tech Stack:** Rust (edition 2024), qdrant-client 1.17, tiktoken-rs (cl100k_base), tokio (parallel search), anyhow (errors).
 
 **Design spec:** `docs/superpowers/specs/2026-03-28-phase5-retrieval-context-assembly-design.md`
 
@@ -18,21 +18,29 @@
 - Modify: `crates/rag-core/src/config.rs`
 - Modify: `config/app.toml`
 
-- [ ] **Step 1: Add fields to `AppSection` (TOML deserialization)**
+- [ ] **Step 1: Add `RetrievalSection` and `ContextSection` TOML deserialization structs**
 
-In `crates/rag-core/src/config.rs`, add to `AppSection`:
+In `crates/rag-core/src/config.rs`, add two new deserialization structs after `AppSection` and update `AppSettings` to parse separate TOML tables:
 
 ```rust
 #[derive(Deserialize, Default)]
-struct AppSection {
-    // ... existing fields ...
-    // Retrieval
+struct AppSettings {
+    app: Option<AppSection>,
+    retrieval: Option<RetrievalSection>,
+    context: Option<ContextSection>,
+}
+
+#[derive(Deserialize, Default)]
+struct RetrievalSection {
     rrf_k: Option<u32>,
     dense_top_k: Option<u64>,
     sparse_top_k: Option<u64>,
-    // Context assembly
-    context_max_tokens: Option<usize>,
-    context_max_chunks: Option<usize>,
+}
+
+#[derive(Deserialize, Default)]
+struct ContextSection {
+    max_tokens: Option<usize>,
+    max_chunks: Option<usize>,
 }
 ```
 
@@ -51,36 +59,59 @@ pub struct AppConfig {
 }
 ```
 
-- [ ] **Step 3: Add resolution logic in `from_current_env()`**
+- [ ] **Step 3: Update `from_current_env()` to parse the new sections**
 
-After the `request_id_header` resolution block, add:
+Replace the `let file_settings = if ... { ... };` block with tuple destructuring. Keep the existing `let f = &file_settings;` line — it still works because `file_settings` is the first tuple element:
 
 ```rust
-let rrf_k = env_parsed("RRF_K")?.or(f.rrf_k).unwrap_or(60);
-let dense_top_k = env_parsed("DENSE_TOP_K")?.or(f.dense_top_k).unwrap_or(20);
-let sparse_top_k = env_parsed("SPARSE_TOP_K")?.or(f.sparse_top_k).unwrap_or(20);
+let (file_settings, retrieval_settings, context_settings) =
+    if std::path::Path::new(&config_path).exists() {
+        let contents = std::fs::read_to_string(&config_path)
+            .with_context(|| format!("reading config file {config_path}"))?;
+        let settings: AppSettings = toml::from_str(&contents)
+            .with_context(|| format!("parsing config file {config_path}"))?;
+        (
+            settings.app.unwrap_or_default(),
+            settings.retrieval.unwrap_or_default(),
+            settings.context.unwrap_or_default(),
+        )
+    } else {
+        (AppSection::default(), RetrievalSection::default(), ContextSection::default())
+    };
+
+let f = &file_settings;  // existing line — keep as-is
+```
+
+Then after the `request_id_header` resolution block, add:
+
+```rust
+let r = &retrieval_settings;
+let ctx = &context_settings;
+
+let rrf_k = env_parsed("RRF_K")?.or(r.rrf_k).unwrap_or(60);
+let dense_top_k = env_parsed("DENSE_TOP_K")?.or(r.dense_top_k).unwrap_or(20);
+let sparse_top_k = env_parsed("SPARSE_TOP_K")?.or(r.sparse_top_k).unwrap_or(20);
 let context_max_tokens =
-    env_parsed("CONTEXT_MAX_TOKENS")?.or(f.context_max_tokens).unwrap_or(8000);
+    env_parsed("CONTEXT_MAX_TOKENS")?.or(ctx.max_tokens).unwrap_or(8000);
 let context_max_chunks =
-    env_parsed("CONTEXT_MAX_CHUNKS")?.or(f.context_max_chunks).unwrap_or(50);
+    env_parsed("CONTEXT_MAX_CHUNKS")?.or(ctx.max_chunks).unwrap_or(50);
 ```
 
 Add these fields to the `Ok(Self { ... })` return block.
 
 - [ ] **Step 4: Update `app.toml`**
 
-Append to `config/app.toml`:
+Append to `config/app.toml` as **separate TOML tables** (not under `[app]`):
 
 ```toml
-
-# Retrieval settings
+[retrieval]
 rrf_k = 60                                      # RRF fusion k parameter
 dense_top_k = 20                                 # Dense search result limit
 sparse_top_k = 20                                # Sparse/BM25 search result limit
 
-# Context assembly settings
-context_max_tokens = 8000                        # Token budget for assembled context
-context_max_chunks = 50                          # Max chunks in assembled context
+[context]
+max_tokens = 8000                                # Token budget for assembled context
+max_chunks = 50                                  # Max chunks in assembled context
 ```
 
 - [ ] **Step 5: Update config test**
@@ -368,7 +399,7 @@ Create `crates/rag-core/src/context.rs`:
 //! Transforms ranked retrieval results into a token-budget-aware context
 //! string with optional citations and deduplication.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use tiktoken_rs::CoreBPE;
 
@@ -379,11 +410,11 @@ use crate::fusion::FusedChunk;
 // ---------------------------------------------------------------------------
 
 #[allow(clippy::disallowed_methods)] // LazyLock init requires expect
-static CL100K_TOKENIZER: LazyLock<CoreBPE> =
-    LazyLock::new(|| tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must load"));
+static CL100K_TOKENIZER: LazyLock<Arc<CoreBPE>> =
+    LazyLock::new(|| Arc::new(tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must load")));
 
-fn count_tokens(text: &str) -> usize {
-    CL100K_TOKENIZER.encode_ordinary(text).len()
+fn count_tokens(tokenizer: &CoreBPE, text: &str) -> usize {
+    tokenizer.encode_ordinary(text).len()
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +450,7 @@ pub struct Citation {
 
 #[derive(Debug, Clone)]
 pub struct ContextChunk {
+    pub chunk_id: String,
     pub text: String,
     pub document_id: String,
     pub chunk_index: i32,
@@ -452,11 +484,21 @@ pub struct ContextStats {
 // ---------------------------------------------------------------------------
 
 /// Assembles fused retrieval results into LLM-ready context.
-pub struct ContextBuilder;
+pub struct ContextBuilder {
+    tokenizer: Arc<CoreBPE>,
+}
 
 impl ContextBuilder {
+    /// Create a builder with the default `cl100k_base` tokenizer.
     pub fn new() -> Self {
-        Self
+        Self {
+            tokenizer: Arc::clone(&CL100K_TOKENIZER),
+        }
+    }
+
+    /// Create a builder with a custom tokenizer.
+    pub fn with_tokenizer(tokenizer: Arc<CoreBPE>) -> Self {
+        Self { tokenizer }
     }
 
     /// Assemble context from fused chunks.
@@ -605,7 +647,7 @@ pub fn build(&self, chunks: Vec<FusedChunk>, config: &ContextConfig) -> ContextR
             budget_dropped += 1;
             continue;
         }
-        let token_count = count_tokens(&chunk.text);
+        let token_count = count_tokens(&self.tokenizer, &chunk.text);
         if total_tokens + token_count > config.max_tokens {
             budget_dropped += 1;
             continue;
@@ -625,6 +667,7 @@ pub fn build(&self, chunks: Vec<FusedChunk>, config: &ContextConfig) -> ContextR
         };
 
         final_chunks.push(ContextChunk {
+            chunk_id: chunk.chunk_id,
             text: chunk.text,
             document_id: chunk.document_id,
             chunk_index: chunk.chunk_index,
@@ -1346,6 +1389,15 @@ impl RetrievalService {
 // Helpers
 // ---------------------------------------------------------------------------
 
+fn extract_point_id(id: &qdrant_client::qdrant::PointId) -> String {
+    use qdrant_client::qdrant::point_id::PointIdOptions;
+    match &id.point_id_options {
+        Some(PointIdOptions::Uuid(s)) => s.clone(),
+        Some(PointIdOptions::Num(n)) => n.to_string(),
+        None => String::new(),
+    }
+}
+
 fn scored_points_to_chunks(
     scored: Vec<qdrant_client::qdrant::ScoredPoint>,
 ) -> Vec<RetrievedChunk> {
@@ -1353,7 +1405,7 @@ fn scored_points_to_chunks(
         .into_iter()
         .filter_map(|point| {
             let payload = &point.payload;
-            let chunk_id = point.id.as_ref().map(|id| format!("{id:?}")).unwrap_or_default();
+            let chunk_id = point.id.as_ref().map(extract_point_id).unwrap_or_default();
             let document_id = payload
                 .get("document_id")
                 .and_then(|v| v.as_str())
@@ -1398,7 +1450,7 @@ pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 - [ ] **Step 3: Run `cargo check -p rag-core`**
 
 Run: `cargo check -p rag-core`
-Expected: compiles. The `scored_points_to_chunks` helper may need adjustments depending on how `qdrant_client::qdrant::Value` exposes `as_str()` and `as_integer()` — check the actual API and fix accessor methods as needed.
+Expected: compiles. The `qdrant_client::qdrant::Value` type provides `as_str() -> Option<&String>` and `as_integer() -> Option<i64>` via its `value_extract_impl` macros.
 
 - [ ] **Step 4: Commit**
 
@@ -1448,6 +1500,23 @@ fn write_fixture(dir: &Path, name: &str, content: &str) {
     fs::write(dir.join(name), content).expect("writing fixture");
 }
 
+#[allow(clippy::disallowed_methods)]
+fn write_sidecar(dir: &Path, stem: &str) {
+    let json = format!(
+        r#"{{
+            "schema_version": 1,
+            "document": {{ "id": "{stem}", "title": "Test {stem}", "category": "report" }},
+            "source": {{ "url": "https://example.com/{stem}", "domain": "example.com", "publisher": "Test" }},
+            "language": "en",
+            "tags": ["test"],
+            "acl": {{ "allow_roles": ["*"] }},
+            "security": {{ "classification": "public", "requires_evidence_pack": false }},
+            "provenance": {{ "retrieved_at": "2026-03-27T00:00:00Z", "retrieved_by": "test" }}
+        }}"#
+    );
+    fs::write(dir.join(format!("{stem}.metadata.json")), json).expect("writing sidecar");
+}
+
 async fn setup() -> Result<(IngestService, RetrievalService, AppConfig)> {
     let mut config = AppConfig::from_env()?;
     config.embedder = EmbedderKind::Mock;
@@ -1470,6 +1539,7 @@ async fn ingest_fixtures(
     let collection = format!("test-coll-{suffix}");
 
     // Three documents with distinct content for predictable retrieval.
+    // Sidecars are optional but provide document IDs for stable assertions.
     write_fixture(
         dir.path(),
         "rust.md",
@@ -1477,6 +1547,7 @@ async fn ingest_fixtures(
          Async runtime tokio provides efficient task scheduling. \
          The borrow checker prevents data races at compile time.",
     );
+    write_sidecar(dir.path(), "rust");
     write_fixture(
         dir.path(),
         "python.md",
@@ -1484,6 +1555,7 @@ async fn ingest_fixtures(
          NumPy and pandas provide efficient data manipulation. \
          The GIL limits true parallelism in CPython.",
     );
+    write_sidecar(dir.path(), "python");
     write_fixture(
         dir.path(),
         "cooking.md",
@@ -1491,12 +1563,13 @@ async fn ingest_fixtures(
          Fermentation time depends on ambient temperature. \
          A Dutch oven creates steam for a crispy crust.",
     );
+    write_sidecar(dir.path(), "cooking");
 
     ingest
         .ingest_directory(IngestDirectoryRequest {
-            dir: dir.path().to_path_buf(),
+            path: dir.path().to_owned(),
             tenant: tenant.clone(),
-            collection: Some(collection.clone()),
+            collection_override: Some(collection.clone()),
         })
         .await?;
 
@@ -1510,6 +1583,7 @@ Add to the same file:
 
 ```rust
 #[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
 async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
@@ -1521,6 +1595,15 @@ async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result
         .await?;
 
     assert!(!results.is_empty(), "dense search should return results");
+    // Note: mock embedder produces SHA-256-seeded pseudo-random vectors,
+    // so dense ranking is non-semantic. We can only verify that results
+    // come back, not their relevance order.
+    // Verify all returned chunks have populated fields.
+    for chunk in &results {
+        assert!(!chunk.chunk_id.is_empty(), "chunk_id should be populated");
+        assert!(!chunk.document_id.is_empty(), "document_id should be populated");
+        assert!(!chunk.text.is_empty(), "text should be populated");
+    }
 
     // Tenant isolation: different tenant sees nothing.
     let other_tenant: TenantId = format!("other-{}", unique_id()).parse()?;
@@ -1537,6 +1620,7 @@ async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result
 
 ```rust
 #[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
 async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
@@ -1547,6 +1631,11 @@ async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
         .await?;
 
     assert!(!results.is_empty(), "sparse search should return results");
+    // Top result should be from the cooking document (keyword overlap).
+    assert_eq!(
+        results[0].document_id, "cooking",
+        "top sparse result for 'sourdough bread fermentation' should be from cooking.md"
+    );
 
     // Tenant isolation.
     let other_tenant: TenantId = format!("other-{}", unique_id()).parse()?;
@@ -1563,6 +1652,7 @@ async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
 
 ```rust
 #[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
 async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
@@ -1573,18 +1663,29 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
         .await?;
 
     assert!(!fused.is_empty(), "hybrid search should return results");
+    // Note: mock embedder makes dense ranking non-semantic, so we don't
+    // assert top-result relevance. Focus on structural correctness:
+    // fused results should have scores, sources, and populated fields.
+    for chunk in &fused {
+        assert!(!chunk.chunk_id.is_empty());
+        assert!(!chunk.document_id.is_empty());
+        assert!(chunk.fused_score > 0.0, "fused score should be positive");
+    }
 
-    // At least one chunk should appear in both sources.
-    let multi_source = fused.iter().find(|c| c.sources.len() > 1);
-    if let Some(chunk) = multi_source {
-        // Its fused score should be higher than a single-source chunk.
-        let single_source = fused.iter().find(|c| c.sources.len() == 1);
-        if let Some(single) = single_source {
-            assert!(
-                chunk.fused_score >= single.fused_score,
-                "multi-source chunk should score >= single-source chunk"
-            );
-        }
+    // At least one chunk must appear in both sources to validate RRF fusion.
+    let multi_source = fused
+        .iter()
+        .find(|c| c.sources.len() > 1)
+        .expect("hybrid search should produce at least one chunk found by both dense and sparse");
+    // A multi-source chunk's fused score must exceed any single-source chunk's score
+    // (both contribute 1/(k+rank+1) terms).
+    if let Some(single) = fused.iter().find(|c| c.sources.len() == 1) {
+        assert!(
+            multi_source.fused_score > single.fused_score,
+            "multi-source chunk ({}) should score higher than single-source chunk ({})",
+            multi_source.fused_score,
+            single.fused_score,
+        );
     }
     // Verify source tracking.
     for chunk in &fused {
@@ -1602,6 +1703,7 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
 
 ```rust
 #[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
 async fn context_assembly_respects_token_budget() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
@@ -1639,7 +1741,7 @@ async fn context_assembly_respects_token_budget() -> Result<()> {
 
 - [ ] **Step 6: Run integration tests**
 
-Run: `cargo test -p rag-core integration_retrieval -- --nocapture`
+Run: `cargo test -p rag-core --test integration_retrieval -- --ignored --nocapture`
 Expected: all 4 tests PASS. If Qdrant collections have stale schema, run `just down-v && just up` first and re-run.
 
 - [ ] **Step 7: Commit**

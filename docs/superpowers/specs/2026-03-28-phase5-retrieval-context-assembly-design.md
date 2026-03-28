@@ -185,6 +185,7 @@ pub struct ContextConfig {
 }
 
 pub struct ContextChunk {
+    pub chunk_id: String,
     pub text: String,
     pub document_id: String,
     pub chunk_index: i32,
