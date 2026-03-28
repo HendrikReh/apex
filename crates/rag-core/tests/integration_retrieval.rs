@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // Tests use ? operator with Result types
+
 //! Integration tests for retrieval and context assembly.
 //!
 //! Requires Postgres and Qdrant running (`just up`).
@@ -52,10 +54,7 @@ async fn setup() -> Result<(IngestService, RetrievalService, AppConfig)> {
     Ok((ingest, retrieval, config))
 }
 
-async fn ingest_fixtures(
-    ingest: &IngestService,
-    dir: &TempDir,
-) -> Result<(TenantId, String)> {
+async fn ingest_fixtures(ingest: &IngestService, dir: &TempDir) -> Result<(TenantId, String)> {
     let suffix = unique_id();
     let tenant: TenantId = format!("test-{suffix}").parse()?;
     let collection = format!("test_coll_{suffix}");
@@ -103,9 +102,8 @@ async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result
     let dir = TempDir::new()?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
-    let results = retrieval
-        .search_dense(&collection, "rust async programming", tenant.as_str(), 10)
-        .await?;
+    let results =
+        retrieval.search_dense(&collection, "rust async programming", tenant.as_str(), 10).await?;
 
     assert!(!results.is_empty(), "dense search should return results");
     for chunk in &results {
@@ -115,9 +113,7 @@ async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result
     }
 
     let other_tenant: TenantId = format!("other-{}", unique_id()).parse()?;
-    let isolated = retrieval
-        .search_dense(&collection, "rust", other_tenant.as_str(), 10)
-        .await?;
+    let isolated = retrieval.search_dense(&collection, "rust", other_tenant.as_str(), 10).await?;
     assert!(isolated.is_empty(), "other tenant should see no results");
 
     Ok(())
@@ -141,9 +137,8 @@ async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
     );
 
     let other_tenant: TenantId = format!("other-{}", unique_id()).parse()?;
-    let isolated = retrieval
-        .search_sparse(&collection, "sourdough", other_tenant.as_str(), 10)
-        .await?;
+    let isolated =
+        retrieval.search_sparse(&collection, "sourdough", other_tenant.as_str(), 10).await?;
     assert!(isolated.is_empty(), "other tenant should see no results");
 
     Ok(())
@@ -157,9 +152,8 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
     let dir = TempDir::new()?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
-    let fused = retrieval
-        .search_hybrid(&collection, "rust programming", tenant.as_str(), None)
-        .await?;
+    let fused =
+        retrieval.search_hybrid(&collection, "rust programming", tenant.as_str(), None).await?;
 
     assert!(!fused.is_empty(), "hybrid search should return results");
     for chunk in &fused {
@@ -169,15 +163,11 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
     }
 
     assert!(
-        fused
-            .iter()
-            .any(|chunk| chunk.sources.iter().any(|source| source == "dense")),
+        fused.iter().any(|chunk| chunk.sources.iter().any(|source| source == "dense")),
         "hybrid search should include at least one dense-derived result"
     );
     assert!(
-        fused
-            .iter()
-            .any(|chunk| chunk.sources.iter().any(|source| source == "sparse")),
+        fused.iter().any(|chunk| chunk.sources.iter().any(|source| source == "sparse")),
         "hybrid search should include at least one sparse-derived result"
     );
     for chunk in &fused {
@@ -197,9 +187,8 @@ async fn context_assembly_respects_token_budget() -> Result<()> {
     let dir = TempDir::new()?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
-    let fused = retrieval
-        .search_hybrid(&collection, "programming language", tenant.as_str(), None)
-        .await?;
+    let fused =
+        retrieval.search_hybrid(&collection, "programming language", tenant.as_str(), None).await?;
 
     assert!(!fused.is_empty(), "need results for context test");
 

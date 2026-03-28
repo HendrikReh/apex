@@ -29,6 +29,7 @@ use crate::config::AppConfig;
 /// Created via [`Stores::new`], which connects to Postgres, runs pending
 /// migrations, and builds a Qdrant client. All database operations are
 /// implemented as `async` methods on this struct in the submodules.
+#[derive(Clone)]
 pub struct Stores {
     pool: PgPool,
     qdrant: Arc<Qdrant>,

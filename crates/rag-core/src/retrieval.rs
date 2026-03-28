@@ -108,6 +108,7 @@ impl RetrievalService {
     }
 
     /// Hybrid search: run dense + sparse in parallel, fuse with RRF.
+    #[allow(clippy::disallowed_methods)] // tokio::join! internally uses .expect()
     pub async fn search_hybrid(
         &self,
         collection: &str,
@@ -116,16 +117,10 @@ impl RetrievalService {
         overrides: Option<HybridOverrides>,
     ) -> Result<Vec<FusedChunk>> {
         let ov = overrides.unwrap_or_default();
-        let dense_k = resolve_override_u64(
-            ov.dense_top_k,
-            self.defaults.dense_top_k,
-            "dense_top_k",
-        )?;
-        let sparse_k = resolve_override_u64(
-            ov.sparse_top_k,
-            self.defaults.sparse_top_k,
-            "sparse_top_k",
-        )?;
+        let dense_k =
+            resolve_override_u64(ov.dense_top_k, self.defaults.dense_top_k, "dense_top_k")?;
+        let sparse_k =
+            resolve_override_u64(ov.sparse_top_k, self.defaults.sparse_top_k, "sparse_top_k")?;
         let rrf_k = resolve_override_u32(ov.rrf_k, self.defaults.rrf_k, "rrf_k")?;
 
         let (dense_result, sparse_result) = tokio::join!(
@@ -169,9 +164,7 @@ fn extract_point_id(id: &qdrant_client::qdrant::PointId) -> Option<String> {
     }
 }
 
-fn scored_points_to_chunks(
-    scored: Vec<qdrant_client::qdrant::ScoredPoint>,
-) -> Vec<RetrievedChunk> {
+fn scored_points_to_chunks(scored: Vec<qdrant_client::qdrant::ScoredPoint>) -> Vec<RetrievedChunk> {
     scored
         .into_iter()
         .filter_map(|point| {
@@ -179,28 +172,13 @@ fn scored_points_to_chunks(
             // search results that do not include a usable Qdrant point ID.
             let payload = &point.payload;
             let chunk_id = point.id.as_ref().and_then(extract_point_id)?;
-            let document_id = payload
-                .get("document_id")
-                .and_then(|v| v.as_str())
-                .map_or("", |v| v)
-                .to_string();
-            let chunk_index = payload
-                .get("chunk_index")
-                .and_then(|v| v.as_integer())
-                .unwrap_or(0) as i32;
-            let text = payload
-                .get("text")
-                .and_then(|v| v.as_str())
-                .map_or("", |v| v)
-                .to_string();
+            let document_id =
+                payload.get("document_id").and_then(|v| v.as_str()).map_or("", |v| v).to_string();
+            let chunk_index =
+                payload.get("chunk_index").and_then(|v| v.as_integer()).unwrap_or(0) as i32;
+            let text = payload.get("text").and_then(|v| v.as_str()).map_or("", |v| v).to_string();
 
-            Some(RetrievedChunk {
-                chunk_id,
-                document_id,
-                chunk_index,
-                text,
-                score: point.score,
-            })
+            Some(RetrievedChunk { chunk_id, document_id, chunk_index, text, score: point.score })
         })
         .collect()
 }
@@ -223,6 +201,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // Test assertions expect success
     fn missing_override_uses_default() {
         assert_eq!(resolve_override_u64(None, 10, "dense_top_k").unwrap(), 10);
         assert_eq!(resolve_override_u32(None, 60, "rrf_k").unwrap(), 60);
