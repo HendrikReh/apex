@@ -184,10 +184,15 @@ impl ChatBackend {
     }
 }
 
-/// Check if an error is transient (retryable): 429, 500, 502, 503.
+/// Check if an error is transient (retryable): 429, 500, 502, 503, 504.
+///
+/// For Anthropic (raw reqwest), this matches the status code embedded in our
+/// error messages. For OpenAI-compatible, `async_openai` handles retries
+/// internally via its backoff configuration, so this outer retry is primarily
+/// a safety net for the Anthropic path.
 fn is_transient_error(err: &anyhow::Error) -> bool {
     let msg = err.to_string();
-    for code in ["429", "500", "502", "503"] {
+    for code in ["429", "500", "502", "503", "504"] {
         if msg.contains(code) {
             return true;
         }
