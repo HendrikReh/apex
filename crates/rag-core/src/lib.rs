@@ -10,6 +10,7 @@ pub mod embed;
 pub mod extract;
 pub mod fusion;
 pub mod ingest;
+pub mod llm;
 pub mod retrieval;
 pub mod sidecar;
 pub mod stores;
@@ -27,6 +28,7 @@ pub use extract::{
     PdfExtractor, TextExtractor,
 };
 pub use fusion::{FusedChunk, RetrievedChunk, rrf_fusion};
+pub use llm::{ChatBackend, ChatMessage, ChatRole, CompletionRequest, LlmResponse, TokenUsage};
 pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 pub use sidecar::Sidecar;
 pub use stores::Stores;
