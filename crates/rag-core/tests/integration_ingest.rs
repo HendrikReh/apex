@@ -8,7 +8,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
-use rag_core::config::AppConfig;
+use rag_core::config::{AppConfig, EmbedderKind};
 use rag_core::ingest::{IngestDirectoryRequest, IngestFileRequest, IngestService};
 use rag_core::stores::Stores;
 use rag_core::tenant::TenantId;
@@ -16,9 +16,8 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 async fn setup() -> Result<(IngestService, TempDir)> {
-    // Force mock embedder for tests.
-    unsafe { std::env::set_var("RAG_EMBEDDER", "mock") };
-    let config = AppConfig::from_env()?;
+    let mut config = AppConfig::from_env()?;
+    config.embedder = EmbedderKind::Mock;
     let stores = Stores::new(&config).await?;
     let service = IngestService::new(stores, &config)?;
     let dir = TempDir::new()?;
