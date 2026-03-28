@@ -5,7 +5,21 @@
     "code-simplifier@claude-plugins-official": true,
     "claude-md-management@claude-plugins-official": true,
     "commit-commands@claude-plugins-official": true,
-    "pr-review-toolkit@claude-plugins-official": true,
-    "qodo-skills@claude-plugins-official": true
+    "pr-review-toolkit@claude-plugins-official": false,
+    "qodo-skills@claude-plugins-official": false
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -q '\\.rs\"'; then cargo check --message-format=short 2>&1 | head -20; fi",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
   }
 }
