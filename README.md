@@ -1,5 +1,9 @@
 # Apex
 
+[![CI](https://github.com/HendrikReh/apex/actions/workflows/ci.yml/badge.svg)](https://github.com/HendrikReh/apex/actions/workflows/ci.yml)
+[![License: AGPL-3.0](https://img.shields.io/github/license/HendrikReh/apex)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
+
 A Rust workspace for Retrieval-Augmented Generation (RAG). Ingests documents (PDF, Markdown, plain text), chunks with configurable strategies, generates embeddings (OpenAI or mock), and stores in Postgres (metadata) + Qdrant (vectors) for hybrid retrieval (dense + BM25 sparse).
 
 ## Prerequisites
