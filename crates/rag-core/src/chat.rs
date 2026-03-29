@@ -89,6 +89,22 @@ impl ChatService {
         Ok(Self { backend, retrieval, context_builder, prompt_renderer, stores, defaults })
     }
 
+    /// Construct a ChatService with a mock LLM backend.
+    ///
+    /// Intended for integration tests in downstream crates. The mock backend
+    /// returns `response` verbatim on every chat call, with no network IO.
+    pub fn with_mock_llm(stores: Stores, config: &AppConfig, response: String) -> Result<Self> {
+        let backend = ChatBackend::Mock { response };
+        let retrieval =
+            RetrievalService::new(stores.clone(), config).context("building retrieval service")?;
+        let context_builder = ContextBuilder::new();
+        let prompt_renderer = PromptRenderer::from_file(&config.llm_prompt_template_path)
+            .context("loading prompt template")?;
+        let defaults = ChatDefaults::from_config(config);
+
+        Ok(Self { backend, retrieval, context_builder, prompt_renderer, stores, defaults })
+    }
+
     /// Run the full chat pipeline.
     ///
     /// Flow: resolve conversation → load history → persist user message →

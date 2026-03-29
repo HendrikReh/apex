@@ -98,6 +98,11 @@ pub enum ChatBackend {
         model: String,
         base_url: String,
     },
+    /// Deterministic mock backend for integration tests.
+    /// Returns the configured response string on every `complete()` call.
+    Mock {
+        response: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -219,7 +224,17 @@ impl ChatBackend {
         let provider_name = match self {
             Self::OpenAiCompatible { .. } => "OpenAI-compatible completion",
             Self::Anthropic { .. } => "Anthropic completion",
+            Self::Mock { .. } => "Mock completion",
         };
+
+        // Mock backend returns immediately, no retry logic needed.
+        if let Self::Mock { response } = self {
+            return Ok(LlmResponse {
+                text: response.clone(),
+                usage: TokenUsage { prompt_tokens: 0, completion_tokens: 0 },
+                model: "mock".into(),
+            });
+        }
 
         for attempt in 0..=max_retries {
             if attempt > 0 {
@@ -234,6 +249,7 @@ impl ChatBackend {
                 Self::Anthropic { client, model, base_url } => {
                     complete_anthropic(client, model, base_url, request, &messages).await
                 }
+                Self::Mock { .. } => unreachable!("mock handled above"),
             };
 
             match result {
