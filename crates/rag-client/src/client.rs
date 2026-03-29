@@ -131,8 +131,12 @@ impl TenantApiClient {
     }
 
     /// Check server readiness (Postgres + Qdrant).
+    ///
+    /// Always attempts to parse the JSON body, even on 503, because the server
+    /// returns a structured `ReadinessResponse` with `ready: false` when unhealthy.
     pub async fn readiness(&self) -> Result<crate::types::ReadinessResponse, ClientError> {
-        self.get_json("/readiness").await
+        let response = self.request(Method::GET, "/readiness")?.send().await?;
+        response.json::<crate::types::ReadinessResponse>().await.map_err(ClientError::Decode)
     }
 
     /// Ingest files/directories. Uses a 300-second per-request timeout.

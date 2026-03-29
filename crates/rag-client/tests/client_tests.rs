@@ -160,6 +160,29 @@ async fn readiness_json_test() {
 }
 
 #[tokio::test]
+async fn readiness_unhealthy_503() {
+    let router = Router::new().route(
+        "/readiness",
+        get(|| async {
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(serde_json::json!({
+                    "ready": false,
+                    "checks": {"postgres": "error: connection refused", "qdrant": "ok"}
+                })),
+            )
+        }),
+    );
+    let server = spawn_app(router).await.expect("spawn");
+    let client = TenantApiClient::new(&server.base_url(), "default").unwrap();
+
+    let resp = client.readiness().await.unwrap();
+    assert!(!resp.ready);
+    assert!(resp.checks.postgres.contains("error"));
+    assert_eq!(resp.checks.qdrant, "ok");
+}
+
+#[tokio::test]
 async fn ingest_request_shape() {
     let (router, cap) = test_router();
     let server = spawn_app(router).await.expect("spawn");
