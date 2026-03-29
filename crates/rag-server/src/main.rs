@@ -1,3 +1,3 @@
 fn main() {
-    // Server entrypoint — implemented in Phase 3.
+    // Server entrypoint — wired in Task 7.
 }

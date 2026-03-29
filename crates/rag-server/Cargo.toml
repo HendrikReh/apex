@@ -7,6 +7,14 @@ version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "rag_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rag-server"
+path = "src/main.rs"
+
 [dependencies]
 rag-core = { path = "../rag-core" }
 axum.workspace = true
@@ -18,3 +26,10 @@ tracing-subscriber.workspace = true
 dotenvy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
+anyhow.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+test-support = { path = "../test-support" }
+reqwest.workspace = true

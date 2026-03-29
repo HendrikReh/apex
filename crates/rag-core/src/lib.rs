@@ -26,6 +26,7 @@ pub use context::{
     DedupeStrategy,
 };
 pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
+pub use ingest::IngestService;
 pub use extract::{
     ExtractionResult, ExtractorRegistry, FileType, FormatExtractor, MarkdownExtractor,
     PdfExtractor, TextExtractor,
