@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // Tests use .expect() and .unwrap()
+
 mod common;
 
 use test_support::spawn_app;
