@@ -482,7 +482,7 @@ If `json_mode`, serialize `value` to `writer`. Otherwise call `human_fn`. Produc
   Collection: my-collection
   Tenant:     default
   Documents:  42
-  Tokens:     12,345
+  Tokens:     12345
   Avg Doc Length: 293.93
   ```
 - JSON output: serialize full `CollectionStatsResponse`

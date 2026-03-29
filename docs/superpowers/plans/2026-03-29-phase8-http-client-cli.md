@@ -1510,6 +1510,33 @@ mod tests {
 }
 ```
 
+Then append `render_error` to `crates/rag-cli/src/output.rs` (outside the `tests` module):
+
+```rust
+/// Render an error for CLI stderr output.
+///
+/// If the error is a `ClientError`, produce the spec-defined format.
+/// Otherwise fall back to anyhow's display chain.
+pub fn render_error(err: &anyhow::Error) -> String {
+    if let Some(ce) = err.downcast_ref::<rag_client::ClientError>() {
+        match ce {
+            rag_client::ClientError::InvalidBaseUrl(msg) => format!("Error: {msg}"),
+            rag_client::ClientError::InvalidTenant(msg) => format!("Error: {msg}"),
+            rag_client::ClientError::Transport(e) => format!("Error: connection failed — {e}"),
+            rag_client::ClientError::HttpStatus { status, body, .. } => {
+                format!("Error: server returned {status} — {body}")
+            }
+            rag_client::ClientError::Decode(e) => {
+                format!("Error: unexpected server response — {e}")
+            }
+            rag_client::ClientError::Validation(msg) => format!("Error: {msg}"),
+        }
+    } else {
+        format!("Error: {err:#}")
+    }
+}
+```
+
 - [ ] **Step 3: Update main.rs to a placeholder dispatcher**
 
 Replace `crates/rag-cli/src/main.rs` with:
@@ -1529,7 +1556,7 @@ async fn main() {
         std::process::exit(1);
     }
     if let Err(e) = run(cli).await {
-        eprintln!("Error: {e:#}");
+        eprintln!("{}", output::render_error(&e));
         std::process::exit(1);
     }
 }
@@ -2311,63 +2338,69 @@ git commit -m "feat(rag-cli): implement collection-stats command handler"
 ### Task 14: Error rendering tests
 
 **Files:**
-- Create: `crates/rag-cli/tests/error_rendering.rs`
+- Modify: `crates/rag-cli/src/output.rs`
 
-- [ ] **Step 1: Write error rendering tests**
+`render_error` lives in `output.rs` within the `rag-cli` binary crate. Since integration tests cannot import from a binary crate, these tests go in the `output.rs` unit test module.
 
-Create `crates/rag-cli/tests/error_rendering.rs`:
+- [ ] **Step 1: Add render_error tests to output.rs**
+
+Add these tests to the `#[cfg(test)] mod tests` block in `crates/rag-cli/src/output.rs` (after the existing `print_or_json_write_error` test):
 
 ```rust
-#![allow(clippy::disallowed_methods)]
+    #[test]
+    fn render_error_http_status() {
+        let ce = rag_client::ClientError::HttpStatus {
+            status: 400,
+            url: "http://localhost/chat".into(),
+            body: "query must not be empty".into(),
+        };
+        let err: anyhow::Error = ce.into();
+        let msg = super::render_error(&err);
+        assert_eq!(msg, "Error: server returned 400 — query must not be empty");
+    }
 
-use rag_client::ClientError;
+    #[test]
+    fn render_error_transport() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reqwest_err = rt.block_on(async {
+            reqwest::Client::new()
+                .get("http://127.0.0.1:1")
+                .send()
+                .await
+                .unwrap_err()
+        });
+        let ce = rag_client::ClientError::Transport(reqwest_err);
+        let err: anyhow::Error = ce.into();
+        let msg = super::render_error(&err);
+        assert!(msg.starts_with("Error: connection failed — "), "got: {msg}");
+    }
 
-#[test]
-fn http_status_error_display() {
-    let err = ClientError::HttpStatus {
-        status: 400,
-        url: "http://localhost/chat".into(),
-        body: "query must not be empty".into(),
-    };
-    let msg = format!("{err}");
-    assert!(msg.contains("400"), "should contain status code: {msg}");
-    assert!(msg.contains("query must not be empty"), "should contain body: {msg}");
-}
+    #[test]
+    fn render_error_validation() {
+        let ce = rag_client::ClientError::Validation("collection must not be empty".into());
+        let err: anyhow::Error = ce.into();
+        let msg = super::render_error(&err);
+        assert_eq!(msg, "Error: collection must not be empty");
+    }
 
-#[test]
-fn transport_error_display() {
-    // Create a transport error by trying to connect to a closed port
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let err = rt.block_on(async {
-        reqwest::Client::new()
-            .get("http://127.0.0.1:1")
-            .send()
-            .await
-            .unwrap_err()
-    });
-    let client_err = ClientError::Transport(err);
-    let msg = format!("{client_err}");
-    assert!(msg.contains("transport error"), "should contain prefix: {msg}");
-}
-
-#[test]
-fn validation_error_display() {
-    let err = ClientError::Validation("collection must not be empty".into());
-    let msg = format!("{err}");
-    assert_eq!(msg, "collection must not be empty");
-}
+    #[test]
+    fn render_error_non_client() {
+        let err = anyhow::anyhow!("something else went wrong");
+        let msg = super::render_error(&err);
+        assert_eq!(msg, "Error: something else went wrong");
+    }
 ```
 
 - [ ] **Step 2: Run tests**
 
-Run: `cargo test -p rag-cli --test error_rendering`
-Expected: All tests pass.
+Run: `cargo test -p rag-cli render_error`
+Expected: All 4 render_error tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add crates/rag-cli/tests/error_rendering.rs
-git commit -m "test(rag-cli): add error rendering display tests"
+git add crates/rag-cli/src/output.rs
+git commit -m "test(rag-cli): add render_error tests for CLI error formatting"
 ```
 
 ---
