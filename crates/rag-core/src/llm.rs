@@ -464,6 +464,7 @@ struct AnthropicErrorBody {
     message: String,
 }
 
+#[allow(clippy::disallowed_methods)] // tracing::warn! internally uses .expect()
 async fn complete_anthropic(
     client: &reqwest::Client,
     model: &str,
