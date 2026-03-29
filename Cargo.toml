@@ -32,7 +32,7 @@ async-openai = { version = "0.32", features = [
 backoff = "0.4"
 axum = { version = "0.7", features = ["macros", "json", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 dotenvy = "0.15"
 futures = "0.3"
 hex = "0.4"
