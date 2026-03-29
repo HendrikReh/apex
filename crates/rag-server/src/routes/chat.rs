@@ -84,7 +84,7 @@ pub async fn chat(
         history_limit: payload.history_limit,
     };
 
-    let response = state.chat.chat(request).await.map_err(ApiError::from)?;
+    let response = state.chat.chat(request).await.map_err(classify_chat_error)?;
 
     let citations = response
         .citations
@@ -107,4 +107,33 @@ pub async fn chat(
         },
         model: response.model,
     }))
+}
+
+/// Classify `ChatService::chat` errors as client (400) or server (500).
+///
+/// The service uses `anyhow::bail!` for request-level problems (conversation
+/// not found, collection mismatch, etc.).  We inspect the root error message
+/// for known prefixes so these surface as 400 to the caller.
+fn classify_chat_error(err: anyhow::Error) -> ApiError {
+    let msg = format!("{err:#}");
+
+    const CLIENT_PREFIXES: &[&str] = &[
+        "collection mismatch",
+        "collection must not be empty",
+        "collection is required",
+        "conversation not found",
+        "has no stored collection",
+        "history_limit must be",
+    ];
+
+    let is_client_error = CLIENT_PREFIXES.iter().any(|p| msg.contains(p));
+
+    ApiError {
+        status: if is_client_error {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        },
+        message: msg,
+    }
 }
