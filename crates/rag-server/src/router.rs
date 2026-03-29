@@ -26,10 +26,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/search/sparse", post(routes::search::search_sparse))
         .route("/search/hybrid", post(routes::search::search_hybrid))
         .route("/chat", post(routes::chat::chat))
-        .route(
-            "/collections/:collection/stats",
-            get(routes::collections::collection_stats),
-        )
+        .route("/collections/:collection/stats", get(routes::collections::collection_stats))
         .layer(from_fn_with_state(state.clone(), tenant_extraction))
         .layer(from_fn(request_id))
         .with_state(state.clone());
@@ -39,8 +36,5 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/readiness", get(routes::health::readiness))
         .with_state(state);
 
-    Router::new()
-        .merge(public)
-        .merge(protected)
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+    Router::new().merge(public).merge(protected).layer(DefaultBodyLimit::max(10 * 1024 * 1024))
 }

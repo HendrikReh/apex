@@ -3,8 +3,8 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
-use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
 use rag_core::TenantId;
+use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -33,15 +33,10 @@ impl<S: Send + Sync> FromRequestParts<S> for Ctx {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        parts
-            .extensions
-            .get::<RequestContext>()
-            .cloned()
-            .map(Ctx)
-            .ok_or_else(|| ApiError {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                message: "missing request context".into(),
-            })
+        parts.extensions.get::<RequestContext>().cloned().map(Ctx).ok_or_else(|| ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "missing request context".into(),
+        })
     }
 }
 
@@ -82,9 +77,6 @@ impl IntoResponse for ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("{err:#}"),
-        }
+        Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: format!("{err:#}") }
     }
 }

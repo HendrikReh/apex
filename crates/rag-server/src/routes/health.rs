@@ -45,6 +45,8 @@ pub async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse 
             .map_err(|e| format!("{e}"))
     });
 
+    // tokio::join! macro internally uses .expect() — false positive for ADR-001.
+    #[allow(clippy::disallowed_methods)]
     let (pg_result, qdrant_result) = tokio::join!(pg_check, qdrant_check);
 
     let pg_status = match pg_result {

@@ -19,22 +19,15 @@ pub async fn tenant_extraction(
     mut req: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, ApiError> {
-    let tenant_str = req
-        .headers()
-        .get(&state.tenant_header)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default");
+    let tenant_str =
+        req.headers().get(&state.tenant_header).and_then(|v| v.to_str().ok()).unwrap_or("default");
 
     let tenant = TenantId::new(tenant_str).map_err(|e| ApiError {
         status: StatusCode::BAD_REQUEST,
         message: format!("invalid tenant: {e}"),
     })?;
 
-    let request_id = req
-        .extensions()
-        .get::<Uuid>()
-        .copied()
-        .unwrap_or_else(Uuid::new_v4);
+    let request_id = req.extensions().get::<Uuid>().copied().unwrap_or_else(Uuid::new_v4);
 
     let ctx = RequestContext { request_id, tenant: tenant.clone() };
     req.extensions_mut().insert(ctx);
