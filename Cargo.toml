@@ -32,7 +32,7 @@ async-openai = { version = "0.32", features = [
 backoff = "0.4"
 axum = { version = "0.7", features = ["macros", "json", "multipart"] }
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 dotenvy = "0.15"
 futures = "0.3"
 hex = "0.4"
@@ -83,6 +83,8 @@ lettre = { version = "0.11", default-features = false, features = [
 handlebars = "6.2"
 secrecy = "0.10.3"
 tempfile = "3"
+trait-variant = "0.1"
+percent-encoding = "2.3"
 zip = { version = "8.1", default-features = false, features = ["deflate"] }
 
 # Workspace-wide profile settings

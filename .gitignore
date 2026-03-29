@@ -41,3 +41,4 @@ data/demo/*
 .beads-credential-key
 .beads/push-state.json
 .beads/backup
+.worktrees/
