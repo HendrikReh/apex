@@ -128,7 +128,11 @@ async fn tenant_header_injected() {
     let _: IngestResponse = client
         .post_json(
             "/ingest",
-            &IngestRequest { paths: vec!["/tmp/test.txt".into()], collection: None, dry_run: false },
+            &IngestRequest {
+                paths: vec!["/tmp/test.txt".into()],
+                collection: None,
+                dry_run: false,
+            },
         )
         .await
         .unwrap();

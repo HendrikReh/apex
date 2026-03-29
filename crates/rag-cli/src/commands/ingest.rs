@@ -84,7 +84,9 @@ mod tests {
             response: IngestResponse { documents: 3, chunks: 10, skipped: 1, failures: vec![] },
         };
         let mut buf = Vec::new();
-        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, false).await.unwrap();
+        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, false)
+            .await
+            .unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Ingested 3 documents, 10 chunks, 1 skipped"));
     }
@@ -104,7 +106,9 @@ mod tests {
             },
         };
         let mut buf = Vec::new();
-        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, false).await.unwrap();
+        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, false)
+            .await
+            .unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("WARN: /tmp/bad.txt — parse error"));
     }
@@ -141,9 +145,7 @@ mod tests {
             response: IngestResponse { documents: 5, chunks: 0, skipped: 2, failures: vec![] },
         };
         let mut buf = Vec::new();
-        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, true)
-            .await
-            .unwrap();
+        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, true).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(
             output.starts_with("[dry-run]"),
