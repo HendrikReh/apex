@@ -75,13 +75,16 @@ pub ocr_default_language: String,    // default: "eng"
 # ocr_default_language = "eng"
 ```
 
-**Precedence for `tessdata_dir`:**
+**Resolution (all happens in `AppConfig` loading, single source of truth):**
 
+`tessdata_dir` precedence:
 1. `TESSDATA_PREFIX` env var (highest)
 2. `tessdata_dir` in `app.toml`
 3. None → OCR disabled
 
-**Startup validation:** When `tessdata_dir` resolves to `Some(path)`, verify that `{path}/{ocr_default_language}.traineddata` exists. Fail at startup if missing.
+After resolution, `AppConfig.tessdata_dir` holds the final value. Downstream consumers (`PdfExtractor`) never re-read env vars.
+
+**Startup validation:** When `tessdata_dir` resolves to `Some(path)`, `PdfExtractor::new()` verifies that `{path}/{ocr_default_language}.traineddata` exists. Fail at startup if missing.
 
 ### Component: PdfExtractor (`crates/rag-core/src/extract.rs`)
 
@@ -96,7 +99,7 @@ pub struct PdfExtractor {
 }
 ```
 
-Constructor takes `&AppConfig`, resolves `tessdata_dir` (env → config → None), validates language file if tessdata is set.
+Constructor takes `&AppConfig` and consumes the already-resolved config values. `TESSDATA_PREFIX` env override and `tessdata_dir` resolution happen once in `AppConfig` loading, not here. Startup validation (language file check) runs during `PdfExtractor::new()`.
 
 **Per-page extraction flow (inside existing `spawn_blocking`):**
 
@@ -158,13 +161,16 @@ return pages.join("\u{000C}")
 
 ### Component: Sidecar Integration (`crates/rag-core/src/ingest.rs`)
 
-The existing sidecar metadata structure gains an `ocr` section:
+The existing sidecar metadata structure (`.metadata.json`) gains an `ocr` object:
 
-```toml
-[ocr]
-force = true
-language_hints = ["eng", "deu"]
-timeout_secs = 60
+```json
+{
+  "ocr": {
+    "force": true,
+    "language_hints": ["eng", "deu"],
+    "timeout_secs": 60
+  }
+}
 ```
 
 `IngestService::ingest_file()` maps sidecar OCR fields → `OcrOptions` → `ExtractionOptions` before calling the extractor registry.
