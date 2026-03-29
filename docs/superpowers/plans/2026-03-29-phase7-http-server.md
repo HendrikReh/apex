@@ -18,6 +18,7 @@
 
 | File | Responsibility |
 |------|---------------|
+| `crates/rag-server/src/lib.rs` | Library root — exports all `pub mod` so integration tests can import |
 | `crates/rag-server/src/state.rs` | `AppState`, `ApiError`, `ErrorBody`, `RequestContext`, `Ctx` extractor |
 | `crates/rag-server/src/router.rs` | `build_router(Arc<AppState>) -> Router` |
 | `crates/rag-server/src/middleware/mod.rs` | Re-export `request_id` and `tenant` |
@@ -81,6 +82,15 @@ rust-version.workspace = true
 version.workspace = true
 license.workspace = true
 publish.workspace = true
+
+# Expose a library target so integration tests can import state, router, etc.
+[lib]
+name = "rag_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rag-server"
+path = "src/main.rs"
 
 [dependencies]
 rag-core = { path = "../rag-core" }
@@ -222,27 +232,33 @@ impl From<anyhow::Error> for ApiError {
 }
 ```
 
-- [ ] **Step 2: Wire module into main.rs**
+- [ ] **Step 2: Create lib.rs**
+
+Create `crates/rag-server/src/lib.rs` — this is the library root that integration tests import from:
+
+```rust
+pub mod state;
+```
+
+- [ ] **Step 3: Update main.rs to use the library**
 
 Replace `crates/rag-server/src/main.rs` with:
 
 ```rust
-mod state;
-
 fn main() {
     // Server entrypoint — wired in Task 7.
 }
 ```
 
-- [ ] **Step 3: Verify it compiles**
+- [ ] **Step 4: Verify it compiles**
 
 Run: `cargo check -p rag-server`
-Expected: compiles with no errors. `state` module loads.
+Expected: compiles with no errors. `state` module loads via lib.rs.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add crates/rag-server/src/state.rs crates/rag-server/src/main.rs
+git add crates/rag-server/src/state.rs crates/rag-server/src/lib.rs crates/rag-server/src/main.rs
 git commit -m "feat(server): add AppState, ApiError, RequestContext, Ctx extractor"
 ```
 
@@ -307,17 +323,13 @@ Create `crates/rag-server/src/middleware/tenant.rs`:
 // Tenant extraction middleware — implemented in Task 4.
 ```
 
-- [ ] **Step 4: Wire module into main.rs**
+- [ ] **Step 4: Wire module into lib.rs**
 
-Update `crates/rag-server/src/main.rs`:
+Update `crates/rag-server/src/lib.rs`:
 
 ```rust
-mod middleware;
-mod state;
-
-fn main() {
-    // Server entrypoint — wired in Task 7.
-}
+pub mod middleware;
+pub mod state;
 ```
 
 - [ ] **Step 5: Verify it compiles**
@@ -329,7 +341,7 @@ Expected: compiles with no errors.
 
 ```bash
 git add crates/rag-server/src/middleware/
-git add crates/rag-server/src/main.rs
+git add crates/rag-server/src/lib.rs
 git commit -m "feat(server): add request ID middleware"
 ```
 
@@ -533,18 +545,14 @@ Create `crates/rag-server/src/routes/collections.rs`:
 // Collection stats route — implemented in Task 11.
 ```
 
-- [ ] **Step 4: Wire module into main.rs**
+- [ ] **Step 4: Wire module into lib.rs**
 
-Update `crates/rag-server/src/main.rs`:
+Update `crates/rag-server/src/lib.rs`:
 
 ```rust
-mod middleware;
-mod routes;
-mod state;
-
-fn main() {
-    // Server entrypoint — wired in Task 7.
-}
+pub mod middleware;
+pub mod routes;
+pub mod state;
 ```
 
 - [ ] **Step 5: Verify it compiles**
@@ -555,7 +563,7 @@ Expected: compiles. The `sqlx::query_scalar` in readiness requires the `sqlx` de
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/rag-server/src/routes/ crates/rag-server/src/main.rs
+git add crates/rag-server/src/routes/ crates/rag-server/src/lib.rs
 git commit -m "feat(server): add health and readiness routes"
 ```
 
@@ -621,19 +629,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 }
 ```
 
-- [ ] **Step 2: Wire module into main.rs**
+- [ ] **Step 2: Wire module into lib.rs**
 
-Update `crates/rag-server/src/main.rs`:
+Update `crates/rag-server/src/lib.rs`:
 
 ```rust
-mod middleware;
-mod router;
-mod routes;
-mod state;
-
-fn main() {
-    // Server entrypoint — wired in Task 7.
-}
+pub mod middleware;
+pub mod router;
+pub mod routes;
+pub mod state;
 ```
 
 - [ ] **Step 3: Verify it compiles**
@@ -660,11 +664,6 @@ git commit -m "feat(server): add router assembly with middleware layering"
 Replace `crates/rag-server/src/main.rs`:
 
 ```rust
-mod middleware;
-mod router;
-mod routes;
-mod state;
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -672,8 +671,8 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
-
-use crate::state::AppState;
+use rag_server::router;
+use rag_server::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1008,6 +1007,7 @@ Replace `crates/rag-server/src/routes/search.rs`:
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
 use rag_core::retrieval::HybridOverrides;
 use serde::{Deserialize, Serialize};
@@ -1035,11 +1035,28 @@ pub struct SearchResult {
     pub score: f32,
 }
 
+fn validate_search(req: &SearchRequest) -> Result<(), ApiError> {
+    if req.query.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "query must not be empty".into(),
+        });
+    }
+    if req.collection.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "collection must not be empty".into(),
+        });
+    }
+    Ok(())
+}
+
 pub async fn search_dense(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, ApiError> {
+    validate_search(&payload)?;
     let top_k = payload.top_k.unwrap_or(state.config.dense_top_k);
     let chunks = state
         .retrieval
@@ -1066,6 +1083,7 @@ pub async fn search_sparse(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SearchRequest>,
 ) -> Result<Json<SearchResponse>, ApiError> {
+    validate_search(&payload)?;
     let top_k = payload.top_k.unwrap_or(state.config.sparse_top_k);
     let chunks = state
         .retrieval
@@ -1115,6 +1133,19 @@ pub async fn search_hybrid(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<HybridSearchRequest>,
 ) -> Result<Json<HybridSearchResponse>, ApiError> {
+    if payload.query.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "query must not be empty".into(),
+        });
+    }
+    if payload.collection.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "collection must not be empty".into(),
+        });
+    }
+
     let overrides = if payload.dense_top_k.is_some()
         || payload.sparse_top_k.is_some()
         || payload.rrf_k.is_some()
@@ -1180,6 +1211,7 @@ Replace `crates/rag-server/src/routes/chat.rs`:
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
 use rag_core::chat::ChatRequest;
 use rag_core::context::Citation;
@@ -1226,6 +1258,13 @@ pub async fn chat(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatHttpRequest>,
 ) -> Result<Json<ChatHttpResponse>, ApiError> {
+    if payload.query.trim().is_empty() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "query must not be empty".into(),
+        });
+    }
+
     let request = ChatRequest {
         query: payload.query,
         collection: payload.collection,
@@ -1487,10 +1526,10 @@ use rag_server::router::build_router;
 
 /// Build a full AppState with mock embedder and mock LLM, backed by real
 /// Postgres and Qdrant (requires `just up`).
-///
-/// Set `RAG_EMBEDDER=mock` before calling.
 pub async fn full_app() -> (Router, Arc<AppState>) {
-    std::env::set_var("RAG_EMBEDDER", "mock");
+    // SAFETY: test-only env manipulation; each integration test runs in its
+    // own process so there are no data races with other threads reading env.
+    unsafe { std::env::set_var("RAG_EMBEDDER", "mock") };
     let config = AppConfig::from_env().expect("test config");
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
@@ -1512,20 +1551,9 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
 }
 ```
 
-**Note:** This depends on `rag_server::state::AppState` and `rag_server::router::build_router` being accessible from integration tests. Both need to be `pub`. If they aren't accessible because `main.rs` uses `mod` (private), the modules need to be made public. Check at compile time — if `rag_server::state` is not accessible, change `mod state;` to `pub mod state;` (and similarly for `router`, `middleware`, `routes`) in `main.rs`.
+**Note:** This works because `rag-server` has a `lib.rs` exporting all modules as `pub mod`. Integration tests import from `rag_server::state`, `rag_server::router`, etc.
 
-- [ ] **Step 2: Make modules public in main.rs if needed**
-
-If the test helper doesn't compile because modules are private, update `main.rs`:
-
-```rust
-pub mod middleware;
-pub mod router;
-pub mod routes;
-pub mod state;
-```
-
-- [ ] **Step 3: Verify it compiles**
+- [ ] **Step 2: Verify it compiles**
 
 Run: `cargo check -p rag-server --tests`
 Expected: compiles (but tests don't run yet).
@@ -1533,7 +1561,7 @@ Expected: compiles (but tests don't run yet).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/rag-server/tests/common/ crates/rag-server/src/main.rs
+git add crates/rag-server/tests/common/
 git commit -m "feat(server): add shared test helpers for integration tests"
 ```
 
