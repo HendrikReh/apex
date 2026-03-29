@@ -124,11 +124,17 @@ impl LlmProvider {
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Default)]
+struct ExtractSection {
+    pdfium_library_path: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
 struct AppSettings {
     app: Option<AppSection>,
     retrieval: Option<RetrievalSection>,
     context: Option<ContextSection>,
     llm: Option<LlmSection>,
+    extract: Option<ExtractSection>,
 }
 
 #[derive(Deserialize, Default)]
@@ -247,6 +253,8 @@ pub struct AppConfig {
     pub llm_max_retries: u32,
     pub llm_retry_backoff_ms: u64,
     pub llm_prompt_template_path: String,
+    // Extraction
+    pub pdfium_library_path: Option<std::path::PathBuf>,
 }
 
 impl AppConfig {
@@ -270,7 +278,7 @@ impl AppConfig {
         let config_path =
             std::env::var("APP_CONFIG_PATH").unwrap_or_else(|_| "config/app.toml".to_owned());
 
-        let (file_settings, retrieval_settings, context_settings, llm_settings) =
+        let (file_settings, retrieval_settings, context_settings, llm_settings, extract_settings) =
             if std::path::Path::new(&config_path).exists() {
                 let contents = std::fs::read_to_string(&config_path)
                     .with_context(|| format!("reading config file {config_path}"))?;
@@ -281,6 +289,7 @@ impl AppConfig {
                     settings.retrieval.unwrap_or_default(),
                     settings.context.unwrap_or_default(),
                     settings.llm.unwrap_or_default(),
+                    settings.extract.unwrap_or_default(),
                 )
             } else {
                 (
@@ -288,6 +297,7 @@ impl AppConfig {
                     RetrievalSection::default(),
                     ContextSection::default(),
                     LlmSection::default(),
+                    ExtractSection::default(),
                 )
             };
 
@@ -503,6 +513,10 @@ impl AppConfig {
             }
         };
 
+        let pdfium_library_path: Option<std::path::PathBuf> = env_string("PDFIUM_LIBRARY_PATH")
+            .or_else(|| extract_settings.pdfium_library_path.clone())
+            .map(std::path::PathBuf::from);
+
         Ok(Self {
             qdrant_url,
             qdrant_api_key,
@@ -544,6 +558,7 @@ impl AppConfig {
             llm_max_retries,
             llm_retry_backoff_ms,
             llm_prompt_template_path,
+            pdfium_library_path,
         })
     }
 }
@@ -606,6 +621,7 @@ mod tests {
             std::env::remove_var("LLM_MAX_RETRIES");
             std::env::remove_var("LLM_RETRY_BACKOFF_MS");
             std::env::remove_var("LLM_PROMPT_TEMPLATE_PATH");
+            std::env::remove_var("PDFIUM_LIBRARY_PATH");
         }
     }
 
@@ -664,6 +680,7 @@ mod tests {
         assert_eq!(cfg.llm_max_retries, 3);
         assert_eq!(cfg.llm_retry_backoff_ms, 500);
         assert_eq!(cfg.llm_prompt_template_path, "prompts/chat_system.hbs");
+        assert!(cfg.pdfium_library_path.is_none(), "pdfium_library_path should default to None");
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };
@@ -703,6 +720,16 @@ mod tests {
         let err = AppConfig::from_current_env().expect_err("zero max_tokens").to_string();
         assert!(err.contains("llm_max_tokens"), "error: {err}");
         unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
+
+        // -- Part 4: pdfium_library_path from env --
+        unsafe { std::env::set_var("PDFIUM_LIBRARY_PATH", "/usr/local/lib/libpdfium.dylib") };
+        let cfg = AppConfig::from_current_env().expect("from_env with PDFIUM_LIBRARY_PATH");
+        assert_eq!(
+            cfg.pdfium_library_path.as_deref(),
+            Some(std::path::Path::new("/usr/local/lib/libpdfium.dylib")),
+            "PDFIUM_LIBRARY_PATH env should set pdfium_library_path"
+        );
+        unsafe { std::env::remove_var("PDFIUM_LIBRARY_PATH") };
     }
 
     #[test]

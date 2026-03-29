@@ -85,6 +85,7 @@ secrecy = "0.10.3"
 tempfile = "3"
 trait-variant = "0.1"
 percent-encoding = "2.3"
+pdfium-render = "0.8"
 zip = { version = "8.1", default-features = false, features = ["deflate"] }
 
 # Workspace-wide profile settings
