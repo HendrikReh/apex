@@ -381,7 +381,7 @@ fn normalize_vector(mut values: Vec<f32>) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AuthMode, EmbedderKind};
+    use crate::config::{AuthMode, EmbedderKind, LlmProvider};
 
     #[allow(clippy::disallowed_methods)]
     fn over_limit_input() -> String {
@@ -485,6 +485,16 @@ mod tests {
             sparse_top_k: 20,
             context_max_tokens: 8000,
             context_max_chunks: 50,
+            llm_provider: LlmProvider::OpenAiCompatible,
+            llm_api_key: None,
+            llm_model: "gpt-4o".to_string(),
+            llm_base_url: "https://api.openai.com/v1".to_string(),
+            llm_temperature: 0.1,
+            llm_max_tokens: 4096,
+            llm_timeout_secs: 60,
+            llm_max_retries: 3,
+            llm_retry_backoff_ms: 500,
+            llm_prompt_template_path: "prompts/chat_system.hbs".to_string(),
         };
 
         let embedder = AnyEmbedder::from_config(&config).expect("mock embedder should build");

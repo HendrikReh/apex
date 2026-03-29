@@ -97,6 +97,7 @@ async fn ingest_fixtures(ingest: &IngestService, dir: &TempDir) -> Result<(Tenan
 
 #[tokio::test]
 #[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
 async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
@@ -121,6 +122,7 @@ async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result
 
 #[tokio::test]
 #[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
 async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
@@ -182,6 +184,7 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
 
 #[tokio::test]
 #[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
 async fn context_assembly_respects_token_budget() -> Result<()> {
     let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;

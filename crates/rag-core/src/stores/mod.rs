@@ -4,12 +4,14 @@
 //! Postgres (via sqlx) and Qdrant, running migrations on startup and exposing
 //! tenant-scoped CRUD operations across submodules:
 //!
+//! - [`conversations`]: Conversation and message persistence
 //! - [`documents`]: Document metadata CRUD
 //! - [`chunks`]: Chunk batch insert / query / delete
 //! - [`corpus_stats`]: BM25 avgdl tracking
 //! - [`vectors`]: Qdrant collection and point operations
 
 pub mod chunks;
+pub mod conversations;
 pub mod corpus_stats;
 pub mod documents;
 pub mod vectors;

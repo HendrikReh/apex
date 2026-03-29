@@ -123,6 +123,7 @@ impl RetrievalService {
             resolve_override_u64(ov.sparse_top_k, self.defaults.sparse_top_k, "sparse_top_k")?;
         let rrf_k = resolve_override_u32(ov.rrf_k, self.defaults.rrf_k, "rrf_k")?;
 
+        #[allow(clippy::disallowed_methods)] // tokio::join! internally uses .expect()
         let (dense_result, sparse_result) = tokio::join!(
             self.search_dense(collection, query, tenant, dense_k),
             self.search_sparse(collection, query, tenant, sparse_k),
@@ -201,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::disallowed_methods)] // Test assertions expect success
+    #[allow(clippy::disallowed_methods)] // test assertions using unwrap for brevity
     fn missing_override_uses_default() {
         assert_eq!(resolve_override_u64(None, 10, "dense_top_k").unwrap(), 10);
         assert_eq!(resolve_override_u32(None, 60, "rrf_k").unwrap(), 60);

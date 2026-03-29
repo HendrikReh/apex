@@ -4,6 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 [GitHub Repository](https://github.com/HendrikReh/apex)
 
+## Mandatory: Beads Issue Gate
+
+**HARD GATE — Do NOT write any code until a beads issue exists for the work.**
+
+Before editing any `.rs`, `.toml`, `.sql`, `.yaml`, or `.yml` file:
+1. Run `bd create --title="..." --type=<type> --priority=<N>` to create an issue
+2. Run `bd update <id> --claim` to mark it in-progress
+3. Only then begin implementation
+
+If the user says "skip beads", run `touch /tmp/apex-beads-gate` and proceed without an issue.
+
+This is enforced by a PreToolUse hook — edits to code files will be **blocked** without an active gate.
+
 ## Project Overview
 
 Apex is a clean-room rebuild of [projectAlpha](https://github.com/HendrikReh/projectAlpha) — a Rust workspace for RAG (Retrieval-Augmented Generation). It ingests documents (PDF, Markdown, plain text at MVP), chunks with multiple strategies, generates embeddings (OpenAI or mock), and stores in Postgres (metadata) + Qdrant (vectors) for hybrid retrieval (dense + BM25 sparse).
@@ -125,7 +138,7 @@ Lessons learned from projectAlpha — avoid these in the rebuild:
 
 ## Task Tracking (Beads)
 
-See `AGENTS.md` for full beads workflow. Key rule: create a `bd` issue **before** writing code. Never use `bd edit` (blocks agents) — use `bd update` with inline flags.
+See **Mandatory: Beads Issue Gate** above. Full beads workflow in `AGENTS.md`.
 
 ## Verification & Testing Policies
 

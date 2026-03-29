@@ -12,13 +12,16 @@ rag-chunking = { path = "../rag-chunking" }
 anyhow.workspace = true
 async-trait.workspace = true
 async-openai.workspace = true
+backoff.workspace = true
 bm25.workspace = true
 chrono.workspace = true
 dotenvy.workspace = true
 futures.workspace = true
+handlebars.workspace = true
 hex.workspace = true
 qdrant-client.workspace = true
 reqwest.workspace = true
+secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
