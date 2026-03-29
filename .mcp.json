@@ -14,7 +14,7 @@
       "args": ["mcp-server-qdrant"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
-        "COLLECTION_NAME": "hybrid_docs"
+        "COLLECTION_NAME": "apex"
       }
     }
   }
