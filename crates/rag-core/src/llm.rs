@@ -124,9 +124,7 @@ impl OpenAiConfigTrait for OpenAiCompatibleConfig {
         if !api_key.is_empty() {
             headers.insert(
                 AUTHORIZATION,
-                format!("Bearer {api_key}")
-                    .parse()
-                    .expect("API key validated in from_config"),
+                format!("Bearer {api_key}").parse().expect("API key validated in from_config"),
             );
         }
         headers
@@ -318,9 +316,8 @@ fn is_transient_openai_error(err: &anyhow::Error) -> bool {
                 let is_rate_limited =
                     matches!(api_error.code.as_deref(), Some("rate_limit_exceeded"))
                         || matches!(api_error.r#type.as_deref(), Some("rate_limit_exceeded"));
-                let is_server_error =
-                    matches!(api_error.code.as_deref(), Some("server_error"))
-                        || matches!(api_error.r#type.as_deref(), Some("server_error"));
+                let is_server_error = matches!(api_error.code.as_deref(), Some("server_error"))
+                    || matches!(api_error.r#type.as_deref(), Some("server_error"));
                 let is_quota_error =
                     matches!(api_error.code.as_deref(), Some("insufficient_quota"))
                         || matches!(api_error.r#type.as_deref(), Some("insufficient_quota"));
@@ -650,9 +647,7 @@ mod tests {
             "Anthropic API error (503 Service Unavailable): overloaded"
         )));
         assert!(is_transient_error(&anyhow!("Anthropic API error (504 Gateway Timeout): timeout")));
-        assert!(is_transient_error(&anyhow!(
-            "Anthropic API error (529 Overloaded): overloaded"
-        )));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (529 Overloaded): overloaded")));
 
         // Bare numeric code also remains supported.
         assert!(is_transient_error(&anyhow!("Anthropic API error (429): rate limited")));
@@ -713,6 +708,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions use .expect()
     fn from_config_allows_keyless_openai_compatible_backend() {
         let cfg = test_config();
         let backend = ChatBackend::from_config(&cfg).expect("keyless openai-compatible backend");
@@ -734,6 +730,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions use .expect()
     fn build_openai_request_uses_max_tokens_field() {
         let request = CompletionRequest {
             system: "You are a helpful assistant.",

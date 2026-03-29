@@ -209,7 +209,7 @@ async fn context_assembly_respects_token_budget() -> Result<()> {
         assert!(result.stats.budget_dropped > 0);
     }
     if result.stats.final_count > 0 {
-        assert!(!result.text.is_empty());
+        assert!(!result.chunks.is_empty());
         assert_eq!(result.citations.len(), result.stats.final_count);
     }
 

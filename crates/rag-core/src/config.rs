@@ -610,6 +610,7 @@ mod tests {
     /// test function to avoid races (cargo runs tests in parallel threads
     /// within the same process, sharing the environment).
     #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions use .expect()
     fn from_env_defaults_and_override() {
         // SAFETY: test-only env manipulation; single logical test avoids races.
         unsafe { clear_config_env() };
