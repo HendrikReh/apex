@@ -9,6 +9,18 @@
     "qodo-skills@claude-plugins-official": false
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE_PATH=$(echo \"$TOOL_INPUT\" | jq -r '.file_path // empty'); case \"$FILE_PATH\" in *.rs|*.toml|*.sql|*.yaml|*.yml) if [ ! -f /tmp/apex-beads-gate ]; then echo 'BLOCKED: No beads issue created this session. Run bd create first, or user can say skip beads to override.'; exit 1; fi;; esac",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
@@ -17,6 +29,16 @@
             "type": "command",
             "command": "if echo \"$TOOL_INPUT\" | grep -q '\\.rs\"'; then cargo check --message-format=short 2>&1 | head -20; fi",
             "timeout": 30000
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE 'bd create|bd update.*--claim'; then touch /tmp/apex-beads-gate; fi",
+            "timeout": 5000
           }
         ]
       }
