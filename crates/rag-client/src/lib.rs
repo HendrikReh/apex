@@ -2,6 +2,8 @@
 //!
 //! Provides `TenantApiClient` for tenant-scoped API operations.
 
+mod error;
 mod tenant_id;
 
+pub use error::ClientError;
 pub use tenant_id::TenantId;
