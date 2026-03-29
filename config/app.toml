@@ -15,7 +15,7 @@ bm25_b = 0.75
 bm25_query_b = 0.3
 
 # Collection defaults
-default_collection = "hybrid_docs"
+default_collection = "demo"
 
 # Chunking defaults (overridable per-document via sidecar)
 chunking_max_tokens = 600
@@ -49,7 +49,7 @@ max_chunks = 50                                     # Max chunks in assembled co
 
 [llm]
 provider = "openai-compatible"                      # Options: "openai-compatible" (or "openai"), "anthropic"
-model = "gpt-4o"
+model = "gpt-5"
 # base_url = "https://api.openai.com/v1"            # Default per provider
 temperature = 0.1
 max_tokens = 4096
