@@ -1,0 +1,539 @@
+openapi: 3.1.0
+info:
+  title: Apex RAG API
+  description: |
+    Retrieval-Augmented Generation API. Ingest documents, search with dense/sparse/hybrid
+    retrieval, and chat with LLM-powered answers grounded in your documents.
+  version: 0.1.0
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /health:
+    get:
+      summary: Liveness probe
+      operationId: health
+      tags: [ops]
+      responses:
+        "200":
+          description: Server is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /readiness:
+    get:
+      summary: Readiness probe
+      description: |
+        Checks connectivity to Postgres and Qdrant with a 5-second timeout per check.
+        Returns 200 when all dependencies are reachable, 503 otherwise.
+        The response body is identical in both cases — inspect `ready` to distinguish.
+      operationId: readiness
+      tags: [ops]
+      responses:
+        "200":
+          description: All dependencies reachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+        "503":
+          description: One or more dependencies unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+
+  /ingest:
+    post:
+      summary: Ingest documents from filesystem paths
+      description: |
+        Accepts a list of filesystem paths (files or directories). Directories are
+        walked recursively. Supported formats: PDF (.pdf), Markdown (.md), plain text (.txt).
+        Paths are resolved via canonicalize — relative paths are accepted.
+      operationId: ingestPaths
+      tags: [ingest]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestPathsRequest"
+      responses:
+        "200":
+          description: Ingestion complete (may include partial failures)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /ingest/upload:
+    post:
+      summary: Upload and ingest a single file
+      description: |
+        Upload a file via multipart form data. The file extension determines the
+        extraction format. Maximum upload size: 50 MB.
+      operationId: ingestUpload
+      tags: [ingest]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The document file to ingest
+                collection:
+                  type: string
+                  description: Override the default collection name
+      responses:
+        "200":
+          description: File ingested successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /search/dense:
+    post:
+      summary: Dense vector search
+      description: Embeds the query and performs nearest-neighbor search in Qdrant.
+      operationId: searchDense
+      tags: [search]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /search/sparse:
+    post:
+      summary: BM25 sparse search
+      description: Performs BM25 sparse vector search using term-frequency scoring.
+      operationId: searchSparse
+      tags: [search]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /search/hybrid:
+    post:
+      summary: Hybrid search with RRF fusion
+      description: |
+        Runs both dense and sparse searches in parallel, then fuses results
+        using Reciprocal Rank Fusion (RRF).
+      operationId: searchHybrid
+      tags: [search]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HybridSearchRequest"
+      responses:
+        "200":
+          description: Fused search results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HybridSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /chat:
+    post:
+      summary: RAG chat
+      description: |
+        Retrieves relevant context via hybrid search, assembles it into a prompt,
+        and sends it to the configured LLM. Returns the answer with citations
+        linking back to source chunks. Supports multi-turn conversations via
+        `conversation_id`.
+      operationId: chat
+      tags: [chat]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRequest"
+      responses:
+        "200":
+          description: Chat response with citations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /collections/{collection}/stats:
+    get:
+      summary: Collection statistics
+      description: Returns document count, total tokens, and average document length for a collection.
+      operationId: collectionStats
+      tags: [collections]
+      parameters:
+        - $ref: "#/components/parameters/Tenant"
+        - $ref: "#/components/parameters/RequestId"
+        - name: collection
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Collection name
+      responses:
+        "200":
+          description: Collection statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CollectionStatsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+components:
+  parameters:
+    Tenant:
+      name: x-tenant
+      in: header
+      required: false
+      schema:
+        type: string
+        default: default
+      description: Tenant identifier for data isolation. Defaults to "default".
+
+    RequestId:
+      name: x-request-id
+      in: header
+      required: false
+      schema:
+        type: string
+        format: uuid
+      description: Request correlation ID. Auto-generated if not provided.
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+
+    ReadinessResponse:
+      type: object
+      required: [ready, checks]
+      properties:
+        ready:
+          type: boolean
+        checks:
+          type: object
+          required: [postgres, qdrant]
+          properties:
+            postgres:
+              type: string
+              example: ok
+            qdrant:
+              type: string
+              example: ok
+
+    IngestPathsRequest:
+      type: object
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: Filesystem paths to files or directories
+        collection:
+          type: string
+          description: Override the default collection name
+
+    IngestResponse:
+      type: object
+      required: [documents, chunks, skipped]
+      properties:
+        documents:
+          type: integer
+          description: Number of documents processed
+        chunks:
+          type: integer
+          description: Total chunks created
+        skipped:
+          type: integer
+          description: Documents skipped (unchanged since last ingest)
+        failures:
+          type: array
+          items:
+            $ref: "#/components/schemas/FailureEntry"
+          description: Per-document failures (omitted when empty)
+
+    FailureEntry:
+      type: object
+      required: [path, error]
+      properties:
+        path:
+          type: string
+        error:
+          type: string
+
+    SearchRequest:
+      type: object
+      required: [query, collection]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          description: Search query text
+        collection:
+          type: string
+          minLength: 1
+          description: Collection to search in
+        top_k:
+          type: integer
+          format: int64
+          description: Maximum number of results to return
+
+    SearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+
+    SearchResult:
+      type: object
+      required: [chunk_id, document_id, chunk_index, text, score]
+      properties:
+        chunk_id:
+          type: string
+        document_id:
+          type: string
+        chunk_index:
+          type: integer
+          format: int32
+        text:
+          type: string
+        score:
+          type: number
+          format: float
+
+    HybridSearchRequest:
+      type: object
+      required: [query, collection]
+      properties:
+        query:
+          type: string
+          minLength: 1
+        collection:
+          type: string
+          minLength: 1
+        dense_top_k:
+          type: integer
+          format: int64
+          description: Override dense retrieval limit
+        sparse_top_k:
+          type: integer
+          format: int64
+          description: Override sparse retrieval limit
+        rrf_k:
+          type: integer
+          format: int32
+          description: Override RRF fusion parameter
+
+    HybridSearchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/HybridSearchResult"
+
+    HybridSearchResult:
+      type: object
+      required: [chunk_id, document_id, chunk_index, text, fused_score]
+      properties:
+        chunk_id:
+          type: string
+        document_id:
+          type: string
+        chunk_index:
+          type: integer
+          format: int32
+        text:
+          type: string
+        fused_score:
+          type: number
+          format: float
+
+    ChatRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          description: The question to ask
+        collection:
+          type: string
+          description: Collection to search for context. Required for the first message in a conversation.
+        conversation_id:
+          type: string
+          format: uuid
+          description: Continue an existing conversation. If omitted, starts a new one.
+        language:
+          type: string
+          description: Target language for the response (e.g. "German", "French")
+        history_limit:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Maximum number of historical messages to include
+
+    ChatResponse:
+      type: object
+      required: [answer, conversation_id, citations, usage, model]
+      properties:
+        answer:
+          type: string
+          description: The LLM-generated answer
+        conversation_id:
+          type: string
+          format: uuid
+          description: Conversation ID for follow-up messages
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+        usage:
+          $ref: "#/components/schemas/Usage"
+        model:
+          type: string
+          description: Model used for generation
+
+    Citation:
+      type: object
+      required: [chunk_id, document_id, chunk_index, sources]
+      properties:
+        chunk_id:
+          type: string
+        document_id:
+          type: string
+        chunk_index:
+          type: integer
+          format: int32
+        sources:
+          type: array
+          items:
+            type: string
+          description: Source file paths
+
+    Usage:
+      type: object
+      required: [prompt_tokens, completion_tokens]
+      properties:
+        prompt_tokens:
+          type: integer
+          format: int32
+        completion_tokens:
+          type: integer
+          format: int32
+
+    CollectionStatsResponse:
+      type: object
+      required: [collection, tenant, total_docs, total_tokens, avgdl]
+      properties:
+        collection:
+          type: string
+        tenant:
+          type: string
+        total_docs:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+        avgdl:
+          type: number
+          format: double
+          description: Average document length (for BM25 scoring)
+
+tags:
+  - name: ops
+    description: Health and readiness probes
+  - name: ingest
+    description: Document ingestion
+  - name: search
+    description: Dense, sparse, and hybrid retrieval
+  - name: chat
+    description: RAG-powered chat with citations
+  - name: collections
+    description: Collection management
