@@ -62,7 +62,7 @@ Same `IngestResponse` shape as normal ingest:
 
 | Field | Dry-run meaning |
 |-------|----------------|
-| `documents` | Files examined |
+| `documents` | Files successfully examined (extraction + checksum completed without error) |
 | `chunks` | Always 0 (chunking not performed) |
 | `skipped` | Files with unchanged checksums |
 | `failures` | Extraction or path resolution errors |
@@ -73,7 +73,7 @@ Identical to normal ingest — extraction failures, path resolution errors, and 
 
 ## Testing
 
-Unit tests in `ingest.rs`:
+Integration tests (require running Postgres + Qdrant, since `IngestService` uses concrete stores):
 - Verify `ingest_file()` with `dry_run: true` does not write to Postgres or Qdrant.
 - Verify unchanged file returns `skipped: true, chunks_created: 0`.
 - Verify new file returns `skipped: false, chunks_created: 0`.
