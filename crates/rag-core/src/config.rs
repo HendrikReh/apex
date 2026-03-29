@@ -440,7 +440,9 @@ impl AppConfig {
             .parse::<LlmProvider>()
             .with_context(|| format!("parsing LLM provider from {llm_provider_str:?}"))?;
 
-        let llm_api_key = env_string("LLM_API_KEY").map(SecretString::from);
+        let llm_api_key = env_string("LLM_API_KEY")
+            .or_else(|| env_string("OPENAI_API_KEY"))
+            .map(SecretString::from);
 
         let llm_model = env_string("LLM_MODEL")
             .or_else(|| llm.model.clone())
