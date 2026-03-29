@@ -167,11 +167,13 @@ Add `pdfium_library_path,` to the `Ok(Self { ... })` struct literal (after `llm_
 
 - [ ] **Step 6: Add env var cleanup to `clear_config_env()`**
 
-In the `clear_config_env()` function, add:
+In the existing `unsafe { ... }` block inside `clear_config_env()` (at `config.rs:566-608`), add alongside the other `remove_var` calls:
 
 ```rust
 std::env::remove_var("PDFIUM_LIBRARY_PATH");
 ```
+
+This must be inside the `unsafe` block — Rust 2024 edition requires `unsafe` for env mutation.
 
 - [ ] **Step 7: Add `[extract]` section to config/app.toml**
 
@@ -253,18 +255,18 @@ impl PdfExtractor {
     /// creates its own.
     pub fn new(library_path: std::path::PathBuf) -> Result<Self> {
         // Validate the library is loadable at construction time.
+        // Use bind_to_library() with the exact configured path — do NOT
+        // use pdfium_platform_library_name_at_path(), which infers a
+        // platform-default filename from a directory and would ignore
+        // custom filenames, symlinks, or nonstandard install locations.
         pdfium_render::prelude::Pdfium::new(
             pdfium_render::prelude::Pdfium::bind_to_library(
-                pdfium_render::prelude::Pdfium::pdfium_platform_library_name_at_path(
-                    library_path
-                        .parent()
-                        .with_context(|| {
-                            format!(
-                                "pdfium_library_path has no parent directory: {}",
-                                library_path.display()
-                            )
-                        })?,
-                ),
+                library_path.to_str().with_context(|| {
+                    format!(
+                        "pdfium_library_path is not valid UTF-8: {}",
+                        library_path.display()
+                    )
+                })?,
             )
             .with_context(|| {
                 format!(
@@ -294,14 +296,12 @@ impl FormatExtractor for PdfExtractor {
             tokio::task::spawn_blocking(move || {
                 let pdfium = pdfium_render::prelude::Pdfium::new(
                     pdfium_render::prelude::Pdfium::bind_to_library(
-                        pdfium_render::prelude::Pdfium::pdfium_platform_library_name_at_path(
-                            lib_path.parent().with_context(|| {
-                                format!(
-                                    "pdfium_library_path has no parent directory: {}",
-                                    lib_path.display()
-                                )
-                            })?,
-                        ),
+                        lib_path.to_str().with_context(|| {
+                            format!(
+                                "pdfium_library_path is not valid UTF-8: {}",
+                                lib_path.display()
+                            )
+                        })?,
                     )
                     .with_context(|| {
                         format!("binding PDFium library from {}", lib_path.display())
@@ -587,32 +587,6 @@ async fn pdf_extractor_extracts_two_pages_with_formfeed_separator() {
         pages[1].contains("Page two") || pages[1].contains("extraction"),
         "page 2 should contain expected text, got: {:?}",
         pages[1]
-    );
-}
-
-#[tokio::test]
-async fn pdf_extractor_returns_empty_for_textless_pdf() {
-    let Some(lib_path) = pdfium_library_path() else {
-        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
-        return;
-    };
-
-    // A minimal valid PDF with one empty page — no extractable text.
-    // This is a raw minimal PDF. If it doesn't work with pdfium-render,
-    // the test can be adjusted to use a scanned-image PDF fixture.
-    let extractor =
-        rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
-
-    // A PDF with just whitespace content returns effectively empty text
-    // (the exact behavior depends on the fixture — the key assertion is
-    // that it doesn't error, matching the spec for scanned/textless PDFs).
-    // We test this by creating a minimal PDF in-memory:
-    // For now, just verify the extractor can be constructed and supported_types is correct.
-    use rag_core::extract::FormatExtractor;
-    assert_eq!(
-        extractor.supported_types(),
-        &[rag_core::extract::FileType::Pdf],
-        "PdfExtractor should support FileType::Pdf"
     );
 }
 
