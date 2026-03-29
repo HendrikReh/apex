@@ -116,9 +116,10 @@ mod tests {
     }
 
     #[allow(clippy::disallowed_methods)]
+    #[serial_test::serial]
     #[test]
     fn server_env_fallback() {
-        // Set env var before parsing
+        // Set env var before parsing — serial to avoid racing with other tests
         unsafe { std::env::set_var("RAG_SERVER_URL", "http://my-server:9090") };
         let cli = Cli::try_parse_from(["rag-cli", "collection-stats", "--collection", "test"])
             .expect("should parse");

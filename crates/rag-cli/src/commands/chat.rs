@@ -16,6 +16,31 @@ pub async fn run(
     interactive: bool,
     conversation_id: Option<Uuid>,
 ) -> anyhow::Result<()> {
+    run_with_reader(
+        client,
+        writer,
+        json,
+        query,
+        collection,
+        interactive,
+        conversation_id,
+        None::<std::io::Empty>,
+    )
+    .await
+}
+
+/// Inner implementation that accepts an optional reader for testability.
+#[allow(clippy::too_many_arguments)]
+async fn run_with_reader(
+    client: &impl ApiClient,
+    writer: &mut impl Write,
+    json: bool,
+    query: String,
+    collection: Option<String>,
+    interactive: bool,
+    conversation_id: Option<Uuid>,
+    reader: Option<impl BufRead>,
+) -> anyhow::Result<()> {
     // Validate: collection required for new conversations
     if collection.is_none() && conversation_id.is_none() {
         anyhow::bail!("--collection is required for the first message in a conversation");
@@ -39,9 +64,12 @@ pub async fn run(
     format_chat(&resp, writer)?;
     let conv_id = resp.conversation_id;
 
-    let stdin = std::io::stdin();
-    let reader = stdin.lock();
-    interactive_loop(client, writer, reader, conv_id).await
+    if let Some(r) = reader {
+        interactive_loop(client, writer, r, conv_id).await
+    } else {
+        let stdin = std::io::stdin();
+        interactive_loop(client, writer, stdin.lock(), conv_id).await
+    }
 }
 
 async fn interactive_loop(
@@ -230,5 +258,45 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed["answer"], "test answer");
         assert!(parsed["conversation_id"].is_string());
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[tokio::test]
+    async fn chat_interactive_loop() {
+        let client = FakeChatClient::new();
+        let mut buf = Vec::new();
+
+        // Simulate interactive input: two questions then EOF
+        let input = b"follow up question\nsecond follow up\n";
+        let reader = std::io::Cursor::new(&input[..]);
+
+        run_with_reader(
+            &client,
+            &mut buf,
+            false,
+            "initial".into(),
+            Some("coll".into()),
+            true,
+            None,
+            Some(reader),
+        )
+        .await
+        .unwrap();
+
+        let output = String::from_utf8(buf).unwrap();
+        // First response + two interactive responses
+        assert_eq!(output.matches("test answer").count(), 3);
+        // Interactive prompt shown before each follow-up
+        assert!(output.contains("\n> "));
+
+        let calls = client.calls.lock().unwrap();
+        assert_eq!(calls.len(), 3);
+        // First call has collection
+        assert!(calls[0].collection.is_some());
+        // Follow-ups use conversation_id, no collection
+        assert!(calls[1].collection.is_none());
+        assert!(calls[1].conversation_id.is_some());
+        assert!(calls[2].collection.is_none());
+        assert!(calls[2].conversation_id.is_some());
     }
 }

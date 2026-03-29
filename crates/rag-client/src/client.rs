@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use reqwest::{Method, RequestBuilder, Response, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -94,12 +93,7 @@ impl TenantApiClient {
         path: &str,
         body: &B,
     ) -> Result<T, ClientError> {
-        let response = self
-            .request(Method::POST, path)?
-            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-            .json(body)
-            .send()
-            .await?;
+        let response = self.request(Method::POST, path)?.json(body).send().await?;
         Self::into_success(response).await
     }
 
@@ -110,13 +104,7 @@ impl TenantApiClient {
         body: &B,
         timeout: Duration,
     ) -> Result<T, ClientError> {
-        let response = self
-            .request(Method::POST, path)?
-            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-            .json(body)
-            .timeout(timeout)
-            .send()
-            .await?;
+        let response = self.request(Method::POST, path)?.json(body).timeout(timeout).send().await?;
         Self::into_success(response).await
     }
 
@@ -193,56 +181,56 @@ impl TenantApiClient {
     }
 }
 
-use crate::trait_def::ApiClient;
-
-impl ApiClient for TenantApiClient {
-    async fn health(&self) -> Result<(), ClientError> {
-        self.health().await
-    }
-
-    async fn readiness(&self) -> Result<crate::types::ReadinessResponse, ClientError> {
-        self.readiness().await
-    }
-
-    async fn ingest(
-        &self,
-        req: &crate::types::IngestRequest,
-    ) -> Result<crate::types::IngestResponse, ClientError> {
-        self.ingest(req).await
-    }
-
-    async fn search_dense(
-        &self,
-        req: &crate::types::SearchRequest,
-    ) -> Result<crate::types::SearchResponse, ClientError> {
-        self.search_dense(req).await
-    }
-
-    async fn search_sparse(
-        &self,
-        req: &crate::types::SearchRequest,
-    ) -> Result<crate::types::SearchResponse, ClientError> {
-        self.search_sparse(req).await
-    }
-
-    async fn search_hybrid(
-        &self,
-        req: &crate::types::HybridSearchRequest,
-    ) -> Result<crate::types::HybridSearchResponse, ClientError> {
-        self.search_hybrid(req).await
-    }
-
-    async fn chat(
-        &self,
-        req: &crate::types::ChatRequest,
-    ) -> Result<crate::types::ChatResponse, ClientError> {
-        self.chat(req).await
-    }
-
-    async fn collection_stats(
-        &self,
-        collection: &str,
-    ) -> Result<crate::types::CollectionStatsResponse, ClientError> {
-        self.collection_stats(collection).await
-    }
+/// Delegates every `ApiClient` trait method to the identically-named inherent method.
+/// Rust resolves `self.health()` to the inherent method (not the trait method), so there
+/// is no infinite recursion.
+macro_rules! impl_api_client {
+    ($ty:ty) => {
+        impl crate::trait_def::ApiClient for $ty {
+            async fn health(&self) -> Result<(), ClientError> {
+                self.health().await
+            }
+            async fn readiness(&self) -> Result<crate::types::ReadinessResponse, ClientError> {
+                self.readiness().await
+            }
+            async fn ingest(
+                &self,
+                req: &crate::types::IngestRequest,
+            ) -> Result<crate::types::IngestResponse, ClientError> {
+                self.ingest(req).await
+            }
+            async fn search_dense(
+                &self,
+                req: &crate::types::SearchRequest,
+            ) -> Result<crate::types::SearchResponse, ClientError> {
+                self.search_dense(req).await
+            }
+            async fn search_sparse(
+                &self,
+                req: &crate::types::SearchRequest,
+            ) -> Result<crate::types::SearchResponse, ClientError> {
+                self.search_sparse(req).await
+            }
+            async fn search_hybrid(
+                &self,
+                req: &crate::types::HybridSearchRequest,
+            ) -> Result<crate::types::HybridSearchResponse, ClientError> {
+                self.search_hybrid(req).await
+            }
+            async fn chat(
+                &self,
+                req: &crate::types::ChatRequest,
+            ) -> Result<crate::types::ChatResponse, ClientError> {
+                self.chat(req).await
+            }
+            async fn collection_stats(
+                &self,
+                collection: &str,
+            ) -> Result<crate::types::CollectionStatsResponse, ClientError> {
+                self.collection_stats(collection).await
+            }
+        }
+    };
 }
+
+impl_api_client!(TenantApiClient);

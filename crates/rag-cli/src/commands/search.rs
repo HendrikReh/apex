@@ -40,46 +40,56 @@ pub async fn run(
     }
 }
 
-fn format_search<W: Write>(resp: &SearchResponse, w: &mut W) -> anyhow::Result<()> {
-    if resp.results.is_empty() {
+fn format_result_list<W: Write>(
+    w: &mut W,
+    items: &[(f32, &str, &str, i32, &str)],
+) -> anyhow::Result<()> {
+    if items.is_empty() {
         writeln!(w, "No results found.")?;
         return Ok(());
     }
-    for (i, r) in resp.results.iter().enumerate() {
-        let preview: String = r.text.chars().take(80).collect();
+    for (i, &(score, chunk_id, document_id, chunk_index, text)) in items.iter().enumerate() {
+        let preview: String = text.chars().take(80).collect();
         writeln!(
             w,
             "[{}] (score: {:.2}) {} — {}, chunk {}",
             i + 1,
-            r.score,
-            r.chunk_id,
-            r.document_id,
-            r.chunk_index
+            score,
+            chunk_id,
+            document_id,
+            chunk_index
         )?;
         writeln!(w, "    {preview}")?;
     }
     Ok(())
 }
 
+fn format_search<W: Write>(resp: &SearchResponse, w: &mut W) -> anyhow::Result<()> {
+    let items: Vec<_> = resp
+        .results
+        .iter()
+        .map(|r| {
+            (r.score, r.chunk_id.as_str(), r.document_id.as_str(), r.chunk_index, r.text.as_str())
+        })
+        .collect();
+    format_result_list(w, &items)
+}
+
 fn format_hybrid<W: Write>(resp: &HybridSearchResponse, w: &mut W) -> anyhow::Result<()> {
-    if resp.results.is_empty() {
-        writeln!(w, "No results found.")?;
-        return Ok(());
-    }
-    for (i, r) in resp.results.iter().enumerate() {
-        let preview: String = r.text.chars().take(80).collect();
-        writeln!(
-            w,
-            "[{}] (score: {:.2}) {} — {}, chunk {}",
-            i + 1,
-            r.fused_score,
-            r.chunk_id,
-            r.document_id,
-            r.chunk_index
-        )?;
-        writeln!(w, "    {preview}")?;
-    }
-    Ok(())
+    let items: Vec<_> = resp
+        .results
+        .iter()
+        .map(|r| {
+            (
+                r.fused_score,
+                r.chunk_id.as_str(),
+                r.document_id.as_str(),
+                r.chunk_index,
+                r.text.as_str(),
+            )
+        })
+        .collect();
+    format_result_list(w, &items)
 }
 
 #[cfg(test)]
