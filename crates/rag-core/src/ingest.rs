@@ -141,6 +141,17 @@ impl IngestService {
             .await
             .context("checking existing document checksum")?;
 
+        // Dry-run: report what would happen without writing anything.
+        if req.dry_run {
+            let skipped = existing_checksum.as_deref() == Some(&prepared.checksum);
+            return Ok(IngestOutcome {
+                document_id: prepared.document_id,
+                collection: prepared.collection,
+                chunks_created: 0,
+                skipped,
+            });
+        }
+
         if existing_checksum.as_deref() == Some(&prepared.checksum) {
             // Checksum match — update metadata if sidecar changed, skip re-chunking.
             let metadata_json = prepared

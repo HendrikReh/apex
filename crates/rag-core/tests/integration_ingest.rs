@@ -15,13 +15,13 @@ use rag_core::tenant::TenantId;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-async fn setup() -> Result<(IngestService, TempDir)> {
+async fn setup() -> Result<(IngestService, Stores, TempDir)> {
     let mut config = AppConfig::from_env()?;
     config.embedder = EmbedderKind::Mock;
     let stores = Stores::new(&config).await?;
-    let service = IngestService::new(stores, &config)?;
+    let service = IngestService::new(stores.clone(), &config)?;
     let dir = TempDir::new()?;
-    Ok((service, dir))
+    Ok((service, stores, dir))
 }
 
 /// Generate a unique test tenant/collection suffix per run.
@@ -55,7 +55,7 @@ fn write_sidecar(dir: &Path, stem: &str) {
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)]
 async fn ingest_single_txt_file() {
-    let (service, dir) = setup().await.expect("setup");
+    let (service, _stores, dir) = setup().await.expect("setup");
     let suffix = unique_suffix();
     write_fixture(dir.path(), "hello.txt", "Hello, world! This is a test document for ingestion.");
     write_sidecar(dir.path(), "hello");
@@ -80,7 +80,7 @@ async fn ingest_single_txt_file() {
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)]
 async fn reingest_unchanged_file_is_skipped() {
-    let (service, dir) = setup().await.expect("setup");
+    let (service, _stores, dir) = setup().await.expect("setup");
     let suffix = unique_suffix();
     write_fixture(dir.path(), "stable.txt", "Stable content that does not change between ingests.");
     write_sidecar(dir.path(), "stable");
@@ -106,7 +106,7 @@ async fn reingest_unchanged_file_is_skipped() {
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)]
 async fn ingest_directory_processes_all_files() {
-    let (service, dir) = setup().await.expect("setup");
+    let (service, _stores, dir) = setup().await.expect("setup");
     let suffix = unique_suffix();
     write_fixture(dir.path(), "a.txt", "Document A content for testing batch ingestion.");
     write_sidecar(dir.path(), "a");
@@ -130,4 +130,88 @@ async fn ingest_directory_processes_all_files() {
     assert!(outcome.chunks > 0);
     assert_eq!(outcome.skipped, 0);
     assert!(outcome.failures.is_empty());
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)]
+async fn dry_run_new_file_does_not_write() {
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    write_fixture(dir.path(), "dryrun.txt", "Content for dry-run test of a new file.");
+
+    let tenant_str = format!("test-dry-new-{suffix}");
+    let tenant = TenantId::new(&tenant_str).expect("tenant");
+    let collection = format!("test_dry_new_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("dryrun.txt"),
+            tenant: tenant.clone(),
+            collection_override: Some(collection.clone()),
+            dry_run: true,
+        })
+        .await
+        .expect("dry-run ingest should succeed");
+
+    assert!(!outcome.skipped, "new file should not be marked as skipped");
+    assert_eq!(outcome.chunks_created, 0, "dry-run must not create chunks");
+
+    // Verify nothing was persisted to Postgres.
+    let checksum = stores
+        .get_document_checksum(tenant.as_str(), &outcome.document_id)
+        .await
+        .expect("checksum query should succeed");
+    assert!(checksum.is_none(), "dry-run must not write document to Postgres");
+
+    // Verify nothing was written to Qdrant — the unique collection should not exist.
+    let qdrant_exists = stores
+        .collection_exists(&collection)
+        .await
+        .expect("collection_exists query should succeed");
+    assert!(!qdrant_exists, "dry-run must not create Qdrant collection");
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)]
+async fn dry_run_unchanged_file_returns_skipped() {
+    let (service, _stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    write_fixture(
+        dir.path(),
+        "existing.txt",
+        "Content that will be ingested then dry-run checked.",
+    );
+    write_sidecar(dir.path(), "existing");
+
+    let tenant_str = format!("test-dry-skip-{suffix}");
+    let collection = format!("test_dry_skip_{suffix}");
+
+    // First: real ingest to populate Postgres.
+    let first = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("existing.txt"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection.clone()),
+            dry_run: false,
+        })
+        .await
+        .expect("initial ingest should succeed");
+    assert!(!first.skipped);
+    assert!(first.chunks_created > 0);
+
+    // Second: dry-run on the same unchanged file.
+    let second = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("existing.txt"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: true,
+        })
+        .await
+        .expect("dry-run ingest should succeed");
+
+    assert!(second.skipped, "unchanged file should be marked as skipped");
+    assert_eq!(second.chunks_created, 0, "dry-run must not create chunks");
 }
