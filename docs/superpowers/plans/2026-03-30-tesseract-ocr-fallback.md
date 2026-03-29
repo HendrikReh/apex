@@ -337,22 +337,23 @@ pub struct PdfExtractor {
 }
 ```
 
-Update the constructor:
+Update the constructor to take `&AppConfig` per the approved spec:
 
 ```rust
 impl PdfExtractor {
-    /// Create a new `PdfExtractor` with a validated PDFium library path
-    /// and optional OCR configuration.
+    /// Create a new `PdfExtractor` from application config.
     ///
-    /// When `tessdata_dir` is `Some`, validates that the default language's
-    /// `.traineddata` file exists. Eagerly loads PDFium to catch
-    /// misconfiguration at startup.
-    pub fn new(
-        library_path: std::path::PathBuf,
-        tessdata_dir: Option<std::path::PathBuf>,
-        ocr_timeout_secs: u64,
-        ocr_default_language: String,
-    ) -> Result<Self> {
+    /// Consumes already-resolved config values — `TESSDATA_PREFIX` env
+    /// override happens in `AppConfig` loading, not here. Eagerly loads
+    /// PDFium and validates tessdata (if configured) at startup.
+    pub fn new(config: &crate::config::AppConfig) -> Result<Self> {
+        let library_path = config
+            .pdfium_library_path
+            .clone()
+            .ok_or_else(|| {
+                anyhow!("pdfium_library_path is required for PdfExtractor")
+            })?;
+
         // Validate PDFium library is loadable (existing logic).
         drop(pdfium_render::prelude::Pdfium::new(
             pdfium_render::prelude::Pdfium::bind_to_library(
@@ -374,15 +375,15 @@ impl PdfExtractor {
         ));
 
         // Validate tessdata if configured.
-        if let Some(ref dir) = tessdata_dir {
+        if let Some(ref dir) = config.tessdata_dir {
+            let lang = &config.ocr_default_language;
             let traineddata =
-                dir.join(format!("{ocr_default_language}.traineddata"));
+                dir.join(format!("{lang}.traineddata"));
             if !traineddata.exists() {
                 bail!(
                     "tessdata_dir {} does not contain \
-                     {ocr_default_language}.traineddata; \
-                     install the language pack or adjust \
-                     ocr_default_language",
+                     {lang}.traineddata; install the language \
+                     pack or adjust ocr_default_language",
                     dir.display()
                 );
             }
@@ -390,9 +391,9 @@ impl PdfExtractor {
 
         Ok(Self {
             library_path,
-            tessdata_dir,
-            ocr_timeout_secs,
-            ocr_default_language,
+            tessdata_dir: config.tessdata_dir.clone(),
+            ocr_timeout_secs: config.ocr_timeout_secs,
+            ocr_default_language: config.ocr_default_language.clone(),
         })
     }
 }
@@ -405,14 +406,9 @@ pub fn with_defaults(config: &crate::config::AppConfig) -> Result<Self> {
     let mut extractors: Vec<Box<dyn FormatExtractor>> =
         vec![Box::new(MarkdownExtractor), Box::new(TextExtractor)];
 
-    if let Some(ref path) = config.pdfium_library_path {
-        let pdf = PdfExtractor::new(
-            path.clone(),
-            config.tessdata_dir.clone(),
-            config.ocr_timeout_secs,
-            config.ocr_default_language.clone(),
-        )
-        .context("configuring PDF extractor")?;
+    if config.pdfium_library_path.is_some() {
+        let pdf = PdfExtractor::new(config)
+            .context("configuring PDF extractor")?;
         extractors.push(Box::new(pdf));
     }
 
@@ -570,22 +566,54 @@ let result = self
 In `crates/rag-core/src/extract.rs`, add to the test module:
 
 ```rust
+// --- page_ocr_decision tests ---
+
 #[test]
-fn page_needs_ocr_when_forced() {
-    assert!(page_needs_ocr(true, "has native text"));
+fn page_ocr_decision_native_text_no_force() {
+    assert_eq!(
+        page_ocr_decision(false, "content", true),
+        PageOcrDecision::UseNativeText,
+    );
+    assert_eq!(
+        page_ocr_decision(false, "content", false),
+        PageOcrDecision::UseNativeText,
+    );
 }
 
 #[test]
-fn page_needs_ocr_when_text_empty() {
-    assert!(page_needs_ocr(false, ""));
-    assert!(page_needs_ocr(false, "   "));
-    assert!(page_needs_ocr(false, "\n\t "));
+fn page_ocr_decision_empty_text_ocr_available() {
+    assert_eq!(
+        page_ocr_decision(false, "", true),
+        PageOcrDecision::PerformOcr,
+    );
+    assert_eq!(
+        page_ocr_decision(false, "   ", true),
+        PageOcrDecision::PerformOcr,
+    );
+    assert_eq!(
+        page_ocr_decision(false, "\n\t ", true),
+        PageOcrDecision::PerformOcr,
+    );
 }
 
 #[test]
-fn page_does_not_need_ocr_for_native_text() {
-    assert!(!page_needs_ocr(false, "some content"));
+fn page_ocr_decision_empty_text_ocr_unavailable() {
+    // This is the skip-counter path.
+    assert_eq!(
+        page_ocr_decision(false, "", false),
+        PageOcrDecision::SkipUnavailable,
+    );
 }
+
+#[test]
+fn page_ocr_decision_force_overrides_native_text() {
+    assert_eq!(
+        page_ocr_decision(true, "has content", true),
+        PageOcrDecision::PerformOcr,
+    );
+}
+
+// --- resolve_ocr_settings tests ---
 
 #[test]
 fn resolve_ocr_settings_uses_defaults() {
@@ -623,11 +651,11 @@ fn resolve_ocr_settings_empty_hints_uses_default_language() {
 
 - [ ] **Step 7: Run tests to verify they fail**
 
-Run: `cargo test -p rag-core page_needs_ocr`
+Run: `cargo test -p rag-core page_ocr_decision`
 Run: `cargo test -p rag-core resolve_ocr_settings`
-Expected: FAIL — functions not found.
+Expected: FAIL — types and functions not found.
 
-- [ ] **Step 8: Implement page_needs_ocr and resolve_ocr_settings**
+- [ ] **Step 8: Implement page_ocr_decision and resolve_ocr_settings**
 
 In `crates/rag-core/src/extract.rs`, add before the `#[cfg(test)]` block:
 
@@ -636,9 +664,37 @@ In `crates/rag-core/src/extract.rs`, add before the `#[cfg(test)]` block:
 // OCR decision helpers
 // ---------------------------------------------------------------------------
 
-/// Determine whether a page needs OCR processing.
-fn page_needs_ocr(force: bool, native_text: &str) -> bool {
-    force || native_text.trim().is_empty()
+/// Outcome of the per-page OCR decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageOcrDecision {
+    /// Page has native text and force is off — use PDFium output.
+    UseNativeText,
+    /// Page needs OCR and Tesseract is available — render + OCR.
+    PerformOcr,
+    /// Page needs OCR but Tesseract is unavailable — increment
+    /// skip counter and use native (empty) text.
+    SkipUnavailable,
+}
+
+/// Determine the OCR outcome for a single page.
+///
+/// Note: the `force + !ocr_available` hard-error case is handled
+/// before the page loop (early bail). This function is only called
+/// when that combination is impossible, so `SkipUnavailable` only
+/// arises for automatic (non-forced) OCR triggers.
+fn page_ocr_decision(
+    force: bool,
+    native_text: &str,
+    ocr_available: bool,
+) -> PageOcrDecision {
+    let needs_ocr = force || native_text.trim().is_empty();
+    if !needs_ocr {
+        PageOcrDecision::UseNativeText
+    } else if ocr_available {
+        PageOcrDecision::PerformOcr
+    } else {
+        PageOcrDecision::SkipUnavailable
+    }
 }
 
 /// Pre-loop OCR settings resolved from sidecar options + config defaults.
@@ -675,7 +731,7 @@ fn resolve_ocr_settings(
 
 - [ ] **Step 9: Run tests to verify they pass**
 
-Run: `cargo test -p rag-core page_needs_ocr`
+Run: `cargo test -p rag-core page_ocr_decision`
 Run: `cargo test -p rag-core resolve_ocr_settings`
 Expected: PASS
 
@@ -968,35 +1024,37 @@ impl FormatExtractor for PdfExtractor {
                         })?
                         .all();
 
-                    if page_needs_ocr(
+                    match page_ocr_decision(
                         settings.force,
                         &native_text,
+                        ocr_available,
                     ) {
-                        if !ocr_available {
+                        PageOcrDecision::UseNativeText => {
+                            pages.push(native_text);
+                        }
+                        PageOcrDecision::SkipUnavailable => {
                             ocr_skipped_pages += 1;
                             pages.push(native_text);
-                            continue;
                         }
+                        PageOcrDecision::PerformOcr => {
+                            let tessdata = tessdata_dir
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    anyhow!("tessdata_dir is None")
+                                })?;
 
-                        let tessdata = tessdata_dir
-                            .as_ref()
-                            .ok_or_else(|| {
-                                anyhow!("tessdata_dir is None")
-                            })?;
+                            let png_bytes =
+                                render_page_to_png(&page)?;
 
-                        let png_bytes =
-                            render_page_to_png(&page)?;
+                            let ocr_text = run_tesseract(
+                                &png_bytes,
+                                &settings.language,
+                                settings.timeout,
+                                tessdata,
+                            )?;
 
-                        let ocr_text = run_tesseract(
-                            &png_bytes,
-                            &settings.language,
-                            settings.timeout,
-                            tessdata,
-                        )?;
-
-                        pages.push(ocr_text);
-                    } else {
-                        pages.push(native_text);
+                            pages.push(ocr_text);
+                        }
                     }
                 }
 
@@ -1139,9 +1197,30 @@ fn run_tesseract_extracts_text_from_png_bytes() {
 
 - [ ] **Step 10: Write PdfExtractor-level integration test (primary)**
 
-This is the approved spec test — exercises the full path: PDFium page text empty → render to PNG → Tesseract OCR → extracted text contains known token.
+This is the approved spec test — exercises the full path: PDFium page text empty → render to PNG → Tesseract OCR → extracted text contains known token. Uses `AppConfig` per the spec's approved constructor contract.
 
 ```rust
+/// Build an AppConfig suitable for PdfExtractor integration tests.
+/// Returns None if PDFIUM_LIBRARY_PATH is not set or doesn't exist.
+#[cfg(test)]
+fn test_pdf_config(
+    tessdata_dir: Option<std::path::PathBuf>,
+) -> Option<crate::config::AppConfig> {
+    let pdfium_path = std::env::var("PDFIUM_LIBRARY_PATH")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists())?;
+
+    // Load base config from env, then override the fields we need.
+    let mut config =
+        crate::config::AppConfig::from_env().ok()?;
+    config.pdfium_library_path = Some(pdfium_path);
+    config.tessdata_dir = tessdata_dir;
+    config.ocr_timeout_secs = 30;
+    config.ocr_default_language = "eng".to_string();
+    Some(config)
+}
+
 #[tokio::test]
 #[ignore] // requires PDFium + Tesseract installed
 #[allow(clippy::disallowed_methods)]
@@ -1156,13 +1235,8 @@ async fn pdf_extractor_ocr_fallback_on_scanned_page() {
         }
     };
 
-    // Locate PDFium library.
-    let pdfium_path = std::env::var("PDFIUM_LIBRARY_PATH")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.exists());
-    let pdfium_path = match pdfium_path {
-        Some(p) => p,
+    let config = match test_pdf_config(Some(tessdata)) {
+        Some(c) => c,
         None => {
             eprintln!(
                 "skipping: PDFIUM_LIBRARY_PATH not set or \
@@ -1172,13 +1246,8 @@ async fn pdf_extractor_ocr_fallback_on_scanned_page() {
         }
     };
 
-    let extractor = PdfExtractor::new(
-        pdfium_path,
-        Some(tessdata.clone()),
-        30,
-        "eng".to_string(),
-    )
-    .expect("PdfExtractor should construct");
+    let extractor = PdfExtractor::new(&config)
+        .expect("PdfExtractor should construct");
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/hello_ocr.pdf");
@@ -1211,12 +1280,8 @@ async fn pdf_extractor_ocr_fallback_on_scanned_page() {
 #[ignore] // requires PDFium installed (no Tesseract needed)
 #[allow(clippy::disallowed_methods)]
 async fn pdf_extractor_forced_ocr_without_tessdata_errors() {
-    let pdfium_path = std::env::var("PDFIUM_LIBRARY_PATH")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.exists());
-    let pdfium_path = match pdfium_path {
-        Some(p) => p,
+    let config = match test_pdf_config(None) {
+        Some(c) => c,
         None => {
             eprintln!(
                 "skipping: PDFIUM_LIBRARY_PATH not set or \
@@ -1226,13 +1291,8 @@ async fn pdf_extractor_forced_ocr_without_tessdata_errors() {
         }
     };
 
-    let extractor = PdfExtractor::new(
-        pdfium_path,
-        None, // no tessdata
-        30,
-        "eng".to_string(),
-    )
-    .expect("PdfExtractor should construct without tessdata");
+    let extractor = PdfExtractor::new(&config)
+        .expect("PdfExtractor should construct without tessdata");
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/hello_ocr.pdf");
