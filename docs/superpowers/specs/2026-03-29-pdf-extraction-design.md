@@ -25,19 +25,20 @@ fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionRe
 **Internals:**
 - Stores the PDFium library path (`PathBuf`), NOT a `Pdfium` instance.
 - On each `extract()` call:
-  1. Clone the library path into a `spawn_blocking` closure.
-  2. Inside the closure: bind PDFium from the library path, load PDF from the byte slice, iterate pages, collect `page.text().all()` for each page.
-  3. Join page texts with `\u{000C}` (form-feed) separator.
-  4. Return `ExtractionResult { text }`.
+  1. Copy the input `&[u8]` into an owned `Vec<u8>` (required because `spawn_blocking` needs a `'static` closure, but `FormatExtractor::extract()` receives `&[u8]`).
+  2. Clone the library path and move both into the `spawn_blocking` closure.
+  3. Inside the closure: bind PDFium from the library path, load PDF from the owned bytes, iterate pages, collect `page.text().all()` for each page.
+  4. Join page texts with `\u{000C}` (form-feed) separator.
+  5. Return `ExtractionResult { text }`.
 
 **Why no persistent `Pdfium` handle:** The `FormatExtractor` trait requires `Send + Sync`. PDFium's C binding handle may not be safely shareable across threads. Creating the binding per-call inside `spawn_blocking` avoids this entirely.
 
 ### Component: ExtractorRegistry wiring
 
-**Current code:** `ExtractorRegistry::with_defaults()` at `extract.rs:72` constructs the registry with `TextExtractor` and `MarkdownExtractor`. Called by `IngestService::new()` at `ingest.rs:104`.
+**Current code:** `ExtractorRegistry::with_defaults()` at `extract.rs:72` constructs the registry with `TextExtractor`, `MarkdownExtractor`, and the stub `PdfExtractor` (which always returns an error). Called by `IngestService::new()` at `ingest.rs:104`.
 
 **Change:** `with_defaults()` gains a `config: &AppConfig` parameter. When `config.pdfium_library_path` is `Some(path)`:
-- Validate the path exists on disk. If it doesn't, fail immediately (misconfiguration).
+- Attempt to bind/load the PDFium library at the given path during registry construction. If the load fails (path doesn't exist, wrong file, incompatible binary), fail immediately with a clear error (misconfiguration).
 - Construct `PdfExtractor` with the validated path and include it in the registry.
 
 When `config.pdfium_library_path` is `None`:
@@ -63,10 +64,11 @@ When `config.pdfium_library_path` is `None`:
 ### Data Flow
 
 ```
-PDF bytes
+PDF &[u8]
+  -> copy to owned Vec<u8>  (spawn_blocking requires 'static)
   -> spawn_blocking {
        Pdfium::new(bind_to_library(path))
-       -> pdfium.load_pdf_from_byte_slice(bytes)
+       -> pdfium.load_pdf_from_byte_vec(owned_bytes)
        -> for page in doc.pages() { page.text().all() }
        -> join with \u{000C}
      }
@@ -78,7 +80,7 @@ PDF bytes
 | Scenario | Behavior |
 |---|---|
 | `pdfium_library_path` not configured | App boots. PDF ingest returns clear error naming the missing config. |
-| `pdfium_library_path` points to nonexistent file | Startup fails with "pdfium library not found at <path>" |
+| `pdfium_library_path` configured but invalid (missing, wrong file, incompatible) | Startup fails with clear error — library is loaded/validated during registry construction |
 | Corrupt PDF | Per-file ingest failure (existing pattern), surfaced as WARN in CLI output |
 | Password-protected PDF | Per-file ingest failure |
 | PDF with no extractable text (scanned) | Returns empty string. OCR fallback is a separate feature (apex-4yu). |
