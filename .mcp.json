@@ -14,7 +14,7 @@
       "args": ["mcp-server-qdrant"],
       "env": {
         "QDRANT_URL": "http://localhost:6333",
-        "COLLECTION_NAME": "apex"
+        "COLLECTION_NAME": "demo"
       }
     }
   }
