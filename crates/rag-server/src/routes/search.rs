@@ -140,6 +140,25 @@ pub async fn search_hybrid(
         });
     }
 
+    if payload.dense_top_k == Some(0) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "dense_top_k must be greater than 0".into(),
+        });
+    }
+    if payload.sparse_top_k == Some(0) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "sparse_top_k must be greater than 0".into(),
+        });
+    }
+    if payload.rrf_k == Some(0) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "rrf_k must be greater than 0".into(),
+        });
+    }
+
     let overrides = if payload.dense_top_k.is_some()
         || payload.sparse_top_k.is_some()
         || payload.rrf_k.is_some()

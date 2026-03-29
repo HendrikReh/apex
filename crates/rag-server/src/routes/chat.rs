@@ -52,6 +52,28 @@ pub async fn chat(
             message: "query must not be empty".into(),
         });
     }
+    if let Some(limit) = payload.history_limit
+        && limit <= 0
+    {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: format!("history_limit must be > 0, got {limit}"),
+        });
+    }
+    if let Some(ref coll) = payload.collection
+        && coll.trim().is_empty()
+    {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "collection must not be empty".into(),
+        });
+    }
+    if payload.conversation_id.is_none() && payload.collection.is_none() {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "collection is required for the first message in a conversation".into(),
+        });
+    }
 
     let request = ChatRequest {
         query: payload.query,

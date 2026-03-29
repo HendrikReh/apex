@@ -40,6 +40,14 @@ pub async fn ingest_paths(
             message: "paths must not be empty".into(),
         });
     }
+    for p in &payload.paths {
+        if !std::path::Path::new(p).is_absolute() {
+            return Err(ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: format!("all paths must be absolute, got: {p}"),
+            });
+        }
+    }
 
     let mut total =
         IngestBatchOutcome { documents: 0, chunks: 0, skipped: 0, failures: Vec::new() };
