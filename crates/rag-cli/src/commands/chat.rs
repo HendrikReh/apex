@@ -205,6 +205,7 @@ mod tests {
         assert!(output.contains("[model: mock]"));
     }
 
+    #[allow(clippy::disallowed_methods)] // test assertions
     #[tokio::test]
     async fn chat_requires_collection_without_conversation_id() {
         let client = FakeChatClient::new();

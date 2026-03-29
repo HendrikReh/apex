@@ -87,6 +87,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)] // serde_json::json! internally uses .expect()
     fn print_or_json_write_error() {
         struct BrokenWriter;
         impl Write for BrokenWriter {
