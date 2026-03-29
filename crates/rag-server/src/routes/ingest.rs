@@ -60,6 +60,7 @@ pub async fn ingest_paths(
                 path: path.clone(),
                 tenant: ctx.tenant.clone(),
                 collection_override: payload.collection.clone(),
+                dry_run: false,
             };
             match state.ingest.ingest_directory(req).await {
                 Ok(outcome) => {
@@ -80,6 +81,7 @@ pub async fn ingest_paths(
                 path: path.clone(),
                 tenant: ctx.tenant.clone(),
                 collection_override: payload.collection.clone(),
+                dry_run: false,
             };
             match state.ingest.ingest_file(req).await {
                 Ok(outcome) => {
@@ -170,6 +172,7 @@ pub async fn ingest_upload(
         path: tmp.path().to_path_buf(),
         tenant: ctx.tenant,
         collection_override: collection,
+        dry_run: false,
     };
 
     let outcome = state.ingest.ingest_file(req).await.map_err(|e| ApiError {

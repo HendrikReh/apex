@@ -66,6 +66,7 @@ async fn ingest_single_txt_file() {
             path: dir.path().join("hello.txt"),
             tenant,
             collection_override: Some(format!("test_ingest_{suffix}")),
+            dry_run: false,
         })
         .await
         .expect("ingest should succeed");
@@ -90,6 +91,7 @@ async fn reingest_unchanged_file_is_skipped() {
         path: dir.path().join("stable.txt"),
         tenant: TenantId::new(&tenant_str).expect("tenant"),
         collection_override: Some(collection.clone()),
+        dry_run: false,
     };
 
     let first = service.ingest_file(make_req()).await.expect("first ingest");
@@ -119,6 +121,7 @@ async fn ingest_directory_processes_all_files() {
             path: dir.path().to_owned(),
             tenant,
             collection_override: Some(format!("test_batch_{suffix}")),
+            dry_run: false,
         })
         .await
         .expect("batch ingest");

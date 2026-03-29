@@ -42,6 +42,7 @@ pub struct IngestFileRequest {
     pub path: PathBuf,
     pub tenant: TenantId,
     pub collection_override: Option<String>,
+    pub dry_run: bool,
 }
 
 /// Outcome of ingesting a single document.
@@ -59,6 +60,7 @@ pub struct IngestDirectoryRequest {
     pub path: PathBuf,
     pub tenant: TenantId,
     pub collection_override: Option<String>,
+    pub dry_run: bool,
 }
 
 /// Summary of a batch (directory) ingest run.
@@ -215,6 +217,7 @@ impl IngestService {
                 path: pair.path.clone(),
                 tenant: req.tenant.clone(),
                 collection_override: req.collection_override.clone(),
+                dry_run: req.dry_run,
             };
 
             match self.ingest_file(file_req).await {
