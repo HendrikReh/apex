@@ -1,0 +1,4 @@
+This is a sample document for integration testing.
+It contains enough text to produce at least one chunk.
+The quick brown fox jumps over the lazy dog.
+Apex is a clean-room rebuild of projectAlpha.
