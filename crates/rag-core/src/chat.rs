@@ -118,14 +118,12 @@ impl ChatService {
         let mut messages: Vec<ChatMessage> = history_rows
             .into_iter()
             .filter_map(|row| match row.role {
-                MessageRole::User => Some(ChatMessage {
-                    role: ChatRole::User,
-                    content: row.content,
-                }),
-                MessageRole::Assistant => Some(ChatMessage {
-                    role: ChatRole::Assistant,
-                    content: row.content,
-                }),
+                MessageRole::User => {
+                    Some(ChatMessage { role: ChatRole::User, content: row.content })
+                }
+                MessageRole::Assistant => {
+                    Some(ChatMessage { role: ChatRole::Assistant, content: row.content })
+                }
                 // Persisted system rows are valid per the schema, but the LLM
                 // request carries the authoritative system prompt separately.
                 MessageRole::System => None,
