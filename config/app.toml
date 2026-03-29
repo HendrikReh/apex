@@ -57,3 +57,8 @@ timeout_secs = 60
 max_retries = 3
 retry_backoff_ms = 500
 prompt_template_path = "prompts/chat_system.hbs"
+
+[extract]
+# Path to the PDFium native library (.dylib on macOS, .so on Linux)
+# Omit to disable PDF extraction
+# pdfium_library_path = "/usr/local/lib/libpdfium.dylib"

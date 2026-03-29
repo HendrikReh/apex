@@ -604,6 +604,7 @@ mod tests {
             llm_max_retries: 3,
             llm_retry_backoff_ms: 500,
             llm_prompt_template_path: "prompts/chat_system.hbs".to_string(),
+            pdfium_library_path: None,
         }
     }
 
