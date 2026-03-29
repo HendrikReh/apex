@@ -56,4 +56,4 @@ max_tokens = 4096
 timeout_secs = 60
 max_retries = 3
 retry_backoff_ms = 500
-prompt_template_path = "config/prompts/chat_system.hbs"
+prompt_template_path = "prompts/chat_system.hbs"

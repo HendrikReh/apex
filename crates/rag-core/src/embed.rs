@@ -494,7 +494,7 @@ mod tests {
             llm_timeout_secs: 60,
             llm_max_retries: 3,
             llm_retry_backoff_ms: 500,
-            llm_prompt_template_path: "config/prompts/chat_system.hbs".to_string(),
+            llm_prompt_template_path: "prompts/chat_system.hbs".to_string(),
         };
 
         let embedder = AnyEmbedder::from_config(&config).expect("mock embedder should build");

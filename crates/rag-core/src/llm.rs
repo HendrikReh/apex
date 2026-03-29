@@ -475,7 +475,7 @@ async fn complete_anthropic(
         max_tokens: request.max_tokens,
         system: request.system,
         messages: anthropic_messages,
-        temperature: Some(request.temperature),
+        temperature: Some(request.temperature.min(1.0)),
         stop_sequences: request.stop.clone(),
     };
 
@@ -560,7 +560,7 @@ mod tests {
             llm_timeout_secs: 60,
             llm_max_retries: 3,
             llm_retry_backoff_ms: 500,
-            llm_prompt_template_path: "config/prompts/chat_system.hbs".to_string(),
+            llm_prompt_template_path: "prompts/chat_system.hbs".to_string(),
         }
     }
 

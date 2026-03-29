@@ -481,7 +481,7 @@ impl AppConfig {
         let llm_prompt_template_path = {
             let raw = env_string("LLM_PROMPT_TEMPLATE_PATH")
                 .or_else(|| llm.prompt_template_path.clone())
-                .unwrap_or_else(|| "config/prompts/chat_system.hbs".to_owned());
+                .unwrap_or_else(|| "prompts/chat_system.hbs".to_owned());
             let path = std::path::Path::new(&raw);
             if path.is_absolute() {
                 raw
@@ -658,7 +658,7 @@ mod tests {
         assert_eq!(cfg.llm_timeout_secs, 60);
         assert_eq!(cfg.llm_max_retries, 3);
         assert_eq!(cfg.llm_retry_backoff_ms, 500);
-        assert_eq!(cfg.llm_prompt_template_path, "config/prompts/chat_system.hbs");
+        assert_eq!(cfg.llm_prompt_template_path, "prompts/chat_system.hbs");
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };
