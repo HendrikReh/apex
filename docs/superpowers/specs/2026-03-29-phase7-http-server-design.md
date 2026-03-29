@@ -19,7 +19,6 @@ pub struct AppState {
     pub stores: Stores,
     pub config: AppConfig,
     pub tenant_header: HeaderName,
-    pub request_id_header: HeaderName,
 }
 ```
 
@@ -87,7 +86,7 @@ Two middleware layers applied to **protected routes only**, before merging with 
 
 **Signature:** `async fn request_id(req: Request, next: Next) -> Response`
 
-Uses `from_fn` (no state needed).
+Uses `from_fn` (no state needed). The header name `x-request-id` is hardcoded — not configurable. This keeps the middleware stateless.
 
 Behavior:
 1. Read the `x-request-id` header from the incoming request.
@@ -240,7 +239,7 @@ Calls `RetrievalService::search_dense(collection, query, tenant, top_k)`.
 {
   "results": [
     {
-      "chunk_id": 123,
+      "chunk_id": "abc-123",
       "document_id": "doc-abc",
       "chunk_index": 2,
       "text": "chunk content...",
@@ -276,7 +275,7 @@ Calls `RetrievalService::search_hybrid(collection, query, tenant, overrides)`.
 {
   "results": [
     {
-      "chunk_id": 123,
+      "chunk_id": "abc-123",
       "document_id": "doc-abc",
       "chunk_index": 2,
       "text": "chunk content...",
@@ -315,7 +314,7 @@ Maps tenant from `RequestContext` into `ChatRequest::tenant`. Calls `ChatService
   "answer": "Based on the documents...",
   "conversation_id": "uuid",
   "citations": [
-    { "chunk_index": 1, "document_id": "doc-abc", "text": "relevant excerpt..." }
+    { "chunk_id": "abc-123", "document_id": "doc-abc", "chunk_index": 1, "sources": ["dense", "sparse"] }
   ],
   "usage": { "prompt_tokens": 1200, "completion_tokens": 350 },
   "model": "gpt-4o"
@@ -335,7 +334,7 @@ Maps tenant from `RequestContext` into `ChatRequest::tenant`. Calls `ChatService
 }
 ```
 
-Queries `corpus_stats` table for `(tenant, collection)`. Returns 404 if no stats exist for the combination.
+Calls `Stores::get_corpus_stats(tenant, collection, default_avgdl)`. If no row exists, the store returns a zero-count struct with `avgdl` set to the configured default — this is passed through as-is. No 404; an empty collection returns `total_docs: 0, total_tokens: 0`.
 
 ---
 
@@ -351,8 +350,8 @@ Queries `corpus_stats` table for `(tenant, collection)`. Returns 404 if no stats
    - `IngestService::new(stores.clone(), &config)`
    - `RetrievalService::new(stores.clone(), &config)`
    - `ChatService::new(stores.clone(), &config)`
-6. Parse `HeaderName` for tenant and request ID headers from config.
-7. Build `Arc<AppState>` with all services, stores, config, and parsed header names.
+6. Parse `HeaderName` for tenant header from config (`config.tenant_header`). The request ID header is hardcoded to `x-request-id`.
+7. Build `Arc<AppState>` with all services, stores, config, and parsed tenant header name.
 8. `build_router(state)` — assemble public + protected routes with middleware.
 9. `TcpListener::bind(&config.bind_addr).await` — bind to configured address.
 10. Log bind address at `info` level.
