@@ -10,6 +10,19 @@ fn pdfium_library_path() -> Option<PathBuf> {
     std::env::var("PDFIUM_LIBRARY_PATH").ok().filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
+/// Build a minimal `AppConfig` from the current environment with
+/// `pdfium_library_path` set to the given path.
+#[allow(clippy::disallowed_methods)] // test helper
+fn test_app_config(lib_path: PathBuf) -> rag_core::config::AppConfig {
+    // Point config at a non-existent TOML so defaults are used, then
+    // override just the pdfium path via env.
+    unsafe { std::env::set_var("APP_CONFIG_PATH", "/tmp/nonexistent-apex-config.toml") };
+    unsafe { std::env::set_var("PDFIUM_LIBRARY_PATH", lib_path.to_str().unwrap()) };
+    let cfg = rag_core::config::AppConfig::from_env().expect("test AppConfig");
+    unsafe { std::env::remove_var("PDFIUM_LIBRARY_PATH") };
+    cfg
+}
+
 #[tokio::test]
 #[allow(clippy::disallowed_methods)] // test assertions
 async fn pdf_extractor_extracts_two_pages_with_formfeed_separator() {
@@ -21,8 +34,9 @@ async fn pdf_extractor_extracts_two_pages_with_formfeed_separator() {
         return;
     };
 
+    let config = test_app_config(lib_path);
     let extractor =
-        rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
 
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-pages.pdf");
     let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
@@ -58,8 +72,9 @@ fn pdf_extractor_supported_types() {
         return;
     };
 
+    let config = test_app_config(lib_path);
     let extractor =
-        rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
 
     use rag_core::extract::FormatExtractor;
     assert_eq!(extractor.supported_types(), &[rag_core::extract::FileType::Pdf]);
@@ -73,8 +88,9 @@ async fn pdf_extractor_rejects_corrupt_pdf() {
         return;
     };
 
+    let config = test_app_config(lib_path);
     let extractor =
-        rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
 
     use rag_core::extract::{ExtractionOptions, FormatExtractor};
     let result = extractor.extract(b"this is not a PDF", &ExtractionOptions::default()).await;

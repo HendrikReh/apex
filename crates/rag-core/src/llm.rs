@@ -605,6 +605,9 @@ mod tests {
             llm_retry_backoff_ms: 500,
             llm_prompt_template_path: "prompts/chat_system.hbs".to_string(),
             pdfium_library_path: None,
+            tessdata_dir: None,
+            ocr_timeout_secs: 30,
+            ocr_default_language: "eng".to_string(),
         }
     }
 

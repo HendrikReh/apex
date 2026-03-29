@@ -96,8 +96,9 @@ impl ExtractorRegistry {
         let mut extractors: Vec<Box<dyn FormatExtractor>> =
             vec![Box::new(MarkdownExtractor), Box::new(TextExtractor)];
 
-        if let Some(ref path) = config.pdfium_library_path {
-            let pdf = PdfExtractor::new(path.clone()).context("configuring PDF extractor")?;
+        if config.pdfium_library_path.is_some() {
+            let pdf =
+                PdfExtractor::new(config).context("configuring PDF extractor")?;
             extractors.push(Box::new(pdf));
         }
 
@@ -171,24 +172,36 @@ impl FormatExtractor for MarkdownExtractor {
 #[derive(Debug)]
 pub struct PdfExtractor {
     library_path: std::path::PathBuf,
+    tessdata_dir: Option<std::path::PathBuf>,
+    ocr_timeout_secs: u64,
+    ocr_default_language: String,
 }
 
 impl PdfExtractor {
-    /// Create a new `PdfExtractor` with a validated PDFium library path.
+    /// Create a new `PdfExtractor` from application config.
     ///
-    /// Eagerly loads the library to catch misconfiguration at startup.
-    /// The loaded binding is immediately dropped — each `extract()` call
-    /// creates its own.
-    pub fn new(library_path: std::path::PathBuf) -> Result<Self> {
-        // Validate the library is loadable at construction time.
+    /// Consumes already-resolved config values -- `TESSDATA_PREFIX` env
+    /// override happens in `AppConfig` loading, not here. Eagerly loads
+    /// PDFium and validates tessdata (if configured) at startup.
+    pub fn new(config: &crate::config::AppConfig) -> Result<Self> {
+        let library_path = config.pdfium_library_path.clone().ok_or_else(|| {
+            anyhow!("pdfium_library_path is required for PdfExtractor")
+        })?;
+
+        // Validate PDFium library is loadable at construction time.
         // Use bind_to_library() with the exact configured path — do NOT
         // use pdfium_platform_library_name_at_path(), which infers a
         // platform-default filename from a directory and would ignore
         // custom filenames, symlinks, or nonstandard install locations.
         drop(pdfium_render::prelude::Pdfium::new(
-            pdfium_render::prelude::Pdfium::bind_to_library(library_path.to_str().with_context(
-                || format!("pdfium_library_path is not valid UTF-8: {}", library_path.display()),
-            )?)
+            pdfium_render::prelude::Pdfium::bind_to_library(
+                library_path.to_str().with_context(|| {
+                    format!(
+                        "pdfium_library_path is not valid UTF-8: {}",
+                        library_path.display()
+                    )
+                })?,
+            )
             .with_context(|| {
                 format!(
                     "failed to load PDFium native library from {}: \
@@ -199,7 +212,25 @@ impl PdfExtractor {
             })?,
         ));
 
-        Ok(Self { library_path })
+        // Validate tessdata if configured.
+        if let Some(ref dir) = config.tessdata_dir {
+            let lang = &config.ocr_default_language;
+            let traineddata = dir.join(format!("{lang}.traineddata"));
+            if !traineddata.exists() {
+                bail!(
+                    "tessdata_dir {} does not contain {lang}.traineddata; \
+                     install the language pack or adjust ocr_default_language",
+                    dir.display()
+                );
+            }
+        }
+
+        Ok(Self {
+            library_path,
+            tessdata_dir: config.tessdata_dir.clone(),
+            ocr_timeout_secs: config.ocr_timeout_secs,
+            ocr_default_language: config.ocr_default_language.clone(),
+        })
     }
 }
 

@@ -62,3 +62,11 @@ prompt_template_path = "prompts/chat_system.hbs"
 # Path to the PDFium native library (.dylib on macOS, .so on Linux)
 # Omit to disable PDF extraction
 # pdfium_library_path = "/usr/local/lib/libpdfium.dylib"
+# Tesseract OCR fallback for scanned PDF pages.
+# Path to tessdata directory (contains *.traineddata files).
+# Omit to disable OCR fallback. TESSDATA_PREFIX env var overrides this.
+# tessdata_dir = "/usr/local/share/tessdata"
+# Default timeout for Tesseract subprocess per page (seconds).
+# ocr_timeout_secs = 30
+# Default OCR language (Tesseract language code).
+# ocr_default_language = "eng"
