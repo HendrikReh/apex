@@ -120,11 +120,7 @@ mod tests {
     fn render_error_transport() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let reqwest_err = rt.block_on(async {
-            reqwest::Client::new()
-                .get("http://127.0.0.1:1")
-                .send()
-                .await
-                .unwrap_err()
+            reqwest::Client::new().get("http://127.0.0.1:1").send().await.unwrap_err()
         });
         let ce = rag_client::ClientError::Transport(reqwest_err);
         let err: anyhow::Error = ce.into();

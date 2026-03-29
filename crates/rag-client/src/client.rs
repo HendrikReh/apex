@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use reqwest::header::{HeaderValue, CONTENT_TYPE};
+use reqwest::header::{CONTENT_TYPE, HeaderValue};
 use reqwest::{Method, RequestBuilder, Response, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -41,28 +41,20 @@ impl TenantApiClient {
 
         let tenant_id = TenantId::new(tenant).map_err(ClientError::InvalidTenant)?;
 
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .map_err(ClientError::Transport)?;
+        let client =
+            reqwest::Client::builder().timeout(timeout).build().map_err(ClientError::Transport)?;
 
-        Ok(Self {
-            client,
-            base_url: url,
-            tenant: tenant_id,
-        })
+        Ok(Self { client, base_url: url, tenant: tenant_id })
     }
 
     /// Build a request with the tenant header and resolved URL.
     fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, ClientError> {
-        let url = self.base_url.join(path).map_err(|e| {
-            ClientError::InvalidBaseUrl(format!("cannot join path '{path}': {e}"))
-        })?;
+        let url = self
+            .base_url
+            .join(path)
+            .map_err(|e| ClientError::InvalidBaseUrl(format!("cannot join path '{path}': {e}")))?;
 
-        Ok(self
-            .client
-            .request(method, url)
-            .header(TENANT_HEADER, self.tenant.as_str()))
+        Ok(self.client.request(method, url).header(TENANT_HEADER, self.tenant.as_str()))
     }
 
     /// Check the response status and deserialize the body as JSON.
@@ -72,11 +64,7 @@ impl TenantApiClient {
 
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(ClientError::HttpStatus {
-                status: status.as_u16(),
-                url,
-                body,
-            });
+            return Err(ClientError::HttpStatus { status: status.as_u16(), url, body });
         }
 
         response.json::<T>().await.map_err(ClientError::Decode)
@@ -95,11 +83,7 @@ impl TenantApiClient {
         if !status.is_success() {
             let url = response.url().to_string();
             let body = response.text().await.unwrap_or_default();
-            return Err(ClientError::HttpStatus {
-                status: status.as_u16(),
-                url,
-                body,
-            });
+            return Err(ClientError::HttpStatus { status: status.as_u16(), url, body });
         }
         Ok(response)
     }
@@ -145,9 +129,7 @@ impl TenantApiClient {
         if body.trim() == "ok" {
             Ok(())
         } else {
-            Err(ClientError::Validation(format!(
-                "unexpected health response: {body}"
-            )))
+            Err(ClientError::Validation(format!("unexpected health response: {body}")))
         }
     }
 
@@ -161,8 +143,7 @@ impl TenantApiClient {
         &self,
         req: &crate::types::IngestRequest,
     ) -> Result<crate::types::IngestResponse, ClientError> {
-        self.post_json_with_timeout("/ingest", req, Duration::from_secs(300))
-            .await
+        self.post_json_with_timeout("/ingest", req, Duration::from_secs(300)).await
     }
 
     /// Dense vector search.
@@ -203,14 +184,10 @@ impl TenantApiClient {
         collection: &str,
     ) -> Result<crate::types::CollectionStatsResponse, ClientError> {
         if collection.is_empty() {
-            return Err(ClientError::Validation(
-                "collection must not be empty".into(),
-            ));
+            return Err(ClientError::Validation("collection must not be empty".into()));
         }
-        let encoded = percent_encoding::utf8_percent_encode(
-            collection,
-            percent_encoding::NON_ALPHANUMERIC,
-        );
+        let encoded =
+            percent_encoding::utf8_percent_encode(collection, percent_encoding::NON_ALPHANUMERIC);
         let path = format!("/collections/{encoded}/stats");
         self.get_json(&path).await
     }

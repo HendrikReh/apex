@@ -92,11 +92,7 @@ fn format_chat<W: Write>(resp: &ChatResponse, w: &mut W) -> anyhow::Result<()> {
     }
 
     writeln!(w)?;
-    writeln!(
-        w,
-        "[conversation: {}] [model: {}]",
-        resp.conversation_id, resp.model
-    )?;
+    writeln!(w, "[conversation: {}] [model: {}]", resp.conversation_id, resp.model)?;
     Ok(())
 }
 
@@ -113,9 +109,7 @@ mod tests {
 
     impl FakeChatClient {
         fn new() -> Self {
-            Self {
-                calls: Mutex::new(Vec::new()),
-            }
+            Self { calls: Mutex::new(Vec::new()) }
         }
     }
 
@@ -129,16 +123,10 @@ mod tests {
         async fn ingest(&self, _: &IngestRequest) -> Result<IngestResponse, ClientError> {
             unimplemented!()
         }
-        async fn search_dense(
-            &self,
-            _: &SearchRequest,
-        ) -> Result<SearchResponse, ClientError> {
+        async fn search_dense(&self, _: &SearchRequest) -> Result<SearchResponse, ClientError> {
             unimplemented!()
         }
-        async fn search_sparse(
-            &self,
-            _: &SearchRequest,
-        ) -> Result<SearchResponse, ClientError> {
+        async fn search_sparse(&self, _: &SearchRequest) -> Result<SearchResponse, ClientError> {
             unimplemented!()
         }
         async fn search_hybrid(
@@ -158,25 +146,18 @@ mod tests {
             });
             Ok(ChatResponse {
                 answer: "test answer".into(),
-                conversation_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
-                    .unwrap(),
+                conversation_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
                 citations: vec![Citation {
                     chunk_id: "c1".into(),
                     document_id: "d1".into(),
                     chunk_index: 0,
                     sources: vec![],
                 }],
-                usage: Usage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
-                },
+                usage: Usage { prompt_tokens: 10, completion_tokens: 5 },
                 model: "mock".into(),
             })
         }
-        async fn collection_stats(
-            &self,
-            _: &str,
-        ) -> Result<CollectionStatsResponse, ClientError> {
+        async fn collection_stats(&self, _: &str) -> Result<CollectionStatsResponse, ClientError> {
             unimplemented!()
         }
     }
@@ -186,17 +167,9 @@ mod tests {
     async fn chat_single_shot() {
         let client = FakeChatClient::new();
         let mut buf = Vec::new();
-        run(
-            &client,
-            &mut buf,
-            false,
-            "hello".into(),
-            Some("coll".into()),
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        run(&client, &mut buf, false, "hello".into(), Some("coll".into()), false, None)
+            .await
+            .unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("test answer"));
         assert!(output.contains("[1] c1 (d1, chunk 0)"));
@@ -208,13 +181,9 @@ mod tests {
     async fn chat_requires_collection_without_conversation_id() {
         let client = FakeChatClient::new();
         let mut buf = Vec::new();
-        let result =
-            run(&client, &mut buf, false, "hello".into(), None, false, None).await;
+        let result = run(&client, &mut buf, false, "hello".into(), None, false, None).await;
         assert!(result.is_err());
-        assert!(result
-            .expect_err("should fail")
-            .to_string()
-            .contains("--collection is required"));
+        assert!(result.expect_err("should fail").to_string().contains("--collection is required"));
     }
 
     #[allow(clippy::disallowed_methods)]
@@ -222,8 +191,7 @@ mod tests {
     async fn chat_allows_no_collection_with_conversation_id() {
         let client = FakeChatClient::new();
         let mut buf = Vec::new();
-        let conv_id =
-            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let conv_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let result =
             run(&client, &mut buf, false, "hello".into(), None, false, Some(conv_id)).await;
         assert!(result.is_ok());
@@ -236,32 +204,13 @@ mod tests {
         let mut buf = Vec::new();
 
         // First call
-        run(
-            &client,
-            &mut buf,
-            false,
-            "first".into(),
-            Some("coll".into()),
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        run(&client, &mut buf, false, "first".into(), Some("coll".into()), false, None)
+            .await
+            .unwrap();
 
         // Simulate second call with conversation_id from first response
-        let conv_id =
-            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        run(
-            &client,
-            &mut buf,
-            false,
-            "second".into(),
-            None,
-            false,
-            Some(conv_id),
-        )
-        .await
-        .unwrap();
+        let conv_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        run(&client, &mut buf, false, "second".into(), None, false, Some(conv_id)).await.unwrap();
 
         let calls = client.calls.lock().unwrap();
         assert_eq!(calls.len(), 2);
@@ -275,17 +224,9 @@ mod tests {
     async fn chat_json_output() {
         let client = FakeChatClient::new();
         let mut buf = Vec::new();
-        run(
-            &client,
-            &mut buf,
-            true,
-            "hello".into(),
-            Some("coll".into()),
-            false,
-            None,
-        )
-        .await
-        .unwrap();
+        run(&client, &mut buf, true, "hello".into(), Some("coll".into()), false, None)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed["answer"], "test answer");
         assert!(parsed["conversation_id"].is_string());

@@ -4,6 +4,8 @@ mod output;
 
 use clap::Parser;
 
+// eprintln! internally uses .expect() on the write handle — false positive for disallowed_methods
+#[allow(clippy::disallowed_methods)]
 #[tokio::main]
 async fn main() {
     let cli = cli::Cli::parse();
@@ -25,21 +27,11 @@ async fn run(cli: cli::Cli) -> anyhow::Result<()> {
         cli::Command::Ingest { paths, collection } => {
             commands::ingest::run(&client, &mut stdout, cli.json, paths, collection).await
         }
-        cli::Command::Search {
-            query,
-            collection,
-            mode,
-            top_k,
-        } => {
+        cli::Command::Search { query, collection, mode, top_k } => {
             commands::search::run(&client, &mut stdout, cli.json, query, collection, mode, top_k)
                 .await
         }
-        cli::Command::Chat {
-            query,
-            collection,
-            interactive,
-            conversation_id,
-        } => {
+        cli::Command::Chat { query, collection, interactive, conversation_id } => {
             commands::chat::run(
                 &client,
                 &mut stdout,

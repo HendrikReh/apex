@@ -1,7 +1,6 @@
 use std::io::Write;
 
 use rag_client::ApiClient;
-use rag_client::types::CollectionStatsResponse;
 
 use crate::output::print_or_json;
 
@@ -41,16 +40,10 @@ mod tests {
         async fn ingest(&self, _: &IngestRequest) -> Result<IngestResponse, ClientError> {
             unimplemented!()
         }
-        async fn search_dense(
-            &self,
-            _: &SearchRequest,
-        ) -> Result<SearchResponse, ClientError> {
+        async fn search_dense(&self, _: &SearchRequest) -> Result<SearchResponse, ClientError> {
             unimplemented!()
         }
-        async fn search_sparse(
-            &self,
-            _: &SearchRequest,
-        ) -> Result<SearchResponse, ClientError> {
+        async fn search_sparse(&self, _: &SearchRequest) -> Result<SearchResponse, ClientError> {
             unimplemented!()
         }
         async fn search_hybrid(
@@ -62,10 +55,7 @@ mod tests {
         async fn chat(&self, _: &ChatRequest) -> Result<ChatResponse, ClientError> {
             unimplemented!()
         }
-        async fn collection_stats(
-            &self,
-            _: &str,
-        ) -> Result<CollectionStatsResponse, ClientError> {
+        async fn collection_stats(&self, _: &str) -> Result<CollectionStatsResponse, ClientError> {
             Ok(CollectionStatsResponse {
                 collection: "my-collection".into(),
                 tenant: "default".into(),
@@ -81,9 +71,7 @@ mod tests {
     async fn collection_stats_human_output() {
         let client = FakeCollectionsClient;
         let mut buf = Vec::new();
-        run(&client, &mut buf, false, "my-collection".into())
-            .await
-            .unwrap();
+        run(&client, &mut buf, false, "my-collection".into()).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Collection: my-collection"));
         assert!(output.contains("Documents:  42"));
@@ -96,9 +84,7 @@ mod tests {
     async fn collection_stats_json_output() {
         let client = FakeCollectionsClient;
         let mut buf = Vec::new();
-        run(&client, &mut buf, true, "my-collection".into())
-            .await
-            .unwrap();
+        run(&client, &mut buf, true, "my-collection".into()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed["total_docs"], 42);
         assert_eq!(parsed["avgdl"], 293.93);

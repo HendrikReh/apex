@@ -46,10 +46,7 @@ async fn capture_and_respond(
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     body: String,
 ) -> impl IntoResponse {
-    cap.requests
-        .lock()
-        .unwrap()
-        .push((uri.to_string(), headers, body));
+    cap.requests.lock().unwrap().push((uri.to_string(), headers, body));
 
     let path = uri.path();
     if path == "/ingest" {
@@ -131,10 +128,7 @@ async fn tenant_header_injected() {
     let _: IngestResponse = client
         .post_json(
             "/ingest",
-            &IngestRequest {
-                paths: vec!["/tmp/test.txt".into()],
-                collection: None,
-            },
+            &IngestRequest { paths: vec!["/tmp/test.txt".into()], collection: None },
         )
         .await
         .unwrap();
@@ -207,10 +201,7 @@ async fn chat_roundtrip() {
 
     assert_eq!(resp.answer, "test answer");
     assert_eq!(resp.model, "mock");
-    assert_eq!(
-        resp.conversation_id.to_string(),
-        "550e8400-e29b-41d4-a716-446655440000"
-    );
+    assert_eq!(resp.conversation_id.to_string(), "550e8400-e29b-41d4-a716-446655440000");
 }
 
 #[tokio::test]
@@ -243,11 +234,7 @@ async fn collection_stats_path_encoding() {
     let _resp = client.collection_stats("my/collection").await.unwrap();
 
     let reqs = cap.requests.lock().unwrap();
-    assert!(
-        reqs[0].0.contains("my%2Fcollection"),
-        "path should be percent-encoded: {}",
-        reqs[0].0
-    );
+    assert!(reqs[0].0.contains("my%2Fcollection"), "path should be percent-encoded: {}", reqs[0].0);
 }
 
 #[tokio::test]
@@ -259,16 +246,13 @@ async fn collection_stats_empty_rejected() {
 
 #[tokio::test]
 async fn http_error_preserved() {
-    let router = Router::new()
-        .route("/fail", post(|| async { StatusCode::BAD_REQUEST.into_response() }));
+    let router =
+        Router::new().route("/fail", post(|| async { StatusCode::BAD_REQUEST.into_response() }));
     let server = spawn_app(router).await.expect("spawn");
     let client = TenantApiClient::new(&server.base_url(), "default").unwrap();
 
     let err = client
-        .post_json::<serde_json::Value, serde_json::Value>(
-            "/fail",
-            &serde_json::json!({}),
-        )
+        .post_json::<serde_json::Value, serde_json::Value>("/fail", &serde_json::json!({}))
         .await
         .unwrap_err();
     match err {
@@ -284,10 +268,7 @@ async fn decode_error() {
     let client = TenantApiClient::new(&server.base_url(), "default").unwrap();
 
     let err = client
-        .post_json::<serde_json::Value, serde_json::Value>(
-            "/bad-json",
-            &serde_json::json!({}),
-        )
+        .post_json::<serde_json::Value, serde_json::Value>("/bad-json", &serde_json::json!({}))
         .await
         .unwrap_err();
     assert!(matches!(err, ClientError::Decode(_)));
@@ -332,10 +313,7 @@ async fn ingest_timeout_override() {
 
     // ingest() should succeed because it uses 300s per-request timeout
     let resp = client
-        .ingest(&IngestRequest {
-            paths: vec!["/tmp/test.txt".into()],
-            collection: None,
-        })
+        .ingest(&IngestRequest { paths: vec!["/tmp/test.txt".into()], collection: None })
         .await;
     assert!(resp.is_ok(), "ingest should succeed with 300s override: {resp:?}");
 

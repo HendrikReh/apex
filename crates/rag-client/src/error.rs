@@ -17,11 +17,7 @@ pub enum ClientError {
 
     /// The server returned a non-2xx status code.
     #[error("server returned {status}: {body}")]
-    HttpStatus {
-        status: u16,
-        url: String,
-        body: String,
-    },
+    HttpStatus { status: u16, url: String, body: String },
 
     /// The response body could not be decoded (invalid JSON, etc.).
     #[error("failed to decode response: {0}")]

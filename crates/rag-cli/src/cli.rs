@@ -77,10 +77,11 @@ pub enum SearchMode {
 
 /// Validate CLI constraints that Clap cannot express declaratively.
 pub fn validate(cli: &Cli) -> anyhow::Result<()> {
-    if let Command::Chat { interactive, .. } = &cli.command {
-        if *interactive && cli.json {
-            anyhow::bail!("--interactive and --json cannot be used together");
-        }
+    if let Command::Chat { interactive, .. } = &cli.command
+        && *interactive
+        && cli.json
+    {
+        anyhow::bail!("--interactive and --json cannot be used together");
     }
     Ok(())
 }
@@ -100,7 +101,14 @@ mod tests {
     #[test]
     fn interactive_json_conflict() {
         let cli = Cli::try_parse_from([
-            "rag-cli", "--json", "chat", "--query", "hi", "--collection", "c", "--interactive",
+            "rag-cli",
+            "--json",
+            "chat",
+            "--query",
+            "hi",
+            "--collection",
+            "c",
+            "--interactive",
         ]);
         // Parsing succeeds, but validation fails
         let cli = cli.expect("should parse");
@@ -112,10 +120,8 @@ mod tests {
     fn server_env_fallback() {
         // Set env var before parsing
         unsafe { std::env::set_var("RAG_SERVER_URL", "http://my-server:9090") };
-        let cli = Cli::try_parse_from([
-            "rag-cli", "collection-stats", "--collection", "test",
-        ])
-        .expect("should parse");
+        let cli = Cli::try_parse_from(["rag-cli", "collection-stats", "--collection", "test"])
+            .expect("should parse");
         assert_eq!(cli.server, "http://my-server:9090");
         unsafe { std::env::remove_var("RAG_SERVER_URL") };
     }
