@@ -161,19 +161,21 @@ return pages.join("\u{000C}")
 
 ### Component: Sidecar Integration (`crates/rag-core/src/ingest.rs`)
 
-The existing sidecar metadata structure (`.metadata.json`) gains an `ocr` object:
+The existing sidecar metadata structure (`.metadata.json`) gains an `ocr` object inside the `ingestion` block, alongside the existing `chunking` overrides:
 
 ```json
 {
-  "ocr": {
-    "force": true,
-    "language_hints": ["eng", "deu"],
-    "timeout_secs": 60
+  "ingestion": {
+    "ocr": {
+      "force": true,
+      "language_hints": ["eng", "deu"],
+      "timeout_secs": 60
+    }
   }
 }
 ```
 
-`IngestService::ingest_file()` maps sidecar OCR fields → `OcrOptions` → `ExtractionOptions` before calling the extractor registry.
+`IngestService::ingest_file()` maps sidecar `ingestion.ocr` fields → `OcrOptions` → `ExtractionOptions` before calling the extractor registry.
 
 ### Component: IngestService call site (`crates/rag-core/src/ingest.rs`)
 

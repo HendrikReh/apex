@@ -706,8 +706,9 @@ resolve_ocr_settings) factor out testable per-page OCR logic."
 - Modify: `crates/rag-core/Cargo.toml`
 - Modify: `crates/rag-core/src/extract.rs`
 - Create: `crates/rag-core/tests/fixtures/hello_ocr.png`
+- Create: `crates/rag-core/tests/fixtures/hello_ocr.pdf`
 
-- [ ] **Step 1: Add image and tempfile dependencies**
+- [ ] **Step 1: Add image dependency**
 
 In workspace `Cargo.toml`, update `pdfium-render` and add `image`:
 
@@ -716,91 +717,95 @@ image = "0.24"
 pdfium-render = { version = "0.8", features = ["image"] }
 ```
 
-In `crates/rag-core/Cargo.toml`, promote `tempfile` from `[dev-dependencies]` to `[dependencies]` and add `image`:
+In `crates/rag-core/Cargo.toml`, add `image` to `[dependencies]` (tempfile stays as dev-dep only):
 
 ```toml
 [dependencies]
 # ... existing deps ...
 image.workspace = true
-tempfile.workspace = true
-
-[dev-dependencies]
-# tempfile line removed from here (now in [dependencies])
 ```
 
-- [ ] **Step 2: Write failing test for forced OCR without tessdata**
-
-In `crates/rag-core/src/extract.rs`, add to the test module:
-
-```rust
-#[tokio::test]
-#[allow(clippy::disallowed_methods)]
-async fn forced_ocr_without_tessdata_returns_error() {
-    let registry = test_registry(); // no PDF extractor
-
-    // Build a PdfExtractor with tessdata_dir = None.
-    // We can't actually construct one without a valid PDFium library,
-    // so test the error path directly via the helper.
-    let options = ExtractionOptions {
-        ocr: Some(OcrOptions {
-            force: true,
-            language_hints: vec![],
-            timeout_secs: None,
-        }),
-    };
-
-    let settings = resolve_ocr_settings(
-        options.ocr.as_ref(),
-        "eng",
-        30,
-    );
-    assert!(settings.force);
-
-    // The actual error ("OCR forced but Tesseract not configured")
-    // is tested at integration level with a real PdfExtractor.
-    // Here we verify the decision logic: force=true means OCR needed.
-    assert!(page_needs_ocr(settings.force, "native text present"));
-}
-```
-
-- [ ] **Step 3: Implement run_tesseract function**
+- [ ] **Step 2: Implement render_page_to_png function**
 
 In `crates/rag-core/src/extract.rs`, add after `resolve_ocr_settings`:
 
 ```rust
-/// Run Tesseract OCR on an image file and return the extracted text.
+/// DPI used for rendering PDF pages to bitmaps before OCR.
+const OCR_RENDER_DPI: f32 = 300.0;
+
+/// Render a PDF page to in-memory PNG bytes for OCR processing.
 ///
-/// Spawns a `tesseract` subprocess with a deadline-based timeout using
-/// `try_wait()` polling. Kills the child on timeout.
+/// Uses PDFium's bitmap rendering at 300 DPI, then encodes to PNG
+/// via the `image` crate.
+///
+/// Must be called from a blocking context (inside `spawn_blocking`).
+fn render_page_to_png(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+) -> Result<Vec<u8>> {
+    let scale = OCR_RENDER_DPI / 72.0;
+    let width = (page.width().value * scale) as i32;
+    let height = (page.height().value * scale) as i32;
+
+    let config = pdfium_render::prelude::PdfRenderConfig::new()
+        .set_target_width(width)
+        .set_maximum_height(height);
+
+    let bitmap = page
+        .render_with_config(&config)
+        .map_err(|e| anyhow!("rendering PDF page to bitmap: {e}"))?;
+
+    let image = bitmap.as_image();
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .context("encoding page bitmap as PNG")?;
+
+    Ok(cursor.into_inner())
+}
+```
+
+- [ ] **Step 3: Implement run_tesseract function (stdin-based)**
+
+Add after `render_page_to_png`:
+
+```rust
+/// Run Tesseract OCR on PNG image bytes via stdin and return text.
+///
+/// Pipes `png_bytes` to `tesseract stdin stdout`, reads extracted text
+/// from stdout. Uses deadline-based timeout with `try_wait()` polling
+/// and explicit `child.kill()` — `tokio::time::timeout` does NOT kill
+/// child processes.
 ///
 /// Must be called from a blocking context (inside `spawn_blocking`).
 fn run_tesseract(
-    image_path: &std::path::Path,
+    png_bytes: &[u8],
     language: &str,
     timeout: std::time::Duration,
     tessdata_dir: &std::path::Path,
 ) -> Result<String> {
-    use std::io::Read as _;
     use std::process::{Command, Stdio};
 
     let mut cmd = Command::new("tesseract");
-    cmd.arg(image_path)
+    cmd.arg("stdin")
         .arg("stdout")
         .arg("-l")
         .arg(language)
         .arg("--tessdata-dir")
         .arg(tessdata_dir);
     cmd.env("TESSDATA_PREFIX", tessdata_dir);
+    cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().with_context(|| {
-        format!(
-            "spawning tesseract on {}",
-            image_path.display()
-        )
-    })?;
+    let mut child = cmd
+        .spawn()
+        .context("spawning tesseract subprocess")?;
 
+    // Take all three pipes before spawning threads.
+    let mut stdin_pipe = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("missing tesseract stdin pipe"))?;
     let mut stdout_pipe = child
         .stdout
         .take()
@@ -810,7 +815,16 @@ fn run_tesseract(
         .take()
         .ok_or_else(|| anyhow!("missing tesseract stderr pipe"))?;
 
-    // Read stdout/stderr on separate threads to avoid pipe deadlock.
+    // Write PNG to stdin on a separate thread to avoid deadlock.
+    let owned_bytes = png_bytes.to_vec();
+    let stdin_thread = std::thread::spawn(move || {
+        let result =
+            std::io::Write::write_all(&mut stdin_pipe, &owned_bytes);
+        drop(stdin_pipe); // Close stdin to signal EOF.
+        result
+    });
+
+    // Read stdout/stderr on separate threads.
     let stdout_thread = std::thread::spawn(move || {
         let mut buf = Vec::new();
         std::io::Read::read_to_end(&mut stdout_pipe, &mut buf)
@@ -822,32 +836,38 @@ fn run_tesseract(
             .map(|_| buf)
     });
 
-    // Poll with try_wait() — tokio::time::timeout does NOT kill children.
+    // Poll with try_wait() — tokio::time::timeout does NOT kill
+    // child processes.
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
-        match child.try_wait().with_context(|| {
-            format!(
-                "waiting for tesseract on {}",
-                image_path.display()
-            )
-        })? {
+        match child
+            .try_wait()
+            .context("waiting for tesseract")?
+        {
             Some(status) => break status,
             None if std::time::Instant::now() >= deadline => {
                 child.kill().ok();
                 child.wait().ok();
+                let _ = stdin_thread.join();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
                 bail!(
-                    "tesseract timed out on {} (exceeded {} ms)",
-                    image_path.display(),
+                    "tesseract timed out (exceeded {} ms)",
                     timeout.as_millis()
                 );
             }
             None => {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(
+                    std::time::Duration::from_millis(100),
+                );
             }
         }
     };
+
+    stdin_thread
+        .join()
+        .map_err(|_| anyhow!("tesseract stdin writer panicked"))?
+        .context("writing PNG to tesseract stdin")?;
 
     let stdout_bytes = stdout_thread
         .join()
@@ -871,51 +891,7 @@ fn run_tesseract(
 }
 ```
 
-- [ ] **Step 4: Implement render_page_to_tempfile function**
-
-Add after `run_tesseract`:
-
-```rust
-/// DPI used for rendering PDF pages to bitmaps before OCR.
-const OCR_RENDER_DPI: f32 = 300.0;
-
-/// Render a PDF page to a temporary PNG file for OCR processing.
-///
-/// Uses PDFium's bitmap rendering at 300 DPI, then saves via the
-/// `image` crate's PNG encoder.
-///
-/// Must be called from a blocking context (inside `spawn_blocking`).
-fn render_page_to_tempfile(
-    page: &pdfium_render::prelude::PdfPage<'_>,
-) -> Result<tempfile::NamedTempFile> {
-    let scale = OCR_RENDER_DPI / 72.0;
-    let width = (page.width().value * scale) as i32;
-    let height = (page.height().value * scale) as i32;
-
-    let config = pdfium_render::prelude::PdfRenderConfig::new()
-        .set_target_width(width)
-        .set_maximum_height(height);
-
-    let bitmap = page
-        .render_with_config(&config)
-        .map_err(|e| anyhow!("rendering PDF page to bitmap: {e}"))?;
-
-    let image = bitmap.as_image();
-
-    let temp_file = tempfile::Builder::new()
-        .suffix(".png")
-        .tempfile()
-        .context("creating temp file for OCR page image")?;
-
-    image
-        .save(temp_file.path())
-        .context("saving page bitmap as PNG for OCR")?;
-
-    Ok(temp_file)
-}
-```
-
-- [ ] **Step 5: Integrate per-page OCR into PdfExtractor::extract**
+- [ ] **Step 4: Integrate per-page OCR into PdfExtractor::extract**
 
 Replace the `PdfExtractor`'s `FormatExtractor::extract` implementation:
 
@@ -1008,11 +984,11 @@ impl FormatExtractor for PdfExtractor {
                                 anyhow!("tessdata_dir is None")
                             })?;
 
-                        let temp_file =
-                            render_page_to_tempfile(&page)?;
+                        let png_bytes =
+                            render_page_to_png(&page)?;
 
                         let ocr_text = run_tesseract(
-                            temp_file.path(),
+                            &png_bytes,
                             &settings.language,
                             settings.timeout,
                             tessdata,
@@ -1044,31 +1020,37 @@ impl FormatExtractor for PdfExtractor {
 }
 ```
 
-- [ ] **Step 6: Verify compilation**
+- [ ] **Step 5: Verify compilation**
 
 Run: `cargo check -p rag-core`
 Expected: Compiles without errors. If `pdfium-render` API details differ (e.g., `page.width().value` vs `page.width().0` or render config method names), fix based on compiler errors.
 
-- [ ] **Step 7: Run existing tests**
+- [ ] **Step 6: Run existing tests**
 
 Run: `cargo test -p rag-core`
 Expected: All existing tests pass. OCR code paths are not exercised by existing tests (no PDFium in CI, no Tesseract).
 
-- [ ] **Step 8: Create test fixture for OCR integration test**
+- [ ] **Step 7: Create test fixtures for integration tests**
 
-Create the fixture directory and a PNG image with recognizable text. Run this command (requires ImageMagick):
+Create test fixtures: a PNG image with recognizable text, and a scanned PDF (image-only, no text layer) containing the same image. Run these commands (requires ImageMagick and img2pdf):
 
 ```bash
 mkdir -p crates/rag-core/tests/fixtures
+
+# PNG with known text for run_tesseract unit test
 convert -size 400x100 xc:white \
     -font Helvetica -pointsize 48 -fill black \
     -gravity center -annotate +0+0 'HELLO OCR' \
     crates/rag-core/tests/fixtures/hello_ocr.png
+
+# Scanned PDF: image-only (no text layer) for PdfExtractor test
+img2pdf crates/rag-core/tests/fixtures/hello_ocr.png \
+    -o crates/rag-core/tests/fixtures/hello_ocr.pdf
 ```
 
-If ImageMagick is unavailable, create any PNG image containing the text "HELLO" in a large, clear font using any image editor. The text must be legible at 300 DPI for Tesseract to recognize it.
+If `img2pdf` is unavailable, use `convert hello_ocr.png hello_ocr.pdf` instead. The critical property is that PDFium's `page.text().all()` returns empty string on this PDF — it has no embedded text, only a raster image.
 
-- [ ] **Step 9: Write integration test for run_tesseract**
+- [ ] **Step 8: Write test helper for finding tessdata**
 
 In `crates/rag-core/src/extract.rs`, add to the test module:
 
@@ -1097,24 +1079,32 @@ fn find_tessdata_dir() -> Option<std::path::PathBuf> {
     None
 }
 
-#[test]
-#[ignore] // requires tesseract installed
-#[allow(clippy::disallowed_methods)]
-fn run_tesseract_extracts_text_from_png() {
-    // Guard: skip if tesseract is not installed.
+/// Check whether tesseract is installed and tessdata is available.
+/// Returns (tessdata_dir) or None if either is missing.
+#[cfg(test)]
+fn tesseract_available() -> Option<std::path::PathBuf> {
     if std::process::Command::new("tesseract")
         .arg("--version")
         .output()
         .is_err()
     {
-        eprintln!("skipping: tesseract not found");
-        return;
+        return None;
     }
+    find_tessdata_dir()
+}
+```
 
-    let tessdata = match find_tessdata_dir() {
+- [ ] **Step 9: Write run_tesseract integration test (subprocess only)**
+
+```rust
+#[test]
+#[ignore] // requires tesseract installed
+#[allow(clippy::disallowed_methods)]
+fn run_tesseract_extracts_text_from_png_bytes() {
+    let tessdata = match tesseract_available() {
         Some(dir) => dir,
         None => {
-            eprintln!("skipping: no tessdata directory found");
+            eprintln!("skipping: tesseract or tessdata not found");
             return;
         }
     };
@@ -1129,8 +1119,11 @@ fn run_tesseract_extracts_text_from_png() {
         return;
     }
 
+    let png_bytes = std::fs::read(&fixture)
+        .expect("reading PNG fixture");
+
     let text = run_tesseract(
-        &fixture,
+        &png_bytes,
         "eng",
         std::time::Duration::from_secs(30),
         &tessdata,
@@ -1144,25 +1137,156 @@ fn run_tesseract_extracts_text_from_png() {
 }
 ```
 
-- [ ] **Step 10: Run integration test (locally only, requires tesseract)**
+- [ ] **Step 10: Write PdfExtractor-level integration test (primary)**
 
-Run: `cargo test -p rag-core run_tesseract_extracts_text -- --ignored`
-Expected: PASS if Tesseract is installed; skipped otherwise.
+This is the approved spec test — exercises the full path: PDFium page text empty → render to PNG → Tesseract OCR → extracted text contains known token.
 
-- [ ] **Step 11: Verify full test suite**
+```rust
+#[tokio::test]
+#[ignore] // requires PDFium + Tesseract installed
+#[allow(clippy::disallowed_methods)]
+async fn pdf_extractor_ocr_fallback_on_scanned_page() {
+    let tessdata = match tesseract_available() {
+        Some(dir) => dir,
+        None => {
+            eprintln!(
+                "skipping: tesseract or tessdata not found"
+            );
+            return;
+        }
+    };
+
+    // Locate PDFium library.
+    let pdfium_path = std::env::var("PDFIUM_LIBRARY_PATH")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists());
+    let pdfium_path = match pdfium_path {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "skipping: PDFIUM_LIBRARY_PATH not set or \
+                 not found"
+            );
+            return;
+        }
+    };
+
+    let extractor = PdfExtractor::new(
+        pdfium_path,
+        Some(tessdata.clone()),
+        30,
+        "eng".to_string(),
+    )
+    .expect("PdfExtractor should construct");
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/hello_ocr.pdf");
+    if !fixture.exists() {
+        eprintln!(
+            "skipping: PDF fixture not found at {}",
+            fixture.display()
+        );
+        return;
+    }
+
+    let pdf_bytes = std::fs::read(&fixture)
+        .expect("reading PDF fixture");
+
+    // Default options — OCR triggers automatically on empty text.
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("extraction should succeed with OCR fallback");
+
+    assert!(
+        result.text.to_uppercase().contains("HELLO"),
+        "OCR fallback output should contain 'HELLO', got: \
+         {:?}",
+        result.text
+    );
+}
+
+#[tokio::test]
+#[ignore] // requires PDFium installed (no Tesseract needed)
+#[allow(clippy::disallowed_methods)]
+async fn pdf_extractor_forced_ocr_without_tessdata_errors() {
+    let pdfium_path = std::env::var("PDFIUM_LIBRARY_PATH")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .filter(|p| p.exists());
+    let pdfium_path = match pdfium_path {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "skipping: PDFIUM_LIBRARY_PATH not set or \
+                 not found"
+            );
+            return;
+        }
+    };
+
+    let extractor = PdfExtractor::new(
+        pdfium_path,
+        None, // no tessdata
+        30,
+        "eng".to_string(),
+    )
+    .expect("PdfExtractor should construct without tessdata");
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/hello_ocr.pdf");
+    if !fixture.exists() {
+        eprintln!(
+            "skipping: PDF fixture not found at {}",
+            fixture.display()
+        );
+        return;
+    }
+
+    let pdf_bytes = std::fs::read(&fixture)
+        .expect("reading PDF fixture");
+
+    let options = ExtractionOptions {
+        ocr: Some(OcrOptions {
+            force: true,
+            language_hints: vec![],
+            timeout_secs: None,
+        }),
+    };
+
+    let err = extractor
+        .extract(&pdf_bytes, &options)
+        .await
+        .expect_err("forced OCR without tessdata should fail");
+
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("not configured"),
+        "error should mention OCR not configured, got: {msg}"
+    );
+}
+```
+
+- [ ] **Step 11: Run integration tests (locally only)**
+
+Run: `cargo test -p rag-core pdf_extractor_ocr -- --ignored`
+Run: `cargo test -p rag-core run_tesseract_extracts -- --ignored`
+Expected: PASS if PDFium + Tesseract installed and fixtures present; skipped otherwise.
+
+- [ ] **Step 12: Verify full test suite**
 
 Run: `cargo check -p rag-core`
 Run: `cargo test -p rag-core`
 Expected: All non-ignored tests pass.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
-git add Cargo.toml crates/rag-core/Cargo.toml crates/rag-core/src/extract.rs crates/rag-core/tests/fixtures/hello_ocr.png
+git add Cargo.toml crates/rag-core/Cargo.toml crates/rag-core/src/extract.rs crates/rag-core/tests/fixtures/
 git commit -m "feat(ocr): Tesseract subprocess + per-page OCR in PdfExtractor
 
-Implements per-page OCR fallback: renders empty pages to PNG via
-PDFium bitmap API, runs Tesseract subprocess with try_wait() timeout.
-Document-level warning when OCR needed but unavailable. Integration
-test with PNG fixture (ignored, requires tesseract)."
+Renders scanned pages to in-memory PNG via PDFium bitmap API, pipes
+to tesseract stdin with try_wait() deadline timeout. Integration tests
+at PdfExtractor level (ignored, require PDFium + Tesseract)."
 ```
