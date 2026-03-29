@@ -275,7 +275,7 @@ impl IngestService {
 
         let result = self
             .extractors
-            .extract(file_type, &content)
+            .extract(file_type, &content, &extract::ExtractionOptions::default())
             .await
             .with_context(|| format!("extracting text from {}", req.path.display()))?;
 

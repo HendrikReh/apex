@@ -27,8 +27,11 @@ async fn pdf_extractor_extracts_two_pages_with_formfeed_separator() {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-pages.pdf");
     let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
 
-    use rag_core::extract::FormatExtractor;
-    let result = extractor.extract(&pdf_bytes).await.expect("PDF extraction should succeed");
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("PDF extraction should succeed");
 
     // Verify form-feed separator between pages
     let pages: Vec<&str> = result.text.split('\u{000C}').collect();
@@ -73,7 +76,7 @@ async fn pdf_extractor_rejects_corrupt_pdf() {
     let extractor =
         rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
 
-    use rag_core::extract::FormatExtractor;
-    let result = extractor.extract(b"this is not a PDF").await;
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor.extract(b"this is not a PDF", &ExtractionOptions::default()).await;
     assert!(result.is_err(), "corrupt PDF should produce an error");
 }

@@ -35,6 +35,23 @@ pub struct ExtractionResult {
     pub text: String,
 }
 
+/// Options that control extraction behavior beyond raw content.
+///
+/// Non-PDF extractors ignore these; `PdfExtractor` uses the `ocr` field
+/// to decide whether and how to run Tesseract on scanned pages.
+#[derive(Debug, Clone, Default)]
+pub struct ExtractionOptions {
+    pub ocr: Option<OcrOptions>,
+}
+
+/// Per-document OCR overrides, typically sourced from sidecar metadata.
+#[derive(Debug, Clone, Default)]
+pub struct OcrOptions {
+    pub force: bool,
+    pub language_hints: Vec<String>,
+    pub timeout_secs: Option<u64>,
+}
+
 /// Compute a SHA-256 checksum over extracted text.
 pub fn checksum(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
@@ -44,7 +61,11 @@ pub fn checksum(text: &str) -> String {
 pub trait FormatExtractor: Send + Sync {
     fn supported_types(&self) -> &'static [FileType];
 
-    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>>;
+    fn extract<'a>(
+        &'a self,
+        content: &'a [u8],
+        options: &'a ExtractionOptions,
+    ) -> BoxFuture<'a, Result<ExtractionResult>>;
 }
 
 /// Registry that dispatches extraction requests by file type.
@@ -84,7 +105,12 @@ impl ExtractorRegistry {
     }
 
     /// Extract normalized text for the given file type.
-    pub async fn extract(&self, file_type: FileType, content: &[u8]) -> Result<ExtractionResult> {
+    pub async fn extract(
+        &self,
+        file_type: FileType,
+        content: &[u8],
+        options: &ExtractionOptions,
+    ) -> Result<ExtractionResult> {
         let Some(index) = self.by_type.get(&file_type).copied() else {
             if file_type == FileType::Pdf {
                 bail!(
@@ -97,7 +123,7 @@ impl ExtractorRegistry {
         };
 
         self.extractors[index]
-            .extract(content)
+            .extract(content, options)
             .await
             .map_err(|err| err.context(format!("extracting content for file type {file_type:?}")))
     }
@@ -111,7 +137,11 @@ impl FormatExtractor for TextExtractor {
         &[FileType::Text]
     }
 
-    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+    fn extract<'a>(
+        &'a self,
+        content: &'a [u8],
+        _options: &'a ExtractionOptions,
+    ) -> BoxFuture<'a, Result<ExtractionResult>> {
         Box::pin(async move { extract_utf8_passthrough(content, "plain text") })
     }
 }
@@ -124,7 +154,11 @@ impl FormatExtractor for MarkdownExtractor {
         &[FileType::Markdown]
     }
 
-    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+    fn extract<'a>(
+        &'a self,
+        content: &'a [u8],
+        _options: &'a ExtractionOptions,
+    ) -> BoxFuture<'a, Result<ExtractionResult>> {
         Box::pin(async move { extract_utf8_passthrough(content, "markdown") })
     }
 }
@@ -174,7 +208,11 @@ impl FormatExtractor for PdfExtractor {
         &[FileType::Pdf]
     }
 
-    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+    fn extract<'a>(
+        &'a self,
+        content: &'a [u8],
+        _options: &'a ExtractionOptions,
+    ) -> BoxFuture<'a, Result<ExtractionResult>> {
         // Copy input bytes to an owned Vec — spawn_blocking requires 'static.
         let owned_bytes = content.to_vec();
         let lib_path = self.library_path.clone();
@@ -241,7 +279,7 @@ mod tests {
         let registry = test_registry();
 
         let result = registry
-            .extract(FileType::Text, b"hello world")
+            .extract(FileType::Text, b"hello world", &ExtractionOptions::default())
             .await
             .expect("text extraction should succeed");
 
@@ -254,7 +292,7 @@ mod tests {
         let registry = test_registry();
 
         let result = registry
-            .extract(FileType::Markdown, b"# Title\n\nBody")
+            .extract(FileType::Markdown, b"# Title\n\nBody", &ExtractionOptions::default())
             .await
             .expect("markdown extraction should succeed");
 
@@ -271,7 +309,11 @@ mod tests {
                 &[FileType::Text]
             }
 
-            fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+            fn extract<'a>(
+                &'a self,
+                content: &'a [u8],
+                _options: &'a ExtractionOptions,
+            ) -> BoxFuture<'a, Result<ExtractionResult>> {
                 Box::pin(async move { extract_utf8_passthrough(content, "plain text") })
             }
         }
@@ -297,7 +339,7 @@ mod tests {
         let registry = test_registry();
 
         let err = registry
-            .extract(FileType::Pdf, b"%PDF-1.7")
+            .extract(FileType::Pdf, b"%PDF-1.7", &ExtractionOptions::default())
             .await
             .expect_err("PDF extraction should fail when not configured");
 
@@ -315,7 +357,7 @@ mod tests {
         let registry = test_registry();
 
         let err = registry
-            .extract(FileType::Text, &[0xff, 0xfe, 0xfd])
+            .extract(FileType::Text, &[0xff, 0xfe, 0xfd], &ExtractionOptions::default())
             .await
             .expect_err("invalid UTF-8 should fail");
 
@@ -327,6 +369,12 @@ mod tests {
             err.chain().any(|cause| cause.is::<std::str::Utf8Error>()),
             "expected underlying Utf8Error to remain in the chain, got {err:#}"
         );
+    }
+
+    #[test]
+    fn extraction_options_default_has_no_ocr() {
+        let opts = ExtractionOptions::default();
+        assert!(opts.ocr.is_none());
     }
 
     #[test]

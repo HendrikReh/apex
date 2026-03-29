@@ -27,8 +27,8 @@ pub use context::{
 };
 pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
 pub use extract::{
-    ExtractionResult, ExtractorRegistry, FileType, FormatExtractor, MarkdownExtractor,
-    PdfExtractor, TextExtractor,
+    ExtractionOptions, ExtractionResult, ExtractorRegistry, FileType, FormatExtractor,
+    MarkdownExtractor, OcrOptions, PdfExtractor, TextExtractor,
 };
 pub use fusion::{FusedChunk, RetrievedChunk, rrf_fusion};
 pub use ingest::IngestService;
