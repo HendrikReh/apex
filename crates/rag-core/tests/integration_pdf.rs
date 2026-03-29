@@ -24,8 +24,8 @@ async fn pdf_extractor_extracts_two_pages_with_formfeed_separator() {
     let extractor =
         rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
 
-    let pdf_bytes = std::fs::read("crates/rag-core/tests/fixtures/two-pages.pdf")
-        .expect("reading test fixture PDF");
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-pages.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
 
     use rag_core::extract::FormatExtractor;
     let result = extractor.extract(&pdf_bytes).await.expect("PDF extraction should succeed");
