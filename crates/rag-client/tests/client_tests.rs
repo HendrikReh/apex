@@ -1,6 +1,7 @@
 #![allow(clippy::disallowed_methods)] // Tests use .expect() and .unwrap()
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::State;
@@ -300,4 +301,47 @@ async fn health_unexpected_body() {
 
     let err = client.health().await.unwrap_err();
     assert!(matches!(err, ClientError::Validation(_)));
+}
+
+#[tokio::test]
+async fn ingest_timeout_override() {
+    // Server delays 2 seconds on every POST
+    let router = Router::new()
+        .route(
+            "/ingest",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                axum::Json(serde_json::json!({
+                    "documents": 1, "chunks": 1, "skipped": 0
+                }))
+            }),
+        )
+        .route(
+            "/slow",
+            post(|| async {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                axum::Json(serde_json::json!({"ok": true}))
+            }),
+        );
+    let server = spawn_app(router).await.expect("spawn");
+
+    // Client with 1-second default timeout
+    let client =
+        TenantApiClient::with_timeout(&server.base_url(), "default", Duration::from_secs(1))
+            .unwrap();
+
+    // ingest() should succeed because it uses 300s per-request timeout
+    let resp = client
+        .ingest(&IngestRequest {
+            paths: vec!["/tmp/test.txt".into()],
+            collection: None,
+        })
+        .await;
+    assert!(resp.is_ok(), "ingest should succeed with 300s override: {resp:?}");
+
+    // A plain post_json to the same delayed endpoint should time out at 1s
+    let err = client
+        .post_json::<serde_json::Value, serde_json::Value>("/slow", &serde_json::json!({}))
+        .await;
+    assert!(err.is_err(), "plain post_json should timeout at 1s");
 }
