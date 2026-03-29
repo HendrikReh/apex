@@ -45,6 +45,7 @@ Fallback: if JSON serialization fails, return `{"error":"internal error"}` with 
 ### 1.3 RequestContext and Typed Extractor
 
 ```rust
+#[derive(Clone)]
 pub struct RequestContext {
     pub request_id: Uuid,
     pub tenant: TenantId,
@@ -109,8 +110,8 @@ Behavior:
 3. Validate via `TenantId::new(value)`. If invalid, return 400 `ApiError`.
 4. Retrieve the `Uuid` request ID from extensions (inserted by request ID middleware).
 5. Construct `RequestContext { request_id, tenant }` and insert into extensions.
-6. Set `x-tenant` response header.
-7. Call `next.run(req)`.
+6. Call `next.run(req)`.
+7. Set the response header using `state.tenant_header` (the same configured name used for the request) to the validated tenant value.
 
 Depends on request ID middleware having run first.
 
