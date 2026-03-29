@@ -597,6 +597,7 @@ mod tests {
             std::env::remove_var("CONTEXT_MAX_CHUNKS");
             std::env::remove_var("LLM_PROVIDER");
             std::env::remove_var("LLM_API_KEY");
+            std::env::remove_var("OPENAI_API_KEY");
             std::env::remove_var("LLM_MODEL");
             std::env::remove_var("LLM_BASE_URL");
             std::env::remove_var("LLM_TEMPERATURE");
