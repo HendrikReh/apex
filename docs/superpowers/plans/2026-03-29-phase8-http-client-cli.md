@@ -373,7 +373,7 @@ pub struct IngestRequest {
     pub collection: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IngestResponse {
     pub documents: usize,
     pub chunks: usize,
@@ -382,7 +382,7 @@ pub struct IngestResponse {
     pub failures: Vec<IngestFailure>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IngestFailure {
     pub path: String,
     pub error: String,
@@ -398,12 +398,12 @@ pub struct SearchRequest {
     pub top_k: Option<u64>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SearchResult {
     pub chunk_id: String,
     pub document_id: String,
@@ -424,12 +424,12 @@ pub struct HybridSearchRequest {
     pub rrf_k: Option<u32>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HybridSearchResponse {
     pub results: Vec<HybridSearchResult>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HybridSearchResult {
     pub chunk_id: String,
     pub document_id: String,
@@ -453,7 +453,7 @@ pub struct ChatRequest {
     pub history_limit: Option<i64>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ChatResponse {
     pub answer: String,
     pub conversation_id: Uuid,
@@ -462,7 +462,7 @@ pub struct ChatResponse {
     pub model: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Citation {
     pub chunk_id: String,
     pub document_id: String,
@@ -470,7 +470,7 @@ pub struct Citation {
     pub sources: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
@@ -478,7 +478,7 @@ pub struct Usage {
 
 // ── Collections ─────────────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CollectionStatsResponse {
     pub collection: String,
     pub tenant: String,
@@ -489,13 +489,13 @@ pub struct CollectionStatsResponse {
 
 // ── Health / Readiness ──────────────────────────────────────────
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReadinessResponse {
     pub ready: bool,
     pub checks: ReadinessChecks,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ReadinessChecks {
     pub postgres: String,
     pub qdrant: String,
@@ -2020,20 +2020,21 @@ pub async fn run(
 async fn interactive_loop(
     client: &impl ApiClient,
     writer: &mut impl Write,
-    reader: impl BufRead,
+    mut reader: impl BufRead,
     conversation_id: Uuid,
 ) -> anyhow::Result<()> {
-    for line in reader.lines() {
-        let line = line?;
-        if line.is_empty() {
-            break;
-        }
-
+    loop {
         write!(writer, "\n> ")?;
         writer.flush()?;
 
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 || line.trim().is_empty() {
+            break;
+        }
+
         let req = ChatRequest {
-            query: line,
+            query: line.trim().to_string(),
             collection: None,
             conversation_id: Some(conversation_id),
             language: None,

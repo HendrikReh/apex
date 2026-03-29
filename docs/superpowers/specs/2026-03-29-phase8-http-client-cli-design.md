@@ -82,6 +82,9 @@ pub enum ClientError {
 
     #[error("failed to decode response: {0}")]
     Decode(reqwest::Error),  // body read or JSON deserialization failed
+
+    #[error("{0}")]
+    Validation(String),  // client-side preflight check failed (e.g. empty collection)
 }
 ```
 
@@ -490,6 +493,7 @@ If `json_mode`, serialize `value` to `writer`. Otherwise call `human_fn`. Produc
 - `ClientError::Transport` -> `Error: connection failed — {details}`, exit 1
 - `ClientError::HttpStatus` -> `Error: server returned {status} — {body}`, exit 1
 - `ClientError::Decode` -> `Error: unexpected server response — {details}`, exit 1
+- `ClientError::Validation` -> `Error: {message}`, exit 1
 
 ---
 
