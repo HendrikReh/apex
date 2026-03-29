@@ -3,6 +3,11 @@
 mod common;
 
 use test_support::spawn_app;
+use uuid::Uuid;
+
+fn unique_suffix() -> String {
+    Uuid::new_v4().to_string()[..8].to_string()
+}
 
 #[tokio::test]
 #[ignore] // requires `just up`
@@ -14,16 +19,17 @@ async fn ingest_search_chat_journey() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.txt");
 
     let client = reqwest::Client::new();
-    let collection = "test-e2e-collection";
-    let tenant = "test-e2e";
+    let suffix = unique_suffix();
+    let collection = format!("test-e2e-coll-{suffix}");
+    let tenant = format!("test-e2e-{suffix}");
 
     // --- Step 1: Ingest ---
     let resp = client
         .post(format!("{}/ingest", server.base_url()))
-        .header("x-tenant", tenant)
+        .header("x-tenant", &tenant)
         .json(&serde_json::json!({
             "paths": [fixture.to_str().unwrap()],
-            "collection": collection
+            "collection": &collection
         }))
         .send()
         .await
@@ -33,15 +39,15 @@ async fn ingest_search_chat_journey() {
     // Verify x-request-id is present on response.
     assert!(resp.headers().get("x-request-id").is_some());
     // Verify x-tenant is echoed.
-    assert_eq!(resp.headers().get("x-tenant").and_then(|v| v.to_str().ok()), Some(tenant));
+    assert_eq!(resp.headers().get("x-tenant").and_then(|v| v.to_str().ok()), Some(tenant.as_str()));
 
     // --- Step 2: Search ---
     let resp = client
         .post(format!("{}/search/hybrid", server.base_url()))
-        .header("x-tenant", tenant)
+        .header("x-tenant", &tenant)
         .json(&serde_json::json!({
             "query": "sample document",
-            "collection": collection
+            "collection": &collection
         }))
         .send()
         .await
@@ -58,10 +64,10 @@ async fn ingest_search_chat_journey() {
     // --- Step 3: Chat ---
     let resp = client
         .post(format!("{}/chat", server.base_url()))
-        .header("x-tenant", tenant)
+        .header("x-tenant", &tenant)
         .json(&serde_json::json!({
             "query": "What is in the document?",
-            "collection": collection
+            "collection": &collection
         }))
         .send()
         .await

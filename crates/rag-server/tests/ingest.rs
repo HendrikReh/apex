@@ -3,6 +3,11 @@
 mod common;
 
 use test_support::spawn_app;
+use uuid::Uuid;
+
+fn unique_suffix() -> String {
+    Uuid::new_v4().to_string()[..8].to_string()
+}
 
 #[tokio::test]
 #[ignore] // requires `just up`
@@ -13,13 +18,16 @@ async fn ingest_paths_returns_counts() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.txt");
 
+    let tenant = format!("test-ingest-{}", unique_suffix());
+    let collection = format!("test-ingest-coll-{}", unique_suffix());
+
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("{}/ingest", server.base_url()))
-        .header("x-tenant", "test-ingest")
+        .header("x-tenant", &tenant)
         .json(&serde_json::json!({
             "paths": [fixture.to_str().unwrap()],
-            "collection": "test-ingest-collection"
+            "collection": collection
         }))
         .send()
         .await
@@ -41,6 +49,9 @@ async fn ingest_upload_returns_counts() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.txt");
     let file_bytes = std::fs::read(&fixture).expect("read fixture");
 
+    let tenant = format!("test-upload-{}", unique_suffix());
+    let collection = format!("test-upload-coll-{}", unique_suffix());
+
     let form = reqwest::multipart::Form::new()
         .part(
             "file",
@@ -49,12 +60,12 @@ async fn ingest_upload_returns_counts() {
                 .mime_str("text/plain")
                 .expect("mime"),
         )
-        .text("collection", "test-upload-collection");
+        .text("collection", collection.clone());
 
     let client = reqwest::Client::new();
     let resp = client
         .post(format!("{}/ingest/upload", server.base_url()))
-        .header("x-tenant", "test-upload")
+        .header("x-tenant", &tenant)
         .multipart(form)
         .send()
         .await

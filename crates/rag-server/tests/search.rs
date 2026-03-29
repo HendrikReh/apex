@@ -3,6 +3,11 @@
 mod common;
 
 use test_support::spawn_app;
+use uuid::Uuid;
+
+fn unique_suffix() -> String {
+    Uuid::new_v4().to_string()[..8].to_string()
+}
 
 #[tokio::test]
 #[ignore] // requires `just up`
@@ -13,15 +18,18 @@ async fn ingest_then_hybrid_search() {
     let fixture =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.txt");
 
+    let tenant = format!("test-search-{}", unique_suffix());
+    let collection = format!("test-search-coll-{}", unique_suffix());
+
     let client = reqwest::Client::new();
 
     // Ingest first.
     let resp = client
         .post(format!("{}/ingest", server.base_url()))
-        .header("x-tenant", "test-search")
+        .header("x-tenant", &tenant)
         .json(&serde_json::json!({
             "paths": [fixture.to_str().unwrap()],
-            "collection": "test-search-collection"
+            "collection": &collection
         }))
         .send()
         .await
@@ -31,10 +39,10 @@ async fn ingest_then_hybrid_search() {
     // Search.
     let resp = client
         .post(format!("{}/search/hybrid", server.base_url()))
-        .header("x-tenant", "test-search")
+        .header("x-tenant", &tenant)
         .json(&serde_json::json!({
             "query": "sample document",
-            "collection": "test-search-collection"
+            "collection": &collection
         }))
         .send()
         .await
