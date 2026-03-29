@@ -17,6 +17,11 @@ target/
 # ── Data and logs ────────────────────────────────────────────────────
 logs/*
 data/*
+!data/test/
+!data/test/**
+!data/demo/
+data/demo/*
+!data/demo/README.md
 
 # ── AI / tooling outputs ────────────────────────────────────────────
 .repoprompt
