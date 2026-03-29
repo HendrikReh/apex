@@ -13,6 +13,7 @@ pub struct IngestRequest {
     pub paths: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection: Option<String>,
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -128,7 +128,7 @@ async fn tenant_header_injected() {
     let _: IngestResponse = client
         .post_json(
             "/ingest",
-            &IngestRequest { paths: vec!["/tmp/test.txt".into()], collection: None },
+            &IngestRequest { paths: vec!["/tmp/test.txt".into()], collection: None, dry_run: false },
         )
         .await
         .unwrap();
@@ -192,6 +192,7 @@ async fn ingest_request_shape() {
         .ingest(&IngestRequest {
             paths: vec!["/data/file.pdf".into()],
             collection: Some("docs".into()),
+            dry_run: false,
         })
         .await
         .unwrap();
@@ -203,6 +204,7 @@ async fn ingest_request_shape() {
     let body: serde_json::Value = serde_json::from_str(&reqs[0].2).unwrap();
     assert_eq!(body["paths"][0], "/data/file.pdf");
     assert_eq!(body["collection"], "docs");
+    assert_eq!(body["dry_run"], false);
 }
 
 #[tokio::test]
@@ -336,7 +338,11 @@ async fn ingest_timeout_override() {
 
     // ingest() should succeed because it uses 300s per-request timeout
     let resp = client
-        .ingest(&IngestRequest { paths: vec!["/tmp/test.txt".into()], collection: None })
+        .ingest(&IngestRequest {
+            paths: vec!["/tmp/test.txt".into()],
+            collection: None,
+            dry_run: false,
+        })
         .await;
     assert!(resp.is_ok(), "ingest should succeed with 300s override: {resp:?}");
 

@@ -47,6 +47,9 @@ pub enum Command {
         paths: Vec<PathBuf>,
         #[arg(long)]
         collection: Option<String>,
+        /// Show what would be ingested without writing anything
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Search for chunks (dense, sparse, or hybrid)
     Search {
@@ -113,6 +116,17 @@ mod tests {
         // Parsing succeeds, but validation fails
         let cli = cli.expect("should parse");
         assert!(validate(&cli).is_err());
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn ingest_accepts_dry_run_flag() {
+        let cli = Cli::try_parse_from(["rag-cli", "ingest", "--dry-run", "/path"]);
+        let cli = cli.expect("--dry-run should be accepted");
+        match cli.command {
+            Command::Ingest { dry_run, .. } => assert!(dry_run),
+            _ => panic!("expected Ingest command"),
+        }
     }
 
     #[allow(clippy::disallowed_methods)]

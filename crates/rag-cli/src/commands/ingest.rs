@@ -12,20 +12,21 @@ pub async fn run(
     json: bool,
     paths: Vec<PathBuf>,
     collection: Option<String>,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
-    // Paths are for the server filesystem — no local validation.
-    // The server validates existence and accessibility.
     let req = IngestRequest {
         paths: paths.iter().map(|p| p.display().to_string()).collect(),
         collection,
+        dry_run,
     };
 
     let resp = client.ingest(&req).await?;
 
+    let prefix = if dry_run { "[dry-run] " } else { "" };
     print_or_json(writer, json, &resp, |resp, w| {
         writeln!(
             w,
-            "Ingested {} documents, {} chunks, {} skipped",
+            "{prefix}Ingested {} documents, {} chunks, {} skipped",
             resp.documents, resp.chunks, resp.skipped
         )?;
         for f in &resp.failures {
@@ -83,7 +84,7 @@ mod tests {
             response: IngestResponse { documents: 3, chunks: 10, skipped: 1, failures: vec![] },
         };
         let mut buf = Vec::new();
-        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None).await.unwrap();
+        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, false).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Ingested 3 documents, 10 chunks, 1 skipped"));
     }
@@ -103,7 +104,7 @@ mod tests {
             },
         };
         let mut buf = Vec::new();
-        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None).await.unwrap();
+        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, false).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("WARN: /tmp/bad.txt — parse error"));
     }
@@ -115,7 +116,7 @@ mod tests {
             response: IngestResponse { documents: 1, chunks: 2, skipped: 0, failures: vec![] },
         };
         let mut buf = Vec::new();
-        run(&client, &mut buf, true, vec![PathBuf::from("/data/docs")], None).await.unwrap();
+        run(&client, &mut buf, true, vec![PathBuf::from("/data/docs")], None, false).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed["documents"], 1);
     }
@@ -128,8 +129,26 @@ mod tests {
         };
         let mut buf = Vec::new();
         // Relative paths should be passed through to the server as-is
-        run(&client, &mut buf, false, vec![PathBuf::from("data/docs")], None).await.unwrap();
+        run(&client, &mut buf, false, vec![PathBuf::from("data/docs")], None, false).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Ingested 1 documents"));
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[tokio::test]
+    async fn ingest_dry_run_prefixes_output() {
+        let client = FakeIngestClient {
+            response: IngestResponse { documents: 5, chunks: 0, skipped: 2, failures: vec![] },
+        };
+        let mut buf = Vec::new();
+        run(&client, &mut buf, false, vec![PathBuf::from("/data/docs")], None, true)
+            .await
+            .unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(
+            output.starts_with("[dry-run]"),
+            "dry-run output should be prefixed, got: {output}"
+        );
+        assert!(output.contains("5 documents"));
     }
 }

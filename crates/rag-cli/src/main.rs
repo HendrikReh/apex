@@ -24,8 +24,8 @@ async fn run(cli: cli::Cli) -> anyhow::Result<()> {
     let mut stdout = std::io::stdout().lock();
 
     match cli.command {
-        cli::Command::Ingest { paths, collection } => {
-            commands::ingest::run(&client, &mut stdout, cli.json, paths, collection).await
+        cli::Command::Ingest { paths, collection, dry_run } => {
+            commands::ingest::run(&client, &mut stdout, cli.json, paths, collection, dry_run).await
         }
         cli::Command::Search { query, collection, mode, top_k } => {
             commands::search::run(&client, &mut stdout, cli.json, query, collection, mode, top_k)
