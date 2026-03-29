@@ -102,4 +102,48 @@ mod tests {
         let result = print_or_json(&mut BrokenWriter, true, &value, |_v, _w| Ok(()));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn render_error_http_status() {
+        let ce = rag_client::ClientError::HttpStatus {
+            status: 400,
+            url: "http://localhost/chat".into(),
+            body: "query must not be empty".into(),
+        };
+        let err: anyhow::Error = ce.into();
+        let msg = super::render_error(&err);
+        assert_eq!(msg, "Error: server returned 400 — query must not be empty");
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn render_error_transport() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reqwest_err = rt.block_on(async {
+            reqwest::Client::new()
+                .get("http://127.0.0.1:1")
+                .send()
+                .await
+                .unwrap_err()
+        });
+        let ce = rag_client::ClientError::Transport(reqwest_err);
+        let err: anyhow::Error = ce.into();
+        let msg = super::render_error(&err);
+        assert!(msg.starts_with("Error: connection failed — "), "got: {msg}");
+    }
+
+    #[test]
+    fn render_error_validation() {
+        let ce = rag_client::ClientError::Validation("collection must not be empty".into());
+        let err: anyhow::Error = ce.into();
+        let msg = super::render_error(&err);
+        assert_eq!(msg, "Error: collection must not be empty");
+    }
+
+    #[test]
+    fn render_error_non_client() {
+        let err = anyhow::anyhow!("something else went wrong");
+        let msg = super::render_error(&err);
+        assert_eq!(msg, "Error: something else went wrong");
+    }
 }
