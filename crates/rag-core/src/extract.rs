@@ -293,6 +293,74 @@ fn extract_utf8_passthrough(content: &[u8], format_name: &str) -> Result<Extract
     Ok(ExtractionResult { text })
 }
 
+// ---------------------------------------------------------------------------
+// OCR decision helpers
+// ---------------------------------------------------------------------------
+
+/// Outcome of the per-page OCR decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PageOcrDecision {
+    /// Page has native text and force is off -- use PDFium output.
+    UseNativeText,
+    /// Page needs OCR and Tesseract is available -- render + OCR.
+    PerformOcr,
+    /// Page needs OCR but Tesseract is unavailable -- increment
+    /// skip counter and use native (empty) text.
+    SkipUnavailable,
+}
+
+/// Determine the OCR outcome for a single page.
+///
+/// Note: the `force + !ocr_available` hard-error case is handled
+/// before the page loop (early bail). This function is only called
+/// when that combination is impossible, so `SkipUnavailable` only
+/// arises for automatic (non-forced) OCR triggers.
+fn page_ocr_decision(
+    force: bool,
+    native_text: &str,
+    ocr_available: bool,
+) -> PageOcrDecision {
+    let needs_ocr = force || native_text.trim().is_empty();
+    if !needs_ocr {
+        PageOcrDecision::UseNativeText
+    } else if ocr_available {
+        PageOcrDecision::PerformOcr
+    } else {
+        PageOcrDecision::SkipUnavailable
+    }
+}
+
+/// Pre-loop OCR settings resolved from sidecar options + config defaults.
+struct ResolvedOcrSettings {
+    force: bool,
+    language: String,
+    timeout: std::time::Duration,
+}
+
+/// Resolve effective OCR settings once before the page loop.
+fn resolve_ocr_settings(
+    options: Option<&OcrOptions>,
+    default_language: &str,
+    default_timeout_secs: u64,
+) -> ResolvedOcrSettings {
+    let opts = options.cloned().unwrap_or_default();
+
+    let language = if opts.language_hints.is_empty() {
+        default_language.to_string()
+    } else {
+        opts.language_hints.join("+")
+    };
+
+    let force = opts.force;
+    let timeout_override = opts.timeout_secs;
+
+    let timeout = std::time::Duration::from_secs(
+        timeout_override.unwrap_or(default_timeout_secs),
+    );
+
+    ResolvedOcrSettings { force, language, timeout }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +482,86 @@ mod tests {
             checksum("hello world"),
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
+    }
+
+    // --- page_ocr_decision tests ---
+
+    #[test]
+    fn page_ocr_decision_native_text_no_force() {
+        assert_eq!(
+            page_ocr_decision(false, "content", true),
+            PageOcrDecision::UseNativeText,
+        );
+        assert_eq!(
+            page_ocr_decision(false, "content", false),
+            PageOcrDecision::UseNativeText,
+        );
+    }
+
+    #[test]
+    fn page_ocr_decision_empty_text_ocr_available() {
+        assert_eq!(
+            page_ocr_decision(false, "", true),
+            PageOcrDecision::PerformOcr,
+        );
+        assert_eq!(
+            page_ocr_decision(false, "   ", true),
+            PageOcrDecision::PerformOcr,
+        );
+        assert_eq!(
+            page_ocr_decision(false, "\n\t ", true),
+            PageOcrDecision::PerformOcr,
+        );
+    }
+
+    #[test]
+    fn page_ocr_decision_empty_text_ocr_unavailable() {
+        assert_eq!(
+            page_ocr_decision(false, "", false),
+            PageOcrDecision::SkipUnavailable,
+        );
+    }
+
+    #[test]
+    fn page_ocr_decision_force_overrides_native_text() {
+        assert_eq!(
+            page_ocr_decision(true, "has content", true),
+            PageOcrDecision::PerformOcr,
+        );
+    }
+
+    // --- resolve_ocr_settings tests ---
+
+    #[test]
+    fn resolve_ocr_settings_uses_defaults() {
+        let resolved = resolve_ocr_settings(None, "eng", 30);
+        assert!(!resolved.force);
+        assert_eq!(resolved.language, "eng");
+        assert_eq!(resolved.timeout.as_secs(), 30);
+    }
+
+    #[test]
+    fn resolve_ocr_settings_joins_language_hints() {
+        let opts = OcrOptions {
+            force: true,
+            language_hints: vec!["eng".into(), "deu".into()],
+            timeout_secs: Some(60),
+        };
+        let resolved = resolve_ocr_settings(Some(&opts), "fra", 30);
+        assert!(resolved.force);
+        assert_eq!(resolved.language, "eng+deu");
+        assert_eq!(resolved.timeout.as_secs(), 60);
+    }
+
+    #[test]
+    fn resolve_ocr_settings_empty_hints_uses_default_language() {
+        let opts = OcrOptions {
+            force: false,
+            language_hints: vec![],
+            timeout_secs: None,
+        };
+        let resolved = resolve_ocr_settings(Some(&opts), "fra", 45);
+        assert_eq!(resolved.language, "fra");
+        assert_eq!(resolved.timeout.as_secs(), 45);
     }
 }

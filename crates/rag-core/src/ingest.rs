@@ -273,9 +273,21 @@ impl IngestService {
             .await
             .with_context(|| format!("reading file {}", req.path.display()))?;
 
+        let extraction_options = extract::ExtractionOptions {
+            ocr: sidecar
+                .as_ref()
+                .and_then(|s| s.ingestion.as_ref())
+                .and_then(|i| i.ocr.as_ref())
+                .map(|ocr| extract::OcrOptions {
+                    force: ocr.force,
+                    language_hints: ocr.language_hints.clone(),
+                    timeout_secs: ocr.timeout_secs,
+                }),
+        };
+
         let result = self
             .extractors
-            .extract(file_type, &content, &extract::ExtractionOptions::default())
+            .extract(file_type, &content, &extraction_options)
             .await
             .with_context(|| format!("extracting text from {}", req.path.display()))?;
 
