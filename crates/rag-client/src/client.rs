@@ -35,7 +35,13 @@ impl TenantApiClient {
         tenant: &str,
         timeout: Duration,
     ) -> Result<Self, ClientError> {
-        let url = Url::parse(base_url)
+        // Ensure trailing slash so Url::join treats paths as relative to the base.
+        let normalized = if base_url.ends_with('/') {
+            base_url.to_string()
+        } else {
+            format!("{base_url}/")
+        };
+        let url = Url::parse(&normalized)
             .map_err(|e| ClientError::InvalidBaseUrl(format!("{base_url}: {e}")))?;
 
         let tenant_id = TenantId::new(tenant).map_err(ClientError::InvalidTenant)?;
@@ -48,9 +54,12 @@ impl TenantApiClient {
 
     /// Build a request with the tenant header and resolved URL.
     fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, ClientError> {
+        // Strip leading slash so Url::join preserves the base path prefix
+        // (e.g., base "https://host/rag/" + "health" → "https://host/rag/health")
+        let relative = path.strip_prefix('/').unwrap_or(path);
         let url = self
             .base_url
-            .join(path)
+            .join(relative)
             .map_err(|e| ClientError::InvalidBaseUrl(format!("cannot join path '{path}': {e}")))?;
 
         Ok(self.client.request(method, url).header(TENANT_HEADER, self.tenant.as_str()))
@@ -234,3 +243,34 @@ macro_rules! impl_api_client {
 }
 
 impl_api_client!(TenantApiClient);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn request_preserves_base_path_prefix() {
+        let client = TenantApiClient::new("http://host/rag/v1", "default").unwrap();
+        let req = client.request(Method::GET, "/health").unwrap();
+        let url = req.build().unwrap().url().to_string();
+        assert_eq!(url, "http://host/rag/v1/health");
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn request_works_without_path_prefix() {
+        let client = TenantApiClient::new("http://host", "default").unwrap();
+        let req = client.request(Method::GET, "/health").unwrap();
+        let url = req.build().unwrap().url().to_string();
+        assert_eq!(url, "http://host/health");
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn base_url_trailing_slash_normalized() {
+        let with_slash = TenantApiClient::new("http://host/api/", "default").unwrap();
+        let without_slash = TenantApiClient::new("http://host/api", "default").unwrap();
+        assert_eq!(with_slash.base_url, without_slash.base_url);
+    }
+}

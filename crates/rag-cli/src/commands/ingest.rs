@@ -13,18 +13,17 @@ pub async fn run(
     paths: Vec<PathBuf>,
     collection: Option<String>,
 ) -> anyhow::Result<()> {
-    // Validate paths before sending
+    // Canonicalize paths (resolves relative paths and symlinks, also verifies existence)
+    let mut resolved = Vec::with_capacity(paths.len());
     for p in &paths {
-        if !p.is_absolute() {
-            anyhow::bail!("all paths must be absolute, got: {}", p.display());
-        }
-        if !p.exists() {
-            anyhow::bail!("path does not exist: {}", p.display());
-        }
+        let canonical = p
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("path does not exist or is inaccessible: {} — {e}", p.display()))?;
+        resolved.push(canonical);
     }
 
     let req = IngestRequest {
-        paths: paths.iter().map(|p| p.display().to_string()).collect(),
+        paths: resolved.iter().map(|p| p.display().to_string()).collect(),
         collection,
     };
 
@@ -139,15 +138,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingest_rejects_relative_path() {
+    async fn ingest_rejects_nonexistent_relative_path() {
         let client = FakeIngestClient {
             response: IngestResponse { documents: 0, chunks: 0, skipped: 0, failures: vec![] },
         };
         let mut buf = Vec::new();
         let result =
-            run(&client, &mut buf, false, vec![PathBuf::from("relative/path")], None).await;
+            run(&client, &mut buf, false, vec![PathBuf::from("relative/nonexistent")], None).await;
         assert!(result.is_err());
-        assert!(result.expect_err("should fail").to_string().contains("absolute"));
+        assert!(result.expect_err("should fail").to_string().contains("does not exist"));
+    }
+
+    #[allow(clippy::disallowed_methods)]
+    #[tokio::test]
+    async fn ingest_canonicalizes_relative_path() {
+        let tmp = temp_file();
+        // Get the directory containing the temp file and construct a relative-looking absolute path
+        let abs_path = tmp.path().to_path_buf();
+        let client = FakeIngestClient {
+            response: IngestResponse { documents: 1, chunks: 2, skipped: 0, failures: vec![] },
+        };
+        let mut buf = Vec::new();
+        // This should succeed — canonicalize resolves the path
+        run(&client, &mut buf, false, vec![abs_path], None).await.unwrap();
+        let output = String::from_utf8(buf).unwrap();
+        assert!(output.contains("Ingested 1 documents"));
     }
 
     #[tokio::test]
