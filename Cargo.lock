@@ -2037,19 +2037,31 @@ dependencies = [
 name = "rag-cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "rag-client",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
 name = "rag-client"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "percent-encoding",
  "reqwest",
  "serde",
  "serde_json",
+ "test-support",
  "thiserror 2.0.18",
+ "tokio",
+ "trait-variant",
+ "uuid",
 ]
 
 [[package]]
@@ -3343,6 +3355,17 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-log",
+]
+
+[[package]]
+name = "trait-variant"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70977707304198400eb4835a78f6a9f928bf41bba420deb8fdb175cd965d77a7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
