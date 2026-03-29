@@ -72,10 +72,8 @@ impl ExtractorRegistry {
     /// Construct the default registry, optionally including PDF support
     /// when `config.pdfium_library_path` is set.
     pub fn with_defaults(config: &crate::config::AppConfig) -> Result<Self> {
-        let mut extractors: Vec<Box<dyn FormatExtractor>> = vec![
-            Box::new(MarkdownExtractor),
-            Box::new(TextExtractor),
-        ];
+        let mut extractors: Vec<Box<dyn FormatExtractor>> =
+            vec![Box::new(MarkdownExtractor), Box::new(TextExtractor)];
 
         if let Some(ref path) = config.pdfium_library_path {
             let pdf = PdfExtractor::new(path.clone()).context("configuring PDF extractor")?;
@@ -154,14 +152,9 @@ impl PdfExtractor {
         // platform-default filename from a directory and would ignore
         // custom filenames, symlinks, or nonstandard install locations.
         drop(pdfium_render::prelude::Pdfium::new(
-            pdfium_render::prelude::Pdfium::bind_to_library(
-                library_path.to_str().with_context(|| {
-                    format!(
-                        "pdfium_library_path is not valid UTF-8: {}",
-                        library_path.display()
-                    )
-                })?,
-            )
+            pdfium_render::prelude::Pdfium::bind_to_library(library_path.to_str().with_context(
+                || format!("pdfium_library_path is not valid UTF-8: {}", library_path.display()),
+            )?)
             .with_context(|| {
                 format!(
                     "failed to load PDFium native library from {}: \
@@ -215,9 +208,7 @@ impl FormatExtractor for PdfExtractor {
                     pages.push(text);
                 }
 
-                Ok(ExtractionResult {
-                    text: pages.join("\u{000C}"),
-                })
+                Ok(ExtractionResult { text: pages.join("\u{000C}") })
             })
             .await
             .context("PDF extraction task panicked")?
@@ -239,11 +230,8 @@ mod tests {
 
     /// Build a test registry with text + markdown extractors (no PDF — no native lib in CI).
     fn test_registry() -> ExtractorRegistry {
-        ExtractorRegistry::new(vec![
-            Box::new(MarkdownExtractor),
-            Box::new(TextExtractor),
-        ])
-        .expect("test registry should build")
+        ExtractorRegistry::new(vec![Box::new(MarkdownExtractor), Box::new(TextExtractor)])
+            .expect("test registry should build")
     }
 
     #[tokio::test]
@@ -317,10 +305,7 @@ mod tests {
             msg.contains("pdfium_library_path"),
             "error should name the missing config option, got: {msg}"
         );
-        assert!(
-            msg.contains("PDFIUM_LIBRARY_PATH"),
-            "error should name the env var, got: {msg}"
-        );
+        assert!(msg.contains("PDFIUM_LIBRARY_PATH"), "error should name the env var, got: {msg}");
     }
 
     #[tokio::test]

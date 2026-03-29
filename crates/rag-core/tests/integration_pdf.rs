@@ -28,10 +28,7 @@ async fn pdf_extractor_extracts_two_pages_with_formfeed_separator() {
         .expect("reading test fixture PDF");
 
     use rag_core::extract::FormatExtractor;
-    let result = extractor
-        .extract(&pdf_bytes)
-        .await
-        .expect("PDF extraction should succeed");
+    let result = extractor.extract(&pdf_bytes).await.expect("PDF extraction should succeed");
 
     // Verify form-feed separator between pages
     let pages: Vec<&str> = result.text.split('\u{000C}').collect();
@@ -62,10 +59,7 @@ fn pdf_extractor_supported_types() {
         rag_core::extract::PdfExtractor::new(lib_path).expect("PdfExtractor::new should succeed");
 
     use rag_core::extract::FormatExtractor;
-    assert_eq!(
-        extractor.supported_types(),
-        &[rag_core::extract::FileType::Pdf]
-    );
+    assert_eq!(extractor.supported_types(), &[rag_core::extract::FileType::Pdf]);
 }
 
 #[tokio::test]
