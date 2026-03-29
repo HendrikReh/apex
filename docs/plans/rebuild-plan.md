@@ -614,7 +614,7 @@ At the end of Phase 8, the following user journey works:
 ```bash
 just up                                              # Start Postgres + Qdrant
 just run-server-mock                                 # Start server (mock embeddings)
-rag-cli ingest --dir ./test-data/ --collection demo  # Ingest PDF/MD/TXT files
+rag-cli ingest --dir ./data/demo --collection demo  # Ingest PDF/MD/TXT files
 rag-cli chat --query "What is X?" --collection demo  # Get context-grounded response
 curl localhost:8080/search -d '{"query":"X","collection":"demo"}' -H 'X-Tenant: default'
 ```
