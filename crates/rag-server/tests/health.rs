@@ -35,6 +35,10 @@ async fn readiness_returns_checks() {
 }
 
 /// GET /readiness returns 503 when a dependency is unreachable.
+///
+/// **Destructive**: stops/restarts the Qdrant container.
+/// Must not run in parallel with other readiness tests.
+/// Run with: `cargo test -p rag-server --test health -- --ignored --test-threads=1`
 #[tokio::test]
 #[ignore] // requires `just up`; stops and restarts Qdrant container
 async fn readiness_degrades_gracefully() {
@@ -48,6 +52,19 @@ async fn readiness_degrades_gracefully() {
 
     // Restart Qdrant so other tests aren't affected.
     let _ = std::process::Command::new("docker").args(["compose", "start", "qdrant"]).status();
+
+    // Wait for Qdrant to become responsive again before returning,
+    // so parallel tests in other binaries aren't affected.
+    for _ in 0..30 {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if reqwest::get(format!("{}/readiness", server.base_url()))
+            .await
+            .map(|r| r.status() == 200)
+            .unwrap_or(false)
+        {
+            break;
+        }
+    }
 
     assert_eq!(resp.status(), 503);
     let body: serde_json::Value = resp.json().await.expect("json");

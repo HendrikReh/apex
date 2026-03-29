@@ -11,6 +11,15 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
     // SAFETY: test-only env manipulation; each integration test runs in its
     // own process so there are no data races with other threads reading env.
     unsafe { std::env::set_var("RAG_EMBEDDER", "mock") };
+
+    // Anchor the prompt template to an absolute path so tests work regardless
+    // of the working directory Cargo chooses.
+    let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root");
+    let template_path = workspace_root.join("config/prompts/chat_system.hbs");
+    unsafe { std::env::set_var("LLM_PROMPT_TEMPLATE_PATH", &template_path) };
     let config = AppConfig::from_env().expect("test config");
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
