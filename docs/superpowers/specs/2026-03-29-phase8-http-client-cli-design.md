@@ -4,7 +4,7 @@
 
 ## Goal
 
-Provide a Rust HTTP client library (`rag-client`) and CLI binary (`rag-cli`) that exercise the full Apex RAG MVP pipeline: ingest documents, search, and chat — all via the HTTP API built in Phase 7.
+Provide a Rust HTTP client library (`rag-client`) and CLI binary (`rag-cli`) for the Apex RAG server API built in Phase 7. The client covers all 9 endpoints. The CLI exposes 4 subcommands for the primary user workflows: ingest, search, chat, and collection-stats.
 
 ## Architecture
 
@@ -16,7 +16,7 @@ rag-cli -> rag-client -> reqwest
 ```
 
 `rag-client` depends only on: `reqwest`, `serde`, `serde_json`, `thiserror`, `uuid`, `trait-variant`.
-`rag-cli` depends on: `rag-client`, `clap`, `tokio`, `serde`, `serde_json`, `uuid`.
+`rag-cli` depends on: `rag-client`, `clap`, `tokio`, `anyhow`, `serde`, `serde_json`, `uuid`.
 
 ## Decisions
 
@@ -314,6 +314,7 @@ crates/rag-cli/src/
 │   ├── mod.rs
 │   ├── chat.rs          # chat subcommand handler
 │   ├── ingest.rs        # ingest subcommand handler
+│   ├── search.rs        # search subcommand handler
 │   └── collections.rs   # collection-stats subcommand handler
 └── output.rs            # shared output formatting (human vs --json)
 ```
@@ -349,8 +350,9 @@ pub enum Command {
     Chat {
         #[arg(long)]
         query: String,
+        /// Required for first message; omit when resuming via --conversation-id
         #[arg(long)]
-        collection: String,
+        collection: Option<String>,
         #[arg(long)]
         interactive: bool,
         #[arg(long)]
@@ -364,11 +366,30 @@ pub enum Command {
         #[arg(long)]
         collection: Option<String>,
     },
+    /// Search for chunks (dense, sparse, or hybrid)
+    Search {
+        #[arg(long)]
+        query: String,
+        #[arg(long)]
+        collection: String,
+        /// Search mode: dense, sparse, or hybrid (default: hybrid)
+        #[arg(long, value_enum, default_value_t = SearchMode::Hybrid)]
+        mode: SearchMode,
+        #[arg(long)]
+        top_k: Option<u64>,
+    },
     /// Show collection statistics
     CollectionStats {
         #[arg(long)]
         collection: String,
     },
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum SearchMode {
+    Dense,
+    Sparse,
+    Hybrid,
 }
 ```
 
@@ -376,12 +397,17 @@ pub enum Command {
 
 - `--interactive --json` is rejected at CLI validation before any network call
 - Ingest requires at least one path (Clap `required = true`)
+- Chat requires `--collection` when `--conversation-id` is not provided (validated in handler, not Clap — both are optional at the parse level)
 
 ---
 
 ## Section 6: Command Handlers
 
 All handlers follow: validate CLI inputs -> build client request -> call typed method -> format output.
+
+### Error model
+
+`rag-cli` uses `anyhow::Result<()>` throughout. `ClientError` converts to `anyhow::Error` via `Into`. Write failures, validation errors, and client errors all propagate as `anyhow::Error`. The `main()` function catches the top-level error and renders it to stderr with the appropriate format (see Error rendering below).
 
 ### output.rs
 
@@ -390,8 +416,8 @@ pub fn print_or_json<W: Write, T: Serialize>(
     writer: &mut W,
     json_mode: bool,
     value: &T,
-    human_fn: impl FnOnce(&T, &mut W) -> Result<()>,
-) -> Result<()>
+    human_fn: impl FnOnce(&T, &mut W) -> anyhow::Result<()>,
+) -> anyhow::Result<()>
 ```
 
 If `json_mode`, serialize `value` to `writer`. Otherwise call `human_fn`. Production passes `io::stdout().lock()`, tests pass `Vec<u8>`.
@@ -410,7 +436,8 @@ If `json_mode`, serialize `value` to `writer`. Otherwise call `human_fn`. Produc
 ### Chat handler
 
 **Single-shot (default):**
-- Call `client.chat(&req)` with query + collection (+ optional conversation_id)
+- Validate: `--collection` is required unless `--conversation-id` is provided
+- Call `client.chat(&req)` with query + optional collection + optional conversation_id
 - Human output:
   ```
   The document discusses...
@@ -429,6 +456,20 @@ If `json_mode`, serialize `value` to `writer`. Otherwise call `human_fn`. Produc
 3. Loop: prompt `> ` -> read stdin line -> send with `conversation_id` (no collection) -> print answer
 4. Exit on EOF or empty line
 5. `--interactive --json` is rejected at CLI validation
+
+### Search handler
+
+- Dispatch to `client.search_dense()`, `client.search_sparse()`, or `client.search_hybrid()` based on `--mode`
+- For dense/sparse: build `SearchRequest` with query, collection, optional top_k
+- For hybrid: build `HybridSearchRequest` (top_k maps to both dense_top_k and sparse_top_k)
+- Human output:
+  ```
+  [1] (score: 0.92) chunk-abc — doc-123, chunk 2
+      First 80 chars of text...
+  [2] (score: 0.87) chunk-def — doc-456, chunk 0
+      First 80 chars of text...
+  ```
+- JSON output: serialize full `SearchResponse` or `HybridSearchResponse`
 
 ### Collection-stats handler
 
@@ -475,6 +516,11 @@ Use `FakeClient` implementing `ApiClient` with canned responses and captured cal
 | `ingest_json_output` | Valid JSON matching `IngestResponse` shape |
 | `chat_single_shot` | Answer + citations + metadata in sink |
 | `chat_conversation_id_threaded` | Second call carries `conversation_id` from first response |
+| `chat_requires_collection_without_conversation_id` | Error when neither `--collection` nor `--conversation-id` provided |
+| `chat_allows_no_collection_with_conversation_id` | Succeeds with `--conversation-id` and no `--collection` |
+| `search_hybrid_human_output` | Numbered results with scores and text preview |
+| `search_dense_dispatches_correctly` | `--mode dense` calls `search_dense()` not `search_hybrid()` |
+| `search_json_output` | Valid JSON matching `SearchResponse` / `HybridSearchResponse` |
 | `collection_stats_human_output` | Formatted table output |
 | `collection_stats_json_output` | Valid JSON matching `CollectionStatsResponse` |
 | `client_error_http_status_output` | `Error: server returned 400 — ...` format |
@@ -531,8 +577,11 @@ Knowledge units already seeded from Phases 1-7:
 ## Exit Criteria
 
 - `rag-cli ingest data/ --collection test` ingests files via server API
+- `rag-cli search --query "..." --collection test` returns ranked results
+- `rag-cli search --query "..." --collection test --mode dense` uses dense search
 - `rag-cli chat --query "..." --collection test` returns a grounded response
 - `rag-cli chat --query "..." --collection test --interactive` enters REPL mode
+- `rag-cli chat --query "..." --conversation-id <uuid>` resumes without collection
 - `rag-cli collection-stats --collection test` shows stats
 - `--json` flag produces machine-readable output on all subcommands
 - All rag-client tests pass against local spawn_app server
