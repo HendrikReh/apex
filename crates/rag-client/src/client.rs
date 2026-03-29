@@ -1,0 +1,217 @@
+//! HTTP client with automatic tenant header injection.
+
+use std::time::Duration;
+
+use reqwest::header::{HeaderValue, CONTENT_TYPE};
+use reqwest::{Method, RequestBuilder, Response, Url};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use crate::error::ClientError;
+use crate::tenant_id::TenantId;
+
+/// Default request timeout.
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Tenant header name.
+const TENANT_HEADER: &str = "x-tenant";
+
+/// HTTP client that injects an `x-tenant` header on every request.
+#[derive(Debug)]
+pub struct TenantApiClient {
+    client: reqwest::Client,
+    base_url: Url,
+    tenant: TenantId,
+}
+
+impl TenantApiClient {
+    /// Create a new client with the default 60-second timeout.
+    pub fn new(base_url: &str, tenant: &str) -> Result<Self, ClientError> {
+        Self::with_timeout(base_url, tenant, DEFAULT_TIMEOUT)
+    }
+
+    /// Create a new client with a custom timeout.
+    pub fn with_timeout(
+        base_url: &str,
+        tenant: &str,
+        timeout: Duration,
+    ) -> Result<Self, ClientError> {
+        let url = Url::parse(base_url)
+            .map_err(|e| ClientError::InvalidBaseUrl(format!("{base_url}: {e}")))?;
+
+        let tenant_id = TenantId::new(tenant).map_err(ClientError::InvalidTenant)?;
+
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .map_err(ClientError::Transport)?;
+
+        Ok(Self {
+            client,
+            base_url: url,
+            tenant: tenant_id,
+        })
+    }
+
+    /// Build a request with the tenant header and resolved URL.
+    fn request(&self, method: Method, path: &str) -> Result<RequestBuilder, ClientError> {
+        let url = self.base_url.join(path).map_err(|e| {
+            ClientError::InvalidBaseUrl(format!("cannot join path '{path}': {e}"))
+        })?;
+
+        Ok(self
+            .client
+            .request(method, url)
+            .header(TENANT_HEADER, self.tenant.as_str()))
+    }
+
+    /// Check the response status and deserialize the body as JSON.
+    async fn into_success<T: DeserializeOwned>(response: Response) -> Result<T, ClientError> {
+        let status = response.status();
+        let url = response.url().to_string();
+
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(ClientError::HttpStatus {
+                status: status.as_u16(),
+                url,
+                body,
+            });
+        }
+
+        response.json::<T>().await.map_err(ClientError::Decode)
+    }
+
+    /// Send a GET request and deserialize the JSON response.
+    pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T, ClientError> {
+        let response = self.request(Method::GET, path)?.send().await?;
+        Self::into_success(response).await
+    }
+
+    /// Send a GET request and return the raw response (2xx only).
+    pub async fn get_response(&self, path: &str) -> Result<Response, ClientError> {
+        let response = self.request(Method::GET, path)?.send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let url = response.url().to_string();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ClientError::HttpStatus {
+                status: status.as_u16(),
+                url,
+                body,
+            });
+        }
+        Ok(response)
+    }
+
+    /// Send a POST request with a JSON body and deserialize the response.
+    pub async fn post_json<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, ClientError> {
+        let response = self
+            .request(Method::POST, path)?
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(body)
+            .send()
+            .await?;
+        Self::into_success(response).await
+    }
+
+    /// Send a POST request with a per-request timeout override.
+    pub async fn post_json_with_timeout<B: Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T, ClientError> {
+        let response = self
+            .request(Method::POST, path)?
+            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
+            .json(body)
+            .timeout(timeout)
+            .send()
+            .await?;
+        Self::into_success(response).await
+    }
+
+    // ── Typed convenience methods ───────────────────────────────────────────
+
+    /// Check server liveness. Returns `Ok(())` if the server responds with "ok".
+    pub async fn health(&self) -> Result<(), ClientError> {
+        let response = self.get_response("/health").await?;
+        let body = response.text().await.map_err(ClientError::Decode)?;
+        if body.trim() == "ok" {
+            Ok(())
+        } else {
+            Err(ClientError::Validation(format!(
+                "unexpected health response: {body}"
+            )))
+        }
+    }
+
+    /// Check server readiness (Postgres + Qdrant).
+    pub async fn readiness(&self) -> Result<crate::types::ReadinessResponse, ClientError> {
+        self.get_json("/readiness").await
+    }
+
+    /// Ingest files/directories. Uses a 300-second per-request timeout.
+    pub async fn ingest(
+        &self,
+        req: &crate::types::IngestRequest,
+    ) -> Result<crate::types::IngestResponse, ClientError> {
+        self.post_json_with_timeout("/ingest", req, Duration::from_secs(300))
+            .await
+    }
+
+    /// Dense vector search.
+    pub async fn search_dense(
+        &self,
+        req: &crate::types::SearchRequest,
+    ) -> Result<crate::types::SearchResponse, ClientError> {
+        self.post_json("/search/dense", req).await
+    }
+
+    /// Sparse (BM25) search.
+    pub async fn search_sparse(
+        &self,
+        req: &crate::types::SearchRequest,
+    ) -> Result<crate::types::SearchResponse, ClientError> {
+        self.post_json("/search/sparse", req).await
+    }
+
+    /// Hybrid search (dense + sparse with RRF fusion).
+    pub async fn search_hybrid(
+        &self,
+        req: &crate::types::HybridSearchRequest,
+    ) -> Result<crate::types::HybridSearchResponse, ClientError> {
+        self.post_json("/search/hybrid", req).await
+    }
+
+    /// RAG chat.
+    pub async fn chat(
+        &self,
+        req: &crate::types::ChatRequest,
+    ) -> Result<crate::types::ChatResponse, ClientError> {
+        self.post_json("/chat", req).await
+    }
+
+    /// Fetch collection statistics. Percent-encodes the collection name.
+    pub async fn collection_stats(
+        &self,
+        collection: &str,
+    ) -> Result<crate::types::CollectionStatsResponse, ClientError> {
+        if collection.is_empty() {
+            return Err(ClientError::Validation(
+                "collection must not be empty".into(),
+            ));
+        }
+        let encoded = percent_encoding::utf8_percent_encode(
+            collection,
+            percent_encoding::NON_ALPHANUMERIC,
+        );
+        let path = format!("/collections/{encoded}/stats");
+        self.get_json(&path).await
+    }
+}
