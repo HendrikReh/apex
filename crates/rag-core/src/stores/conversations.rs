@@ -190,6 +190,79 @@ impl Stores {
         }
     }
 
+    /// Atomically insert a user + assistant message pair in a single transaction.
+    ///
+    /// Ensures both messages are persisted together — if one insert fails, neither
+    /// is committed. Validates tenant ownership on the first insert; the second
+    /// reuses the same transaction (and therefore the same tenant check).
+    pub async fn insert_chat_turn(
+        &self,
+        tenant: &str,
+        conversation_id: Uuid,
+        user_content: &str,
+        assistant_content: &str,
+    ) -> Result<(MessageRow, MessageRow)> {
+        let mut tx = self.pg_pool().begin().await.context("starting chat turn transaction")?;
+
+        let user_id = Uuid::new_v4();
+        let user_row = sqlx::query_as::<_, MessageDbRow>(
+            "INSERT INTO messages (id, conversation_id, role, content, metadata)
+             SELECT $1, c.id, $2, $3, NULL
+             FROM conversations c
+             WHERE c.id = $4 AND c.tenant = $5
+             RETURNING id, conversation_id, role, content, metadata, created_at",
+        )
+        .bind(user_id)
+        .bind(MessageRole::User.as_str())
+        .bind(user_content)
+        .bind(conversation_id)
+        .bind(tenant)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("inserting user message")?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "conversation not found for tenant: conversation_id={conversation_id}, \
+                 tenant={tenant}"
+            )
+        })?;
+
+        let assistant_id = Uuid::new_v4();
+        let assistant_row = sqlx::query_as::<_, MessageDbRow>(
+            "INSERT INTO messages (id, conversation_id, role, content, metadata)
+             VALUES ($1, $2, $3, $4, NULL)
+             RETURNING id, conversation_id, role, content, metadata, created_at",
+        )
+        .bind(assistant_id)
+        .bind(conversation_id)
+        .bind(MessageRole::Assistant.as_str())
+        .bind(assistant_content)
+        .fetch_one(&mut *tx)
+        .await
+        .context("inserting assistant message")?;
+
+        tx.commit().await.context("committing chat turn transaction")?;
+
+        let user = MessageRow {
+            id: user_row.id,
+            conversation_id: user_row.conversation_id,
+            role: MessageRole::from_db(&user_row.role)?,
+            content: user_row.content,
+            metadata: user_row.metadata,
+            created_at: user_row.created_at,
+        };
+        let assistant = MessageRow {
+            id: assistant_row.id,
+            conversation_id: assistant_row.conversation_id,
+            role: MessageRole::from_db(&assistant_row.role)?,
+            content: assistant_row.content,
+            metadata: assistant_row.metadata,
+            created_at: assistant_row.created_at,
+        };
+
+        Ok((user, assistant))
+    }
+
     /// Get the most recent N messages for a conversation, returned oldest-first.
     ///
     /// Validates `limit > 0`. Tenant is checked via join to `conversations`.

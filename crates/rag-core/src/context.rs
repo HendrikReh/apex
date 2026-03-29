@@ -66,8 +66,6 @@ pub struct ContextChunk {
 
 #[derive(Debug, Clone)]
 pub struct ContextResult {
-    /// Assembled context string ready for LLM prompt.
-    pub text: String,
     /// Structured access to surviving chunks.
     pub chunks: Vec<ContextChunk>,
     /// Top-level citation list (flattened from per-chunk citations).
@@ -197,13 +195,9 @@ impl ContextBuilder {
         let citations: Vec<Citation> =
             final_chunks.iter().filter_map(|c| c.citation.clone()).collect();
 
-        // Step 5: Assemble context string.
-        let text = final_chunks.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join("\n\n");
-
         let final_count = final_chunks.len();
 
         ContextResult {
-            text,
             chunks: final_chunks,
             citations,
             stats: ContextStats {
@@ -370,11 +364,4 @@ mod tests {
         assert_eq!(result.stats.budget_dropped, 0);
     }
 
-    #[test]
-    fn assembled_text_joins_with_double_newline() {
-        let chunks =
-            vec![fused("c1", "doc1", 0, 0.9, "first"), fused("c2", "doc2", 0, 0.8, "second")];
-        let result = ContextBuilder::new().build(chunks, &default_config());
-        assert_eq!(result.text, "first\n\nsecond");
-    }
 }

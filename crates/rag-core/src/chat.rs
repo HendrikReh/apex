@@ -182,22 +182,12 @@ impl ChatService {
             .await
             .context("LLM completion")?;
 
-        // Step 7: Persist user + assistant messages together (after LLM success
-        // to avoid orphaned user messages on failure).
+        // Step 7: Persist user + assistant messages atomically (after LLM
+        // success to avoid orphaned user messages on failure).
         self.stores
-            .insert_message(tenant, conversation_id, MessageRole::User, &request.query, None)
+            .insert_chat_turn(tenant, conversation_id, &request.query, &llm_response.text)
             .await
-            .context("persisting user message")?;
-        self.stores
-            .insert_message(
-                tenant,
-                conversation_id,
-                MessageRole::Assistant,
-                &llm_response.text,
-                None,
-            )
-            .await
-            .context("persisting assistant message")?;
+            .context("persisting chat turn")?;
 
         // Step 8: Return response.
         Ok(ChatResponse {

@@ -488,12 +488,23 @@ async fn complete_anthropic(
             .push(AnthropicMessage { role: "user".to_owned(), content: ".".to_owned() });
     }
 
+    let temperature = if request.temperature > 1.0 {
+        tracing::warn!(
+            requested = request.temperature,
+            clamped = 1.0,
+            "Anthropic max temperature is 1.0; clamping"
+        );
+        1.0
+    } else {
+        request.temperature
+    };
+
     let body = AnthropicRequest {
         model,
         max_tokens: request.max_tokens,
         system: request.system,
         messages: anthropic_messages,
-        temperature: Some(request.temperature.min(1.0)),
+        temperature: Some(temperature),
         stop_sequences: request.stop.clone(),
     };
 
