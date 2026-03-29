@@ -12,6 +12,8 @@ use crate::state::{ApiError, AppState, Ctx};
 pub struct IngestPathsRequest {
     pub paths: Vec<String>,
     pub collection: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
 }
 
 #[derive(Serialize)]
@@ -60,7 +62,7 @@ pub async fn ingest_paths(
                 path: path.clone(),
                 tenant: ctx.tenant.clone(),
                 collection_override: payload.collection.clone(),
-                dry_run: false,
+                dry_run: payload.dry_run,
             };
             match state.ingest.ingest_directory(req).await {
                 Ok(outcome) => {
@@ -81,7 +83,7 @@ pub async fn ingest_paths(
                 path: path.clone(),
                 tenant: ctx.tenant.clone(),
                 collection_override: payload.collection.clone(),
-                dry_run: false,
+                dry_run: payload.dry_run,
             };
             match state.ingest.ingest_file(req).await {
                 Ok(outcome) => {

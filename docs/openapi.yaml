@@ -313,6 +313,13 @@ components:
         collection:
           type: string
           description: Override the default collection name
+        dry_run:
+          type: boolean
+          default: false
+          description: >
+            When true, validates paths, extracts text, and checks checksums
+            without writing to Postgres or Qdrant. Chunks will always be 0
+            in dry-run mode.
 
     IngestResponse:
       type: object
