@@ -229,6 +229,13 @@ async fn dry_run_new_file_does_not_write() {
         .await
         .expect("checksum query should succeed");
     assert!(checksum.is_none(), "dry-run must not write document to Postgres");
+
+    // Verify nothing was written to Qdrant — the unique collection should not exist.
+    let qdrant_exists = stores
+        .collection_exists(&collection)
+        .await
+        .expect("collection_exists query should succeed");
+    assert!(!qdrant_exists, "dry-run must not create Qdrant collection");
 }
 ```
 
@@ -424,6 +431,7 @@ git commit -m "feat(server): accept dry_run in /ingest request"
 
 **Files:**
 - Modify: `crates/rag-client/src/types.rs:11-16`
+- Modify: `crates/rag-client/tests/client_tests.rs:131,192,339`
 - Modify: `crates/rag-cli/src/cli.rs:44-50`
 - Modify: `crates/rag-cli/src/commands/ingest.rs:9-36,79-135`
 - Modify: `crates/rag-cli/src/main.rs:27-29`
@@ -471,9 +479,46 @@ pub struct IngestRequest {
 }
 ```
 
-- [ ] **Step 4: Add `--dry-run` flag to CLI command**
+- [ ] **Step 4: Fix rag-client test construction sites**
+
+In `crates/rag-client/tests/client_tests.rs`, add `dry_run: false` to all three `IngestRequest` literals:
+
+Line 131 (`tenant_header_injected`):
+```rust
+            &IngestRequest {
+                paths: vec!["/tmp/test.txt".into()],
+                collection: None,
+                dry_run: false,
+            },
+```
+
+Line 192 (`ingest_request_shape`):
+```rust
+        .ingest(&IngestRequest {
+            paths: vec!["/data/file.pdf".into()],
+            collection: Some("docs".into()),
+            dry_run: false,
+        })
+```
+
+Also add an assertion for `dry_run` in the request body check at line ~205:
+```rust
+    assert_eq!(body["dry_run"], false);
+```
+
+Line 339 (`ingest_timeout_override`):
+```rust
+        .ingest(&IngestRequest {
+            paths: vec!["/tmp/test.txt".into()],
+            collection: None,
+            dry_run: false,
+        })
+```
+
+- [ ] **Step 5: Add `--dry-run` flag to CLI command**
 
 In `crates/rag-cli/src/cli.rs`, update the `Ingest` variant at line 44:
+
 
 ```rust
     /// Ingest files and directories
@@ -489,7 +534,7 @@ In `crates/rag-cli/src/cli.rs`, update the `Ingest` variant at line 44:
     },
 ```
 
-- [ ] **Step 5: Update CLI dispatch in `main.rs`**
+- [ ] **Step 6: Update CLI dispatch in `main.rs`**
 
 In `crates/rag-cli/src/main.rs`, update the `Ingest` match arm at line 27:
 
@@ -500,7 +545,7 @@ In `crates/rag-cli/src/main.rs`, update the `Ingest` match arm at line 27:
         }
 ```
 
-- [ ] **Step 6: Update the `run()` function to accept `dry_run` and prefix output**
+- [ ] **Step 7: Update the `run()` function to accept `dry_run` and prefix output**
 
 In `crates/rag-cli/src/commands/ingest.rs`, replace the entire `run()` function:
 
@@ -536,7 +581,7 @@ pub async fn run(
 }
 ```
 
-- [ ] **Step 7: Fix existing CLI tests**
+- [ ] **Step 8: Fix existing CLI tests**
 
 All existing tests call `run()` with 5 arguments. Add `false` as the 6th argument (`dry_run`) to each:
 
@@ -568,7 +613,7 @@ All existing tests call `run()` with 5 arguments. Add `false` as the 6th argumen
             .unwrap();
 ```
 
-- [ ] **Step 8: Add CLI parsing test for `--dry-run` flag**
+- [ ] **Step 9: Add CLI parsing test for `--dry-run` flag**
 
 In `crates/rag-cli/src/cli.rs`, add a test in the existing `mod tests` block:
 
@@ -585,19 +630,22 @@ In `crates/rag-cli/src/cli.rs`, add a test in the existing `mod tests` block:
     }
 ```
 
-- [ ] **Step 9: Run tests to verify they pass**
+- [ ] **Step 10: Run tests to verify they pass**
 
 Run: `cargo test -p rag-cli -- --nocapture`
 Expected: All ingest tests PASS (4 existing + 1 dry-run output test + 1 parsing test).
 
-- [ ] **Step 10: Verify full workspace compilation**
+Run: `cargo test -p rag-client -- --nocapture`
+Expected: All client tests PASS (construction sites updated).
+
+- [ ] **Step 11: Verify full workspace compilation**
 
 Run: `cargo check --workspace`
 Expected: Success
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add crates/rag-client/src/types.rs crates/rag-cli/src/cli.rs crates/rag-cli/src/commands/ingest.rs crates/rag-cli/src/main.rs
+git add crates/rag-client/src/types.rs crates/rag-client/tests/client_tests.rs crates/rag-cli/src/cli.rs crates/rag-cli/src/commands/ingest.rs crates/rag-cli/src/main.rs
 git commit -m "feat(cli): add --dry-run flag to ingest command"
 ```
