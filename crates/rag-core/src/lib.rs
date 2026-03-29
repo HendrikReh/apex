@@ -26,16 +26,17 @@ pub use context::{
     DedupeStrategy,
 };
 pub use embed::{AnyEmbedder, EmbedService, MockEmbedder, OpenAiEmbedder};
-pub use ingest::IngestService;
 pub use extract::{
     ExtractionResult, ExtractorRegistry, FileType, FormatExtractor, MarkdownExtractor,
     PdfExtractor, TextExtractor,
 };
 pub use fusion::{FusedChunk, RetrievedChunk, rrf_fusion};
+pub use ingest::IngestService;
 pub use llm::{ChatBackend, ChatMessage, ChatRole, CompletionRequest, LlmResponse, TokenUsage};
 pub use prompt::{PromptContext, PromptRenderer, render_context_chunks};
 pub use retrieval::{HybridOverrides, RetrievalDefaults, RetrievalService};
 pub use sidecar::Sidecar;
 pub use stores::Stores;
 pub use stores::conversations::{ConversationRow, MessageRole, MessageRow};
+pub use stores::corpus_stats::CorpusStats;
 pub use tenant::TenantId;
