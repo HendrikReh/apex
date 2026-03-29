@@ -42,3 +42,5 @@ data/demo/*
 .beads/push-state.json
 .beads/backup
 .worktrees/
+# bd worktree
+pdf-extraction/

@@ -36,11 +36,8 @@ impl TenantApiClient {
         timeout: Duration,
     ) -> Result<Self, ClientError> {
         // Ensure trailing slash so Url::join treats paths as relative to the base.
-        let normalized = if base_url.ends_with('/') {
-            base_url.to_string()
-        } else {
-            format!("{base_url}/")
-        };
+        let normalized =
+            if base_url.ends_with('/') { base_url.to_string() } else { format!("{base_url}/") };
         let url = Url::parse(&normalized)
             .map_err(|e| ClientError::InvalidBaseUrl(format!("{base_url}: {e}")))?;
 
