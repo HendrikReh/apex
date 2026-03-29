@@ -118,6 +118,17 @@ impl LlmProvider {
     }
 }
 
+const DEFAULT_LLM_PROMPT_TEMPLATE_RELATIVE_PATH: &str = "prompts/chat_system.hbs";
+const DEFAULT_LLM_PROMPT_TEMPLATE_FALLBACK_PATH: &str = "config/prompts/chat_system.hbs";
+
+fn resolve_prompt_template_fallback(path: &str) -> String {
+    if path == DEFAULT_LLM_PROMPT_TEMPLATE_RELATIVE_PATH {
+        DEFAULT_LLM_PROMPT_TEMPLATE_FALLBACK_PATH.to_owned()
+    } else {
+        path.to_owned()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // TOML intermediate structs
 // ---------------------------------------------------------------------------
@@ -481,7 +492,7 @@ impl AppConfig {
         let llm_prompt_template_path = {
             let raw = env_string("LLM_PROMPT_TEMPLATE_PATH")
                 .or_else(|| llm.prompt_template_path.clone())
-                .unwrap_or_else(|| "prompts/chat_system.hbs".to_owned());
+                .unwrap_or_else(|| DEFAULT_LLM_PROMPT_TEMPLATE_RELATIVE_PATH.to_owned());
             let path = std::path::Path::new(&raw);
             if path.is_absolute() {
                 raw
@@ -491,12 +502,10 @@ impl AppConfig {
                 if anchored.exists() {
                     anchored.to_string_lossy().into_owned()
                 } else {
-                    // Fall back to cwd-relative if the anchored path does not exist,
-                    // preserving backwards compatibility with the default layout.
-                    raw
+                    resolve_prompt_template_fallback(&raw)
                 }
             } else {
-                raw
+                resolve_prompt_template_fallback(&raw)
             }
         };
 
@@ -658,7 +667,7 @@ mod tests {
         assert_eq!(cfg.llm_timeout_secs, 60);
         assert_eq!(cfg.llm_max_retries, 3);
         assert_eq!(cfg.llm_retry_backoff_ms, 500);
-        assert_eq!(cfg.llm_prompt_template_path, "prompts/chat_system.hbs");
+        assert_eq!(cfg.llm_prompt_template_path, "config/prompts/chat_system.hbs");
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };

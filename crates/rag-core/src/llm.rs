@@ -300,9 +300,8 @@ fn is_transient_openai_error(err: &anyhow::Error) -> bool {
                 let is_rate_limited =
                     matches!(api_error.code.as_deref(), Some("rate_limit_exceeded"))
                         || matches!(api_error.r#type.as_deref(), Some("rate_limit_exceeded"));
-                let is_server_error =
-                    matches!(api_error.code.as_deref(), Some("server_error"))
-                        || matches!(api_error.r#type.as_deref(), Some("server_error"));
+                let is_server_error = matches!(api_error.code.as_deref(), Some("server_error"))
+                    || matches!(api_error.r#type.as_deref(), Some("server_error"));
                 let is_quota_error =
                     matches!(api_error.code.as_deref(), Some("insufficient_quota"))
                         || matches!(api_error.r#type.as_deref(), Some("insufficient_quota"));
@@ -453,32 +452,7 @@ async fn complete_anthropic(
     request: &CompletionRequest<'_>,
     messages: &[ChatMessage],
 ) -> Result<LlmResponse> {
-    // Anthropic requires at least one message. For system-only prompts
-    // (empty messages), synthesize a minimal user turn so the API accepts it.
-    let mut anthropic_messages: Vec<AnthropicMessage> = messages
-        .iter()
-        .map(|m| AnthropicMessage {
-            role: match m.role {
-                ChatRole::User => "user".to_owned(),
-                ChatRole::Assistant => "assistant".to_owned(),
-            },
-            content: m.content.clone(),
-        })
-        .collect();
-    if anthropic_messages.is_empty() {
-        anthropic_messages
-            .push(AnthropicMessage { role: "user".to_owned(), content: ".".to_owned() });
-    }
-
-    let body = AnthropicRequest {
-        model,
-        max_tokens: request.max_tokens,
-        system: request.system,
-        messages: anthropic_messages,
-        temperature: Some(request.temperature.min(1.0)),
-        stop_sequences: request.stop.clone(),
-    };
-
+    let body = build_anthropic_request(model, request, messages);
     let base = base_url.trim_end_matches('/');
     let base = base.strip_suffix("/v1").unwrap_or(base);
     let url = format!("{base}/v1/messages");
@@ -507,6 +481,39 @@ async fn complete_anthropic(
         },
         model: response.model,
     })
+}
+
+fn build_anthropic_request<'a>(
+    model: &'a str,
+    request: &'a CompletionRequest<'a>,
+    messages: &[ChatMessage],
+) -> AnthropicRequest<'a> {
+    // Anthropic requires at least one message. For system-only prompts
+    // (empty messages), synthesize a minimal user turn so the API accepts it.
+    let mut anthropic_messages: Vec<AnthropicMessage> = messages
+        .iter()
+        .map(|m| AnthropicMessage {
+            role: match m.role {
+                ChatRole::User => "user".to_owned(),
+                ChatRole::Assistant => "assistant".to_owned(),
+            },
+            content: m.content.clone(),
+        })
+        .collect();
+    if anthropic_messages.is_empty() {
+        anthropic_messages
+            .push(AnthropicMessage { role: "user".to_owned(), content: ".".to_owned() });
+    }
+
+    let body = AnthropicRequest {
+        model,
+        max_tokens: request.max_tokens,
+        system: request.system,
+        messages: anthropic_messages,
+        temperature: Some(request.temperature),
+        stop_sequences: request.stop.clone(),
+    };
+    body
 }
 
 // ---------------------------------------------------------------------------
@@ -620,9 +627,7 @@ mod tests {
             "Anthropic API error (503 Service Unavailable): overloaded"
         )));
         assert!(is_transient_error(&anyhow!("Anthropic API error (504 Gateway Timeout): timeout")));
-        assert!(is_transient_error(&anyhow!(
-            "Anthropic API error (529 Overloaded): overloaded"
-        )));
+        assert!(is_transient_error(&anyhow!("Anthropic API error (529 Overloaded): overloaded")));
 
         // Bare numeric code also remains supported.
         assert!(is_transient_error(&anyhow!("Anthropic API error (429): rate limited")));
@@ -756,5 +761,19 @@ mod tests {
         let trimmed = base.trim_end_matches('/');
         let trimmed = trimmed.strip_suffix("/v1").unwrap_or(trimmed);
         assert_eq!(format!("{trimmed}/v1/messages"), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn build_anthropic_request_preserves_temperature() {
+        let request = CompletionRequest {
+            system: "You are a helpful assistant.",
+            messages: &[ChatMessage { role: ChatRole::User, content: "hello".into() }],
+            temperature: 1.5,
+            max_tokens: 64,
+            stop: vec![],
+        };
+
+        let body = build_anthropic_request("claude-sonnet-4-20250514", &request, request.messages);
+        assert_eq!(body.temperature, Some(1.5));
     }
 }
