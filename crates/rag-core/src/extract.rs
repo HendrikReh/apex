@@ -69,18 +69,32 @@ impl ExtractorRegistry {
         Ok(Self { extractors, by_type })
     }
 
-    /// Construct the default registry used by the initial extraction pipeline.
-    pub fn with_defaults() -> Result<Self> {
-        Self::new(vec![
-            Box::new(PdfExtractor),
+    /// Construct the default registry, optionally including PDF support
+    /// when `config.pdfium_library_path` is set.
+    pub fn with_defaults(config: &crate::config::AppConfig) -> Result<Self> {
+        let mut extractors: Vec<Box<dyn FormatExtractor>> = vec![
             Box::new(MarkdownExtractor),
             Box::new(TextExtractor),
-        ])
+        ];
+
+        if let Some(ref path) = config.pdfium_library_path {
+            let pdf = PdfExtractor::new(path.clone()).context("configuring PDF extractor")?;
+            extractors.push(Box::new(pdf));
+        }
+
+        Self::new(extractors)
     }
 
     /// Extract normalized text for the given file type.
     pub async fn extract(&self, file_type: FileType, content: &[u8]) -> Result<ExtractionResult> {
         let Some(index) = self.by_type.get(&file_type).copied() else {
+            if file_type == FileType::Pdf {
+                bail!(
+                    "no extractor registered for PDF files; \
+                     set pdfium_library_path in config/app.toml \
+                     or PDFIUM_LIBRARY_PATH env var to enable PDF support"
+                );
+            }
             bail!("no extractor registered for file type {file_type:?}");
         };
 
@@ -117,19 +131,96 @@ impl FormatExtractor for MarkdownExtractor {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct PdfExtractor;
+/// Extracts text from PDF files using the PDFium native library.
+///
+/// Stores the library path and creates a fresh PDFium binding on each
+/// `extract()` call inside `spawn_blocking`. This avoids `Send + Sync`
+/// issues with the C library handle.
+#[derive(Debug)]
+pub struct PdfExtractor {
+    library_path: std::path::PathBuf,
+}
+
+impl PdfExtractor {
+    /// Create a new `PdfExtractor` with a validated PDFium library path.
+    ///
+    /// Eagerly loads the library to catch misconfiguration at startup.
+    /// The loaded binding is immediately dropped — each `extract()` call
+    /// creates its own.
+    pub fn new(library_path: std::path::PathBuf) -> Result<Self> {
+        // Validate the library is loadable at construction time.
+        // Use bind_to_library() with the exact configured path — do NOT
+        // use pdfium_platform_library_name_at_path(), which infers a
+        // platform-default filename from a directory and would ignore
+        // custom filenames, symlinks, or nonstandard install locations.
+        drop(pdfium_render::prelude::Pdfium::new(
+            pdfium_render::prelude::Pdfium::bind_to_library(
+                library_path.to_str().with_context(|| {
+                    format!(
+                        "pdfium_library_path is not valid UTF-8: {}",
+                        library_path.display()
+                    )
+                })?,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to load PDFium native library from {}: \
+                     verify the path points to a valid PDFium binary \
+                     (.dylib on macOS, .so on Linux, .dll on Windows)",
+                    library_path.display()
+                )
+            })?,
+        ));
+
+        Ok(Self { library_path })
+    }
+}
 
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
     }
 
-    fn extract<'a>(&'a self, _content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+    fn extract<'a>(&'a self, content: &'a [u8]) -> BoxFuture<'a, Result<ExtractionResult>> {
+        // Copy input bytes to an owned Vec — spawn_blocking requires 'static.
+        let owned_bytes = content.to_vec();
+        let lib_path = self.library_path.clone();
+
         Box::pin(async move {
-            Err(anyhow!(
-                "PDF extraction is not implemented yet; wire in a pdfium-backed extractor next"
-            ))
+            tokio::task::spawn_blocking(move || {
+                let pdfium = pdfium_render::prelude::Pdfium::new(
+                    pdfium_render::prelude::Pdfium::bind_to_library(
+                        lib_path.to_str().with_context(|| {
+                            format!(
+                                "pdfium_library_path is not valid UTF-8: {}",
+                                lib_path.display()
+                            )
+                        })?,
+                    )
+                    .with_context(|| {
+                        format!("binding PDFium library from {}", lib_path.display())
+                    })?,
+                );
+
+                let doc = pdfium
+                    .load_pdf_from_byte_vec(owned_bytes, None)
+                    .map_err(|e| anyhow!("loading PDF document: {e}"))?;
+
+                let mut pages = Vec::new();
+                for page in doc.pages().iter() {
+                    let text = page
+                        .text()
+                        .map_err(|e| anyhow!("extracting text from PDF page: {e}"))?
+                        .all();
+                    pages.push(text);
+                }
+
+                Ok(ExtractionResult {
+                    text: pages.join("\u{000C}"),
+                })
+            })
+            .await
+            .context("PDF extraction task panicked")?
         })
     }
 }
@@ -146,10 +237,19 @@ fn extract_utf8_passthrough(content: &[u8], format_name: &str) -> Result<Extract
 mod tests {
     use super::*;
 
+    /// Build a test registry with text + markdown extractors (no PDF — no native lib in CI).
+    fn test_registry() -> ExtractorRegistry {
+        ExtractorRegistry::new(vec![
+            Box::new(MarkdownExtractor),
+            Box::new(TextExtractor),
+        ])
+        .expect("test registry should build")
+    }
+
     #[tokio::test]
     #[allow(clippy::disallowed_methods)] // test assertions
     async fn text_registry_extracts_utf8_content() {
-        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+        let registry = test_registry();
 
         let result = registry
             .extract(FileType::Text, b"hello world")
@@ -162,7 +262,7 @@ mod tests {
     #[tokio::test]
     #[allow(clippy::disallowed_methods)] // test assertions
     async fn markdown_registry_extracts_utf8_content() {
-        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+        let registry = test_registry();
 
         let result = registry
             .extract(FileType::Markdown, b"# Title\n\nBody")
@@ -203,45 +303,30 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)] // test assertions
-    async fn pdf_extractor_is_explicitly_unimplemented() {
-        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+    async fn registry_without_pdf_returns_config_hint() {
+        // No PDF extractor — simulates the unconfigured case.
+        let registry = test_registry();
 
         let err = registry
             .extract(FileType::Pdf, b"%PDF-1.7")
             .await
-            .expect_err("pdf extraction should fail until pdfium is wired in");
+            .expect_err("PDF extraction should fail when not configured");
 
+        let msg = format!("{err:#}");
         assert!(
-            format!("{err:#}").contains("not implemented"),
-            "expected unimplemented pdf extraction cause in error chain, got {err:#}"
-        );
-    }
-
-    #[tokio::test]
-    #[allow(clippy::disallowed_methods)] // test assertions
-    async fn extractor_errors_keep_registry_context_and_original_cause() {
-        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
-
-        let err = registry
-            .extract(FileType::Pdf, b"%PDF-1.7")
-            .await
-            .expect_err("pdf extraction should fail until pdfium is wired in");
-
-        let chained = format!("{err:#}");
-        assert!(
-            chained.contains("extracting content for file type Pdf"),
-            "expected registry context in chained error, got {chained}"
+            msg.contains("pdfium_library_path"),
+            "error should name the missing config option, got: {msg}"
         );
         assert!(
-            chained.contains("PDF extraction is not implemented yet"),
-            "expected original extractor message in chained error, got {chained}"
+            msg.contains("PDFIUM_LIBRARY_PATH"),
+            "error should name the env var, got: {msg}"
         );
     }
 
     #[tokio::test]
     #[allow(clippy::disallowed_methods)] // test assertions
     async fn invalid_utf8_errors_keep_decode_cause_visible() {
-        let registry = ExtractorRegistry::with_defaults().expect("default registry should build");
+        let registry = test_registry();
 
         let err = registry
             .extract(FileType::Text, &[0xff, 0xfe, 0xfd])

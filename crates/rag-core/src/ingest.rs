@@ -103,7 +103,7 @@ impl IngestService {
     /// Build a new `IngestService` from shared stores and application config.
     pub fn new(stores: Stores, config: &AppConfig) -> Result<Self> {
         let extractors =
-            ExtractorRegistry::with_defaults().context("building extractor registry")?;
+            ExtractorRegistry::with_defaults(config).context("building extractor registry")?;
         let embedder = AnyEmbedder::from_config(config).context("building embedder")?;
         let bm25 = Bm25Embedder::from_app_config(config).context("building BM25 embedder")?;
 
