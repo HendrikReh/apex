@@ -100,6 +100,10 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true
 ```
 
 - [ ] **Step 4: Verify workspace compiles**
@@ -1409,6 +1413,17 @@ mod tests {
         let cli = cli.unwrap();
         assert!(validate(&cli).is_err());
     }
+
+    #[test]
+    fn server_env_fallback() {
+        // Set env var before parsing
+        unsafe { std::env::set_var("RAG_SERVER_URL", "http://my-server:9090") };
+        let cli = Cli::try_parse_from([
+            "rag-cli", "collection-stats", "--collection", "test",
+        ]).unwrap();
+        assert_eq!(cli.server, "http://my-server:9090");
+        unsafe { std::env::remove_var("RAG_SERVER_URL") };
+    }
 }
 ```
 
@@ -1699,7 +1714,7 @@ mod tests {
     use super::*;
     use rag_client::ClientError;
     use rag_client::types::*;
-    use uuid::Uuid;
+    use std::path::PathBuf;
 
     struct FakeIngestClient {
         response: IngestResponse,
@@ -1709,12 +1724,7 @@ mod tests {
         async fn health(&self) -> Result<(), ClientError> { Ok(()) }
         async fn readiness(&self) -> Result<ReadinessResponse, ClientError> { unimplemented!() }
         async fn ingest(&self, _req: &IngestRequest) -> Result<IngestResponse, ClientError> {
-            Ok(IngestResponse {
-                documents: self.response.documents,
-                chunks: self.response.chunks,
-                skipped: self.response.skipped,
-                failures: self.response.failures.clone(),
-            })
+            Ok(self.response.clone())
         }
         async fn search_dense(&self, _: &SearchRequest) -> Result<SearchResponse, ClientError> { unimplemented!() }
         async fn search_sparse(&self, _: &SearchRequest) -> Result<SearchResponse, ClientError> { unimplemented!() }
@@ -1723,29 +1733,26 @@ mod tests {
         async fn collection_stats(&self, _: &str) -> Result<CollectionStatsResponse, ClientError> { unimplemented!() }
     }
 
+    /// Create a temporary file with an absolute path for testing.
+    fn temp_file() -> tempfile::NamedTempFile {
+        tempfile::NamedTempFile::new().unwrap()
+    }
+
     #[tokio::test]
     async fn ingest_human_output() {
+        let tmp = temp_file();
         let client = FakeIngestClient {
             response: IngestResponse { documents: 3, chunks: 10, skipped: 1, failures: vec![] },
         };
         let mut buf = Vec::new();
-        // Use /tmp paths that may not exist — skip exists check by calling the client directly
-        let req = IngestRequest { paths: vec!["/tmp/a.txt".into()], collection: None };
-        let resp = client.ingest(&req).await.unwrap();
-        print_or_json(&mut buf, false, &resp, |resp, w| {
-            writeln!(w, "Ingested {} documents, {} chunks, {} skipped",
-                resp.documents, resp.chunks, resp.skipped)?;
-            for f in &resp.failures {
-                writeln!(w, "WARN: {} — {}", f.path, f.error)?;
-            }
-            Ok(())
-        }).unwrap();
+        run(&client, &mut buf, false, vec![tmp.path().to_path_buf()], None).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("Ingested 3 documents, 10 chunks, 1 skipped"));
     }
 
     #[tokio::test]
     async fn ingest_partial_failure() {
+        let tmp = temp_file();
         let client = FakeIngestClient {
             response: IngestResponse {
                 documents: 2, chunks: 5, skipped: 0,
@@ -1753,27 +1760,44 @@ mod tests {
             },
         };
         let mut buf = Vec::new();
-        let req = IngestRequest { paths: vec!["/tmp/a.txt".into()], collection: None };
-        let resp = client.ingest(&req).await.unwrap();
-        print_or_json(&mut buf, false, &resp, |resp, w| {
-            writeln!(w, "Ingested {} documents, {} chunks, {} skipped",
-                resp.documents, resp.chunks, resp.skipped)?;
-            for f in &resp.failures {
-                writeln!(w, "WARN: {} — {}", f.path, f.error)?;
-            }
-            Ok(())
-        }).unwrap();
+        // run() should succeed (partial failure is not a command error)
+        run(&client, &mut buf, false, vec![tmp.path().to_path_buf()], None).await.unwrap();
         let output = String::from_utf8(buf).unwrap();
         assert!(output.contains("WARN: /tmp/bad.txt — parse error"));
     }
 
     #[tokio::test]
     async fn ingest_json_output() {
-        let resp = IngestResponse { documents: 1, chunks: 2, skipped: 0, failures: vec![] };
+        let tmp = temp_file();
+        let client = FakeIngestClient {
+            response: IngestResponse { documents: 1, chunks: 2, skipped: 0, failures: vec![] },
+        };
         let mut buf = Vec::new();
-        print_or_json(&mut buf, true, &resp, |_, _| panic!("should not call human")).unwrap();
+        run(&client, &mut buf, true, vec![tmp.path().to_path_buf()], None).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_slice(&buf).unwrap();
         assert_eq!(parsed["documents"], 1);
+    }
+
+    #[tokio::test]
+    async fn ingest_rejects_relative_path() {
+        let client = FakeIngestClient {
+            response: IngestResponse { documents: 0, chunks: 0, skipped: 0, failures: vec![] },
+        };
+        let mut buf = Vec::new();
+        let result = run(&client, &mut buf, false, vec![PathBuf::from("relative/path")], None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("absolute"));
+    }
+
+    #[tokio::test]
+    async fn ingest_rejects_nonexistent_path() {
+        let client = FakeIngestClient {
+            response: IngestResponse { documents: 0, chunks: 0, skipped: 0, failures: vec![] },
+        };
+        let mut buf = Vec::new();
+        let result = run(&client, &mut buf, false, vec![PathBuf::from("/nonexistent/path/xyz")], None).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not exist"));
     }
 }
 ```
