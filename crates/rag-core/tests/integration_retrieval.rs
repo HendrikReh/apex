@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // Tests use ? operator with Result types
+
 //! Integration tests for retrieval and context assembly.
 //!
 //! Requires Postgres and Qdrant running (`just up`).

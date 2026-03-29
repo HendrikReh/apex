@@ -108,6 +108,7 @@ impl RetrievalService {
     }
 
     /// Hybrid search: run dense + sparse in parallel, fuse with RRF.
+    #[allow(clippy::disallowed_methods)] // tokio::join! internally uses .expect()
     pub async fn search_hybrid(
         &self,
         collection: &str,
