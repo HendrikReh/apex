@@ -132,20 +132,14 @@ impl ChatService {
             })
             .collect();
 
-        // Step 3: Persist user message (before LLM call).
-        self.stores
-            .insert_message(tenant, conversation_id, MessageRole::User, &request.query, None)
-            .await
-            .context("persisting user message")?;
-
-        // Step 4: Retrieve context.
+        // Step 3: Retrieve context.
         let fused = self
             .retrieval
             .search_hybrid(&collection, &request.query, tenant, None)
             .await
             .context("hybrid retrieval")?;
 
-        // Step 5: Assemble context.
+        // Step 4: Assemble context.
         let context_config = ContextConfig {
             max_tokens: self.defaults.context_max_tokens,
             max_chunks: self.defaults.context_max_chunks,
@@ -155,7 +149,7 @@ impl ChatService {
         let context_result = self.context_builder.build(fused, &context_config);
         let citations = context_result.citations.clone();
 
-        // Step 6: Render prompt.
+        // Step 5: Render prompt.
         let context_text = render_context_chunks(&context_result.chunks);
         let language_instruction = request
             .language
@@ -170,8 +164,8 @@ impl ChatService {
             })
             .context("rendering system prompt")?;
 
-        // Step 7: Call LLM.
-        messages.push(ChatMessage { role: ChatRole::User, content: request.query });
+        // Step 6: Call LLM.
+        messages.push(ChatMessage { role: ChatRole::User, content: request.query.clone() });
         let llm_response = self
             .backend
             .complete(
@@ -188,7 +182,12 @@ impl ChatService {
             .await
             .context("LLM completion")?;
 
-        // Step 8: Persist assistant message.
+        // Step 7: Persist user + assistant messages together (after LLM success
+        // to avoid orphaned user messages on failure).
+        self.stores
+            .insert_message(tenant, conversation_id, MessageRole::User, &request.query, None)
+            .await
+            .context("persisting user message")?;
         self.stores
             .insert_message(
                 tenant,
@@ -200,7 +199,7 @@ impl ChatService {
             .await
             .context("persisting assistant message")?;
 
-        // Step 9: Return response.
+        // Step 8: Return response.
         Ok(ChatResponse {
             answer: llm_response.text,
             conversation_id,

@@ -9,6 +9,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
@@ -237,7 +238,7 @@ pub struct AppConfig {
     pub context_max_chunks: usize,
     // LLM
     pub llm_provider: LlmProvider,
-    pub llm_api_key: Option<String>,
+    pub llm_api_key: Option<SecretString>,
     pub llm_model: String,
     pub llm_base_url: String,
     pub llm_temperature: f32,
@@ -439,7 +440,7 @@ impl AppConfig {
             .parse::<LlmProvider>()
             .with_context(|| format!("parsing LLM provider from {llm_provider_str:?}"))?;
 
-        let llm_api_key = env_string("LLM_API_KEY");
+        let llm_api_key = env_string("LLM_API_KEY").map(SecretString::from);
 
         let llm_model = env_string("LLM_MODEL")
             .or_else(|| llm.model.clone())

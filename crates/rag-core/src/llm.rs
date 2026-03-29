@@ -113,6 +113,11 @@ impl OpenAiCompatibleConfig {
 }
 
 impl OpenAiConfigTrait for OpenAiCompatibleConfig {
+    // Trait signature returns `HeaderMap` (not `Result`), so we cannot propagate
+    // errors here.  The API key is validated in `ChatBackend::from_config()`
+    // before this config is constructed, so the `.expect()` is unreachable in
+    // practice.
+    #[allow(clippy::disallowed_methods)]
     fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         let api_key = self.api_key.expose_secret();
@@ -121,7 +126,7 @@ impl OpenAiConfigTrait for OpenAiCompatibleConfig {
                 AUTHORIZATION,
                 format!("Bearer {api_key}")
                     .parse()
-                    .expect("OpenAI-compatible API key should be a valid header value"),
+                    .expect("API key validated in from_config"),
             );
         }
         headers
@@ -149,10 +154,13 @@ impl ChatBackend {
     pub fn from_config(config: &AppConfig) -> Result<Self> {
         match config.llm_provider {
             LlmProvider::OpenAiCompatible => {
-                let oai_config: Box<dyn OpenAiConfigTrait> = match config.llm_api_key.as_deref() {
+                if let Some(ref key) = config.llm_api_key {
+                    validate_api_key_header_safe(key.expose_secret())?;
+                }
+                let oai_config: Box<dyn OpenAiConfigTrait> = match &config.llm_api_key {
                     Some(api_key) => Box::new(
                         OpenAIConfig::new()
-                            .with_api_key(api_key)
+                            .with_api_key(api_key.expose_secret())
                             .with_api_base(&config.llm_base_url),
                     ),
                     None => {
@@ -163,10 +171,12 @@ impl ChatBackend {
                 Ok(Self::OpenAiCompatible { client, model: config.llm_model.clone() })
             }
             LlmProvider::Anthropic => {
-                let api_key = config
+                let api_key_secret = config
                     .llm_api_key
-                    .as_deref()
+                    .as_ref()
                     .ok_or_else(|| anyhow!("LLM_API_KEY must be set for anthropic"))?;
+                let api_key: &str = api_key_secret.expose_secret();
+                validate_api_key_header_safe(api_key)?;
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(config.llm_timeout_secs))
                     .default_headers({
@@ -242,6 +252,14 @@ impl ChatBackend {
 
         Err(last_err.unwrap_or_else(|| anyhow!("retry loop exhausted"))).context(provider_name)
     }
+}
+
+/// Validate that an API key can be used as an HTTP header value.
+/// Called at config time so downstream `.expect()` in trait impls is unreachable.
+fn validate_api_key_header_safe(key: &str) -> Result<()> {
+    key.parse::<reqwest::header::HeaderValue>()
+        .map(|_| ())
+        .map_err(|_| anyhow!("LLM_API_KEY contains characters invalid for an HTTP header value"))
 }
 
 fn retry_delay(attempt: u32, retry_backoff_ms: u64) -> Duration {
