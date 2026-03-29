@@ -4,6 +4,7 @@
 
 mod error;
 mod tenant_id;
+pub mod types;
 
 pub use error::ClientError;
 pub use tenant_id::TenantId;
