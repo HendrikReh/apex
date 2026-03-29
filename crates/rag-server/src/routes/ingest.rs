@@ -40,23 +40,24 @@ pub async fn ingest_paths(
             message: "paths must not be empty".into(),
         });
     }
+    // Canonicalize paths (resolves relative paths, symlinks, and verifies existence)
+    let mut resolved_paths = Vec::with_capacity(payload.paths.len());
     for p in &payload.paths {
-        if !std::path::Path::new(p).is_absolute() {
-            return Err(ApiError {
-                status: StatusCode::BAD_REQUEST,
-                message: format!("all paths must be absolute, got: {p}"),
-            });
-        }
+        let path = std::path::PathBuf::from(p);
+        let canonical = path.canonicalize().map_err(|e| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: format!("path does not exist or is inaccessible: {p} — {e}"),
+        })?;
+        resolved_paths.push(canonical);
     }
 
     let mut total =
         IngestBatchOutcome { documents: 0, chunks: 0, skipped: 0, failures: Vec::new() };
 
-    for path_str in &payload.paths {
-        let path = std::path::PathBuf::from(path_str);
+    for path in &resolved_paths {
         if path.is_dir() {
             let req = IngestDirectoryRequest {
-                path,
+                path: path.clone(),
                 tenant: ctx.tenant.clone(),
                 collection_override: payload.collection.clone(),
             };
@@ -69,14 +70,14 @@ pub async fn ingest_paths(
                 }
                 Err(e) => {
                     total.failures.push(rag_core::ingest::DocumentFailure {
-                        path: std::path::PathBuf::from(path_str),
+                        path: path.clone(),
                         error: format!("{e:#}"),
                     });
                 }
             }
         } else {
             let req = IngestFileRequest {
-                path,
+                path: path.clone(),
                 tenant: ctx.tenant.clone(),
                 collection_override: payload.collection.clone(),
             };
@@ -90,7 +91,7 @@ pub async fn ingest_paths(
                 }
                 Err(e) => {
                     total.failures.push(rag_core::ingest::DocumentFailure {
-                        path: std::path::PathBuf::from(path_str),
+                        path: path.clone(),
                         error: format!("{e:#}"),
                     });
                 }
