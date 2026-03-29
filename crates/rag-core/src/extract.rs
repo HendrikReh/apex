@@ -229,6 +229,7 @@ mod tests {
     use super::*;
 
     /// Build a test registry with text + markdown extractors (no PDF — no native lib in CI).
+    #[allow(clippy::disallowed_methods)] // test helper
     fn test_registry() -> ExtractorRegistry {
         ExtractorRegistry::new(vec![Box::new(MarkdownExtractor), Box::new(TextExtractor)])
             .expect("test registry should build")
