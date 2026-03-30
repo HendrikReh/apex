@@ -154,15 +154,14 @@ impl IngestService {
 
         if existing_checksum.as_deref() == Some(&prepared.checksum) {
             // Checksum match — update metadata if sidecar changed, skip re-chunking.
-            let metadata_json = prepared
-                .sidecar
-                .as_ref()
-                .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null));
+            let metadata_json =
+                build_metadata_json(prepared.sidecar.as_ref(), prepared.native_metadata.as_ref());
+            let title = resolve_title(prepared.sidecar.as_ref(), prepared.native_metadata.as_ref());
             self.stores
                 .upsert_document(
                     req.tenant.as_str(),
                     &prepared.document_id,
-                    prepared.sidecar.as_ref().map_or("", |s| &s.document.title),
+                    title,
                     prepared.sidecar.as_ref().map(|s| s.language.as_str()),
                     metadata_json.as_ref(),
                     Some(&prepared.source_path),
@@ -404,15 +403,13 @@ impl IngestService {
         self.ensure_collection_cached(&doc.collection, vector_size).await?;
 
         // Upsert document row in Postgres.
-        let metadata_json = doc
-            .sidecar
-            .as_ref()
-            .map(|s| serde_json::to_value(s).unwrap_or(serde_json::Value::Null));
+        let metadata_json = build_metadata_json(doc.sidecar.as_ref(), doc.native_metadata.as_ref());
+        let title = resolve_title(doc.sidecar.as_ref(), doc.native_metadata.as_ref());
         self.stores
             .upsert_document(
                 tenant_str,
                 &doc.document_id,
-                doc.sidecar.as_ref().map_or("", |s| &s.document.title),
+                title,
                 doc.sidecar.as_ref().map(|s| s.language.as_str()),
                 metadata_json.as_ref(),
                 Some(&doc.source_path),
