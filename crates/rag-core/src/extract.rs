@@ -282,10 +282,9 @@ struct HeadingThresholds {
     bold_as_h3: bool,
 }
 
-impl Default for HeadingThresholds {
-    fn default() -> Self {
-        Self { h1_ratio: 2.0, h2_ratio: 1.6, h3_ratio: 1.2, bold_min_ratio: 1.1, bold_as_h3: true }
-    }
+impl HeadingThresholds {
+    const DEFAULT: Self =
+        Self { h1_ratio: 2.0, h2_ratio: 1.6, h3_ratio: 1.2, bold_min_ratio: 1.1, bold_as_h3: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +324,11 @@ fn collect_object_spans(page: &pdfium_render::prelude::PdfPage<'_>) -> Vec<Objec
 }
 
 /// Check if a font weight indicates bold (>= 700).
+///
+/// Note: PDFs that encode boldness via font name (e.g. "HelveticaNeue-Bold")
+/// rather than `PdfFontWeight` are not detected here. This is a known
+/// limitation of the pdfium-render API surface — only the weight enum is
+/// inspected.
 fn is_bold_weight(weight: Option<pdfium_render::prelude::PdfFontWeight>) -> bool {
     use pdfium_render::prelude::PdfFontWeight;
     match weight {
@@ -641,6 +645,14 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
             2 => "## ",
             _ => "### ",
         };
+        let original_substr = &result[m.original_byte_start..m.original_byte_end];
+        if original_substr != m.text {
+            tracing::debug!(
+                heading = m.text,
+                original = original_substr,
+                "heading text differs from page text at replacement site"
+            );
+        }
         let replacement = format!("\n{prefix}{}\n", m.text);
         result.replace_range(m.original_byte_start..m.original_byte_end, &replacement);
     }
@@ -678,7 +690,7 @@ fn detect_and_insert_headings(
     };
 
     let lines = coalesce_into_lines(spans);
-    let thresholds = HeadingThresholds::default();
+    let thresholds = HeadingThresholds::DEFAULT;
     let headings = classify_line_headings(&lines, body_size, &thresholds);
 
     if headings.is_empty() {
@@ -689,10 +701,11 @@ fn detect_and_insert_headings(
     let result = insert_heading_markers(native_text, &headings);
 
     let accepted = headings.len();
-    let h3_count = result.matches("\n### ").count();
-    let h2_count = result.matches("\n## ").count() - h3_count;
-    let h1_count = result.matches("\n# ").count() - h2_count - h3_count;
-    let markers_found = h1_count + h2_count + h3_count;
+    // The three patterns are disjoint: "\n# " does not match inside "\n## "
+    // (the char after `#` is `#`, not ` `), so raw counts are correct.
+    let markers_found = result.matches("\n# ").count()
+        + result.matches("\n## ").count()
+        + result.matches("\n### ").count();
 
     tracing::debug!(
         page_index,
@@ -787,7 +800,10 @@ impl FormatExtractor for PdfExtractor {
                         PageOcrDecision::UseNativeText => {
                             let page_idx = pages.len();
                             let text = detect_and_insert_headings(&page, &native_text, page_idx)
-                                .unwrap_or(native_text);
+                                .unwrap_or_else(|e| {
+                                    tracing::debug!(page_index = page_idx, error = %e, "heading detection failed, using plain text");
+                                    native_text
+                                });
                             pages.push(text);
                         }
                         PageOcrDecision::SkipUnavailable => {
@@ -1049,6 +1065,7 @@ fn run_tesseract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdfium_render::prelude::PdfFontWeight;
 
     /// Build a test registry with text + markdown extractors (no PDF — no native lib in CI).
     #[allow(clippy::disallowed_methods)] // test helper
@@ -1250,7 +1267,7 @@ mod tests {
 
     #[test]
     fn heading_thresholds_default_values() {
-        let t = HeadingThresholds::default();
+        let t = HeadingThresholds::DEFAULT;
         assert!((t.h1_ratio - 2.0).abs() < f32::EPSILON);
         assert!((t.h2_ratio - 1.6).abs() < f32::EPSILON);
         assert!((t.h3_ratio - 1.2).abs() < f32::EPSILON);
@@ -1816,7 +1833,7 @@ mod tests {
                 is_bold: false,
             },
         ];
-        let thresholds = HeadingThresholds::default();
+        let thresholds = HeadingThresholds::DEFAULT;
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
         assert_eq!(headings.len(), 3);
         assert_eq!(headings[0].level, 1);
@@ -1828,7 +1845,7 @@ mod tests {
     fn classify_headings_bold_as_h3() {
         let lines =
             vec![LineSpan { text: "Bold Subhead".into(), dominant_font_size: 13.2, is_bold: true }];
-        let thresholds = HeadingThresholds::default();
+        let thresholds = HeadingThresholds::DEFAULT;
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
         assert_eq!(headings.len(), 1);
         assert_eq!(headings[0].level, 3);
@@ -1841,7 +1858,7 @@ mod tests {
             dominant_font_size: 13.2,
             is_bold: true,
         }];
-        let thresholds = HeadingThresholds::default();
+        let thresholds = HeadingThresholds::DEFAULT;
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
         assert!(headings.is_empty(), "bold with sentence punctuation rejected");
     }
@@ -1853,7 +1870,7 @@ mod tests {
             dominant_font_size: 12.0,
             is_bold: false,
         }];
-        let thresholds = HeadingThresholds::default();
+        let thresholds = HeadingThresholds::DEFAULT;
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
         assert!(headings.is_empty());
     }
@@ -1930,5 +1947,44 @@ mod tests {
             txt_result.text, "Plain text with no headings",
             "text extractor must not alter content"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // is_bold_weight tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bold_weight_700_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Weight700Bold)));
+    }
+
+    #[test]
+    fn bold_weight_800_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Weight800)));
+    }
+
+    #[test]
+    fn bold_weight_900_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Weight900)));
+    }
+
+    #[test]
+    fn bold_custom_700_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Custom(700))));
+    }
+
+    #[test]
+    fn bold_custom_699_is_not_bold() {
+        assert!(!is_bold_weight(Some(PdfFontWeight::Custom(699))));
+    }
+
+    #[test]
+    fn bold_none_is_not_bold() {
+        assert!(!is_bold_weight(None));
+    }
+
+    #[test]
+    fn bold_weight_400_is_not_bold() {
+        assert!(!is_bold_weight(Some(PdfFontWeight::Weight400Normal)));
     }
 }
