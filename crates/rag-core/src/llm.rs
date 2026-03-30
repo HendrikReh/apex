@@ -413,17 +413,23 @@ fn build_openai_request(
     }
 
     let mut req_builder = CreateChatCompletionRequestArgs::default();
-    req_builder
-        .model(model)
-        .messages(oai_messages)
-        .temperature(request.temperature)
-        .max_tokens(request.max_tokens);
+    req_builder.model(model).messages(oai_messages).temperature(request.temperature);
+
+    if openai_model_uses_max_completion_tokens(model) {
+        req_builder.max_completion_tokens(request.max_tokens);
+    } else {
+        req_builder.max_tokens(request.max_tokens);
+    }
 
     if !request.stop.is_empty() {
         req_builder.stop(request.stop.clone());
     }
 
     req_builder.build().context("building OpenAI request")
+}
+
+fn openai_model_uses_max_completion_tokens(model: &str) -> bool {
+    model.starts_with("gpt-5") || model.starts_with('o')
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +771,28 @@ mod tests {
 
         assert_eq!(json.get("max_tokens").and_then(serde_json::Value::as_u64), Some(123));
         assert!(json.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test assertions use .expect()
+    fn build_openai_request_uses_max_completion_tokens_for_gpt_5_family() {
+        let request = CompletionRequest {
+            system: "You are a helpful assistant.",
+            messages: &[ChatMessage { role: ChatRole::User, content: "hello".into() }],
+            temperature: 0.0,
+            max_tokens: 123,
+            stop: vec![],
+        };
+
+        let built =
+            build_openai_request("gpt-5.4-mini", &request, request.messages).expect("request");
+        let json = serde_json::to_value(&built).expect("serialize request");
+
+        assert_eq!(
+            json.get("max_completion_tokens").and_then(serde_json::Value::as_u64),
+            Some(123)
+        );
+        assert!(json.get("max_tokens").is_none());
     }
 
     #[test]
