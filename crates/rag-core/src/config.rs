@@ -106,7 +106,7 @@ impl fmt::Display for LlmProvider {
 impl LlmProvider {
     fn default_model(&self) -> &'static str {
         match self {
-            Self::OpenAiCompatible => "gpt-5",
+            Self::OpenAiCompatible => "gpt-5.4-mini",
             Self::Anthropic => "claude-haiku-4-5",
         }
     }
@@ -709,7 +709,7 @@ mod tests {
         assert_eq!(cfg.context_max_chunks, 50);
         assert_eq!(cfg.llm_provider, LlmProvider::OpenAiCompatible);
         assert!(cfg.llm_api_key.is_none());
-        assert_eq!(cfg.llm_model, "gpt-5");
+        assert_eq!(cfg.llm_model, "gpt-5.4-mini");
         assert_eq!(cfg.llm_base_url, "https://api.openai.com/v1");
         assert!((cfg.llm_temperature - 0.1).abs() < f32::EPSILON);
         assert_eq!(cfg.llm_max_tokens, 4096);
