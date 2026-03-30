@@ -262,8 +262,6 @@ struct LineSpan {
     text: String,
     dominant_font_size: f32,
     is_bold: bool,
-    y_position: f32,
-    x_position: f32,
 }
 
 /// A heading accepted for marker insertion.
@@ -271,8 +269,6 @@ struct LineSpan {
 struct AcceptedHeading {
     level: u8,
     text: String,
-    y_position: f32,
-    x_position: f32,
 }
 
 /// Font-size ratio thresholds for heading classification.
@@ -472,9 +468,6 @@ fn coalesce_into_lines(mut spans: Vec<ObjectSpan>) -> Vec<LineSpan> {
             let mut prev_x_end: Option<f32> = None;
             let mut prev_ends_hyphen = false;
 
-            let first_y = group[0].y_position;
-            let first_x = group[0].x_position;
-
             for span in &group {
                 let alpha_count = span.text.chars().filter(|c| c.is_alphabetic()).count();
                 let char_count = span.text.chars().count();
@@ -502,7 +495,7 @@ fn coalesce_into_lines(mut spans: Vec<ObjectSpan>) -> Vec<LineSpan> {
 
             let is_bold = total_alpha > 0 && bold_alpha * 2 > total_alpha;
 
-            LineSpan { text, dominant_font_size, is_bold, y_position: first_y, x_position: first_x }
+            LineSpan { text, dominant_font_size, is_bold }
         })
         .collect()
 }
@@ -513,7 +506,7 @@ fn coalesce_into_lines(mut spans: Vec<ObjectSpan>) -> Vec<LineSpan> {
 /// <= 20 words, < 3 sentence-ending punctuation marks.
 fn is_heading_candidate(text: &str) -> bool {
     let char_count = text.chars().count();
-    if char_count < 3 || char_count > 180 {
+    if !(3..=180).contains(&char_count) {
         return false;
     }
 
@@ -576,12 +569,7 @@ fn classify_line_headings(
         };
 
         if let Some(level) = level {
-            headings.push(AcceptedHeading {
-                level,
-                text: line.text.clone(),
-                y_position: line.y_position,
-                x_position: line.x_position,
-            });
+            headings.push(AcceptedHeading { level, text: line.text.clone() });
         }
     }
 
@@ -1818,33 +1806,13 @@ mod tests {
     #[test]
     fn classify_headings_by_ratio() {
         let lines = vec![
-            LineSpan {
-                text: "Big Title".into(),
-                dominant_font_size: 24.0,
-                is_bold: false,
-                y_position: 700.0,
-                x_position: 0.0,
-            },
-            LineSpan {
-                text: "Section Header".into(),
-                dominant_font_size: 19.2,
-                is_bold: false,
-                y_position: 600.0,
-                x_position: 0.0,
-            },
-            LineSpan {
-                text: "Subsection".into(),
-                dominant_font_size: 14.4,
-                is_bold: false,
-                y_position: 500.0,
-                x_position: 0.0,
-            },
+            LineSpan { text: "Big Title".into(), dominant_font_size: 24.0, is_bold: false },
+            LineSpan { text: "Section Header".into(), dominant_font_size: 19.2, is_bold: false },
+            LineSpan { text: "Subsection".into(), dominant_font_size: 14.4, is_bold: false },
             LineSpan {
                 text: "Body text that is long enough to be a real paragraph of text.".into(),
                 dominant_font_size: 12.0,
                 is_bold: false,
-                y_position: 400.0,
-                x_position: 0.0,
             },
         ];
         let thresholds = HeadingThresholds::default();
@@ -1857,13 +1825,8 @@ mod tests {
 
     #[test]
     fn classify_headings_bold_as_h3() {
-        let lines = vec![LineSpan {
-            text: "Bold Subhead".into(),
-            dominant_font_size: 13.2,
-            is_bold: true,
-            y_position: 600.0,
-            x_position: 0.0,
-        }];
+        let lines =
+            vec![LineSpan { text: "Bold Subhead".into(), dominant_font_size: 13.2, is_bold: true }];
         let thresholds = HeadingThresholds::default();
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
         assert_eq!(headings.len(), 1);
@@ -1876,8 +1839,6 @@ mod tests {
             text: "Bold sentence.".into(),
             dominant_font_size: 13.2,
             is_bold: true,
-            y_position: 600.0,
-            x_position: 0.0,
         }];
         let thresholds = HeadingThresholds::default();
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
@@ -1890,8 +1851,6 @@ mod tests {
             text: "Just normal body text here".into(),
             dominant_font_size: 12.0,
             is_bold: false,
-            y_position: 400.0,
-            x_position: 0.0,
         }];
         let thresholds = HeadingThresholds::default();
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
@@ -1904,18 +1863,8 @@ mod tests {
     fn insert_markers_basic() {
         let page_text = "Introduction\nBody text here.\nConclusion";
         let headings = vec![
-            AcceptedHeading {
-                level: 1,
-                text: "Introduction".into(),
-                y_position: 700.0,
-                x_position: 0.0,
-            },
-            AcceptedHeading {
-                level: 2,
-                text: "Conclusion".into(),
-                y_position: 300.0,
-                x_position: 0.0,
-            },
+            AcceptedHeading { level: 1, text: "Introduction".into() },
+            AcceptedHeading { level: 2, text: "Conclusion".into() },
         ];
         let result = insert_heading_markers(page_text, &headings);
         assert!(result.contains("\n# Introduction\n"), "H1 marker: {result:?}");
@@ -1925,12 +1874,7 @@ mod tests {
     #[test]
     fn insert_markers_preserves_unmatched_text() {
         let page_text = "Body text that stays the same.";
-        let headings = vec![AcceptedHeading {
-            level: 1,
-            text: "Not In Text".into(),
-            y_position: 700.0,
-            x_position: 0.0,
-        }];
+        let headings = vec![AcceptedHeading { level: 1, text: "Not In Text".into() }];
         let result = insert_heading_markers(page_text, &headings);
         assert_eq!(result, page_text, "unmatched heading should leave text unchanged");
     }
@@ -1939,18 +1883,8 @@ mod tests {
     fn insert_markers_duplicate_text_monotonic() {
         let page_text = "Summary\nBody\nSummary";
         let headings = vec![
-            AcceptedHeading {
-                level: 2,
-                text: "Summary".into(),
-                y_position: 700.0,
-                x_position: 0.0,
-            },
-            AcceptedHeading {
-                level: 3,
-                text: "Summary".into(),
-                y_position: 300.0,
-                x_position: 0.0,
-            },
+            AcceptedHeading { level: 2, text: "Summary".into() },
+            AcceptedHeading { level: 3, text: "Summary".into() },
         ];
         let result = insert_heading_markers(page_text, &headings);
         let first = result.find("## Summary");
@@ -1963,12 +1897,7 @@ mod tests {
     #[test]
     fn insert_markers_whitespace_normalization_match() {
         let page_text = "  Big   Title  \nBody text.";
-        let headings = vec![AcceptedHeading {
-            level: 1,
-            text: "Big Title".into(),
-            y_position: 700.0,
-            x_position: 0.0,
-        }];
+        let headings = vec![AcceptedHeading { level: 1, text: "Big Title".into() }];
         let result = insert_heading_markers(page_text, &headings);
         assert!(
             result.contains("# Big Title\n") || result.contains("# Big   Title"),
