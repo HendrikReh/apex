@@ -8,6 +8,8 @@ use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
 use rag_server::router;
 use rag_server::state::AppState;
 
+mod bootstrap;
+
 // tokio::main macro internally uses .expect() — false positive for ADR-001.
 #[allow(clippy::disallowed_methods)]
 #[tokio::main]
@@ -18,6 +20,11 @@ async fn main() -> Result<()> {
 
     let config = AppConfig::from_env().context("loading config")?;
     tracing::info!(bind = %config.bind_addr, "starting server");
+    bootstrap::print_banner(
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_LICENSE"),
+        &config.bind_addr,
+    );
 
     let stores = Stores::new(&config).await.context("connecting stores")?;
 
@@ -39,33 +46,9 @@ async fn main() -> Result<()> {
     tracing::info!(addr = %listener.local_addr()?, "listening");
 
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(bootstrap::shutdown_signal())
         .await
         .context("running server")?;
 
     Ok(())
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = tokio::signal::ctrl_c();
-
-    #[cfg(unix)]
-    // SAFETY: binary crate — panics are acceptable here.
-    #[allow(clippy::disallowed_methods)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
-    }
-
-    tracing::info!("shutdown signal received");
 }
