@@ -239,14 +239,19 @@ impl FormatExtractor for PdfExtractor {
         &[FileType::Pdf]
     }
 
+    // tracing::warn! internally uses .expect()
+    #[allow(clippy::disallowed_methods)]
     fn extract<'a>(
         &'a self,
         content: &'a [u8],
-        _options: &'a ExtractionOptions,
+        options: &'a ExtractionOptions,
     ) -> BoxFuture<'a, Result<ExtractionResult>> {
-        // Copy input bytes to an owned Vec — spawn_blocking requires 'static.
         let owned_bytes = content.to_vec();
         let lib_path = self.library_path.clone();
+        let tessdata_dir = self.tessdata_dir.clone();
+        let default_language = self.ocr_default_language.clone();
+        let default_timeout = self.ocr_timeout_secs;
+        let ocr_options = options.ocr.clone();
 
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
@@ -260,7 +265,10 @@ impl FormatExtractor for PdfExtractor {
                         })?,
                     )
                     .with_context(|| {
-                        format!("binding PDFium library from {}", lib_path.display())
+                        format!(
+                            "binding PDFium library from {}",
+                            lib_path.display()
+                        )
                     })?,
                 );
 
@@ -268,16 +276,78 @@ impl FormatExtractor for PdfExtractor {
                     .load_pdf_from_byte_vec(owned_bytes, None)
                     .map_err(|e| anyhow!("loading PDF document: {e}"))?;
 
-                let mut pages = Vec::new();
-                for page in doc.pages().iter() {
-                    let text = page
-                        .text()
-                        .map_err(|e| anyhow!("extracting text from PDF page: {e}"))?
-                        .all();
-                    pages.push(text);
+                // Resolve OCR settings once before page loop.
+                let settings = resolve_ocr_settings(
+                    ocr_options.as_ref(),
+                    &default_language,
+                    default_timeout,
+                );
+                let ocr_available = tessdata_dir.is_some();
+
+                // Fail early if forced but unavailable.
+                if settings.force && !ocr_available {
+                    bail!(
+                        "OCR forced but Tesseract not configured \
+                         (tessdata_dir not set)"
+                    );
                 }
 
-                Ok(ExtractionResult { text: pages.join("\u{000C}") })
+                let mut pages = Vec::new();
+                let mut ocr_skipped_pages: u32 = 0;
+
+                for page in doc.pages().iter() {
+                    let native_text = page
+                        .text()
+                        .map_err(|e| {
+                            anyhow!("extracting text from PDF page: {e}")
+                        })?
+                        .all();
+
+                    match page_ocr_decision(
+                        settings.force,
+                        &native_text,
+                        ocr_available,
+                    ) {
+                        PageOcrDecision::UseNativeText => {
+                            pages.push(native_text);
+                        }
+                        PageOcrDecision::SkipUnavailable => {
+                            ocr_skipped_pages += 1;
+                            pages.push(native_text);
+                        }
+                        PageOcrDecision::PerformOcr => {
+                            let tessdata = tessdata_dir
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    anyhow!("tessdata_dir is None")
+                                })?;
+
+                            let png_bytes = render_page_to_png(&page)?;
+
+                            let ocr_text = run_tesseract(
+                                &png_bytes,
+                                &settings.language,
+                                settings.timeout,
+                                tessdata,
+                            )?;
+
+                            pages.push(ocr_text);
+                        }
+                    }
+                }
+
+                if ocr_skipped_pages > 0 {
+                    tracing::warn!(
+                        skipped_pages = ocr_skipped_pages,
+                        "OCR fallback skipped for \
+                         {ocr_skipped_pages} page(s) because \
+                         Tesseract is not configured"
+                    );
+                }
+
+                Ok(ExtractionResult {
+                    text: pages.join("\u{000C}"),
+                })
             })
             .await
             .context("PDF extraction task panicked")?
@@ -359,6 +429,164 @@ fn resolve_ocr_settings(
     );
 
     ResolvedOcrSettings { force, language, timeout }
+}
+
+/// DPI used for rendering PDF pages to bitmaps before OCR.
+const OCR_RENDER_DPI: f32 = 300.0;
+
+/// Render a PDF page to in-memory PNG bytes for OCR processing.
+///
+/// Uses PDFium's bitmap rendering at 300 DPI, then encodes to PNG
+/// via the `image` crate.
+///
+/// Must be called from a blocking context (inside `spawn_blocking`).
+fn render_page_to_png(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+) -> Result<Vec<u8>> {
+    let scale = OCR_RENDER_DPI / 72.0;
+    let width_f = page.width().value * scale;
+    let height_f = page.height().value * scale;
+
+    if width_f < 1.0
+        || height_f < 1.0
+        || width_f > i32::MAX as f32
+        || height_f > i32::MAX as f32
+    {
+        bail!(
+            "PDF page dimensions out of range for OCR rendering \
+             ({width_f:.0} x {height_f:.0} px at {OCR_RENDER_DPI} DPI)"
+        );
+    }
+
+    let width = width_f as i32;
+    let height = height_f as i32;
+
+    let config = pdfium_render::prelude::PdfRenderConfig::new()
+        .set_target_width(width)
+        .set_maximum_height(height);
+
+    let bitmap = page
+        .render_with_config(&config)
+        .map_err(|e| anyhow!("rendering PDF page to bitmap: {e}"))?;
+
+    let image = bitmap.as_image();
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut cursor, image::ImageFormat::Png)
+        .context("encoding page bitmap as PNG")?;
+
+    Ok(cursor.into_inner())
+}
+
+/// Run Tesseract OCR on PNG image bytes via stdin and return text.
+///
+/// Pipes `png_bytes` to `tesseract stdin stdout`, reads extracted text
+/// from stdout. Uses deadline-based timeout with `try_wait()` polling
+/// and explicit `child.kill()` -- `tokio::time::timeout` does NOT kill
+/// child processes.
+///
+/// Must be called from a blocking context (inside `spawn_blocking`).
+fn run_tesseract(
+    png_bytes: &[u8],
+    language: &str,
+    timeout: std::time::Duration,
+    tessdata_dir: &std::path::Path,
+) -> Result<String> {
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new("tesseract");
+    cmd.arg("stdin")
+        .arg("stdout")
+        .arg("-l")
+        .arg(language)
+        .arg("--tessdata-dir")
+        .arg(tessdata_dir);
+    cmd.env("TESSDATA_PREFIX", tessdata_dir);
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().context("spawning tesseract subprocess")?;
+
+    // Take all three pipes before spawning threads.
+    let mut stdin_pipe = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("missing tesseract stdin pipe"))?;
+    let mut stdout_pipe = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("missing tesseract stdout pipe"))?;
+    let mut stderr_pipe = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow!("missing tesseract stderr pipe"))?;
+
+    // Write PNG to stdin on a separate thread to avoid deadlock.
+    let owned_bytes = png_bytes.to_vec();
+    let stdin_thread = std::thread::spawn(move || {
+        let result = std::io::Write::write_all(&mut stdin_pipe, &owned_bytes);
+        drop(stdin_pipe); // Close stdin to signal EOF.
+        result
+    });
+
+    // Read stdout/stderr on separate threads.
+    let stdout_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut stdout_pipe, &mut buf).map(|_| buf)
+    });
+    let stderr_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut stderr_pipe, &mut buf).map(|_| buf)
+    });
+
+    // Poll with try_wait() -- tokio::time::timeout does NOT kill
+    // child processes.
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().context("waiting for tesseract")? {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                child.kill().ok();
+                child.wait().ok();
+                let _ = stdin_thread.join();
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                bail!(
+                    "tesseract timed out (exceeded {} ms)",
+                    timeout.as_millis()
+                );
+            }
+            None => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    };
+
+    stdin_thread
+        .join()
+        .map_err(|_| anyhow!("tesseract stdin writer panicked"))?
+        .context("writing PNG to tesseract stdin")?;
+
+    let stdout_bytes = stdout_thread
+        .join()
+        .map_err(|_| anyhow!("tesseract stdout reader panicked"))?
+        .context("reading tesseract stdout")?;
+    let stderr_bytes = stderr_thread
+        .join()
+        .map_err(|_| anyhow!("tesseract stderr reader panicked"))?
+        .context("reading tesseract stderr")?;
+
+    if !status.success() {
+        bail!(
+            "tesseract failed: {}",
+            String::from_utf8_lossy(&stderr_bytes)
+        );
+    }
+
+    let text = String::from_utf8(stdout_bytes)
+        .context("tesseract output is not valid UTF-8")?;
+    Ok(text.trim().to_string())
 }
 
 #[cfg(test)]
@@ -563,5 +791,192 @@ mod tests {
         let resolved = resolve_ocr_settings(Some(&opts), "fra", 45);
         assert_eq!(resolved.language, "fra");
         assert_eq!(resolved.timeout.as_secs(), 45);
+    }
+
+    // --- OCR integration test helpers ---
+
+    /// Find a usable tessdata directory from common system locations.
+    fn find_tessdata_dir() -> Option<std::path::PathBuf> {
+        if let Ok(dir) = std::env::var("TESSDATA_PREFIX") {
+            let path = std::path::PathBuf::from(dir);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+        for dir in &[
+            "/opt/homebrew/share/tessdata",
+            "/usr/local/share/tessdata",
+            "/usr/share/tesseract-ocr/5/tessdata",
+            "/usr/share/tesseract-ocr/4.00/tessdata",
+            "/usr/share/tessdata",
+        ] {
+            let path = std::path::PathBuf::from(dir);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    /// Check whether tesseract is installed and tessdata is available.
+    fn tesseract_available() -> Option<std::path::PathBuf> {
+        if std::process::Command::new("tesseract")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return None;
+        }
+        find_tessdata_dir()
+    }
+
+    /// Build an AppConfig suitable for PdfExtractor integration tests.
+    fn test_pdf_config(
+        tessdata_dir: Option<std::path::PathBuf>,
+    ) -> Option<crate::config::AppConfig> {
+        let pdfium_path = std::env::var("PDFIUM_LIBRARY_PATH")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.exists())?;
+
+        let mut config = crate::config::AppConfig::from_env().ok()?;
+        config.pdfium_library_path = Some(pdfium_path);
+        config.tessdata_dir = tessdata_dir;
+        config.ocr_timeout_secs = 30;
+        config.ocr_default_language = "eng".to_string();
+        Some(config)
+    }
+
+    #[test]
+    #[ignore] // requires tesseract installed
+    #[allow(clippy::disallowed_methods)]
+    fn run_tesseract_extracts_text_from_png_bytes() {
+        let tessdata = match tesseract_available() {
+            Some(dir) => dir,
+            None => {
+                eprintln!("skipping: tesseract or tessdata not found");
+                return;
+            }
+        };
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hello_ocr.png");
+        if !fixture.exists() {
+            eprintln!("skipping: fixture not found at {}", fixture.display());
+            return;
+        }
+
+        let png_bytes = std::fs::read(&fixture).expect("reading PNG fixture");
+
+        let text = run_tesseract(
+            &png_bytes,
+            "eng",
+            std::time::Duration::from_secs(30),
+            &tessdata,
+        )
+        .expect("tesseract should succeed on fixture");
+
+        assert!(
+            text.to_uppercase().contains("HELLO"),
+            "OCR output should contain 'HELLO', got: {text:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore] // requires PDFium + Tesseract installed
+    #[allow(clippy::disallowed_methods)]
+    async fn pdf_extractor_ocr_fallback_on_scanned_page() {
+        let tessdata = match tesseract_available() {
+            Some(dir) => dir,
+            None => {
+                eprintln!("skipping: tesseract or tessdata not found");
+                return;
+            }
+        };
+
+        let config = match test_pdf_config(Some(tessdata)) {
+            Some(c) => c,
+            None => {
+                eprintln!(
+                    "skipping: PDFIUM_LIBRARY_PATH not set or not found"
+                );
+                return;
+            }
+        };
+
+        let extractor =
+            PdfExtractor::new(&config).expect("PdfExtractor should construct");
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hello_ocr.pdf");
+        if !fixture.exists() {
+            eprintln!(
+                "skipping: PDF fixture not found at {}",
+                fixture.display()
+            );
+            return;
+        }
+
+        let pdf_bytes = std::fs::read(&fixture).expect("reading PDF fixture");
+
+        let result = extractor
+            .extract(&pdf_bytes, &ExtractionOptions::default())
+            .await
+            .expect("extraction should succeed with OCR fallback");
+
+        assert!(
+            result.text.to_uppercase().contains("HELLO"),
+            "OCR fallback output should contain 'HELLO', got: {:?}",
+            result.text
+        );
+    }
+
+    #[tokio::test]
+    #[ignore] // requires PDFium installed (no Tesseract needed)
+    #[allow(clippy::disallowed_methods)]
+    async fn pdf_extractor_forced_ocr_without_tessdata_errors() {
+        let config = match test_pdf_config(None) {
+            Some(c) => c,
+            None => {
+                eprintln!(
+                    "skipping: PDFIUM_LIBRARY_PATH not set or not found"
+                );
+                return;
+            }
+        };
+
+        let extractor = PdfExtractor::new(&config)
+            .expect("PdfExtractor should construct without tessdata");
+
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hello_ocr.pdf");
+        if !fixture.exists() {
+            eprintln!(
+                "skipping: PDF fixture not found at {}",
+                fixture.display()
+            );
+            return;
+        }
+
+        let pdf_bytes = std::fs::read(&fixture).expect("reading PDF fixture");
+
+        let options = ExtractionOptions {
+            ocr: Some(OcrOptions {
+                force: true,
+                language_hints: vec![],
+                timeout_secs: None,
+            }),
+        };
+
+        let err = extractor
+            .extract(&pdf_bytes, &options)
+            .await
+            .expect_err("forced OCR without tessdata should fail");
+
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not configured"),
+            "error should mention OCR not configured, got: {msg}"
+        );
     }
 }
