@@ -362,13 +362,10 @@ fn normalize_with_offset_map(text: &str) -> (String, Vec<usize>) {
             }
         } else {
             in_whitespace = false;
-            let start = normalized.len();
             normalized.push(ch);
             // Map each byte of this char to its original byte offset.
             for i in 0..ch.len_utf8() {
-                if start + i >= offset_map.len() {
-                    offset_map.push(byte_idx + i);
-                }
+                offset_map.push(byte_idx + i);
             }
         }
     }
@@ -596,7 +593,6 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
         original_byte_start: usize,
         original_byte_end: usize,
         level: u8,
-        text: String,
     }
 
     let mut matched: Vec<MatchedHeading> = Vec::new();
@@ -608,16 +604,36 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
             continue;
         }
 
-        let Some(pos) = normalized_page[search_start..].find(&normalized_heading) else {
+        // Search forward for the heading text, requiring it to be at a line
+        // boundary (start of text, or preceded by a newline in the original).
+        // This prevents matching an in-paragraph mention of the heading phrase.
+        let found = {
+            let mut from = search_start;
+            loop {
+                let Some(pos) = normalized_page[from..].find(&normalized_heading) else {
+                    break None;
+                };
+                let cand_start = from + pos;
+                let cand_end = cand_start + normalized_heading.len();
+
+                let at_line_boundary = cand_start == 0 || {
+                    let orig_prev = offset_map[cand_start - 1];
+                    matches!(page_text.as_bytes().get(orig_prev), Some(b'\n') | Some(b'\r'))
+                };
+
+                if at_line_boundary {
+                    break Some((cand_start, cand_end));
+                }
+                from = cand_end;
+            }
+        };
+        let Some((norm_start, norm_end)) = found else {
             tracing::debug!(
                 heading_text = %heading.text,
-                "heading candidate could not be matched in page text, skipping"
+                "heading candidate could not be matched at a line boundary, skipping"
             );
             continue;
         };
-
-        let norm_start = search_start + pos;
-        let norm_end = norm_start + normalized_heading.len();
 
         let orig_start = offset_map[norm_start];
         let orig_end =
@@ -627,7 +643,6 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
             original_byte_start: orig_start,
             original_byte_end: orig_end,
             level: heading.level,
-            text: heading.text.clone(),
         });
 
         search_start = norm_end;
@@ -645,15 +660,10 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
             2 => "## ",
             _ => "### ",
         };
+        // Use the original page text (not coalesced heading text) to preserve
+        // document fidelity — only add the markdown prefix around it.
         let original_substr = &result[m.original_byte_start..m.original_byte_end];
-        if original_substr != m.text {
-            tracing::debug!(
-                heading = m.text,
-                original = original_substr,
-                "heading text differs from page text at replacement site"
-            );
-        }
-        let replacement = format!("\n{prefix}{}\n", m.text);
+        let replacement = format!("\n{prefix}{original_substr}\n");
         result.replace_range(m.original_byte_start..m.original_byte_end, &replacement);
     }
 
@@ -703,14 +713,18 @@ fn detect_and_insert_headings(
     let accepted = headings.len();
     // The three patterns are disjoint: "\n# " does not match inside "\n## "
     // (the char after `#` is `#`, not ` `), so raw counts are correct.
+    // Note: if the original PDF text already contained markdown heading
+    // markers, this count may be inflated — acceptable for debug telemetry.
     let markers_found = result.matches("\n# ").count()
         + result.matches("\n## ").count()
         + result.matches("\n### ").count();
 
+    // `candidates_unmatched`: headings classified but not matched back into
+    // the page text (e.g. due to line-boundary requirement or text mismatch).
     tracing::debug!(
         page_index,
         headings_accepted = accepted,
-        candidates_skipped = accepted.saturating_sub(markers_found),
+        candidates_unmatched = accepted.saturating_sub(markers_found),
         "heading detection complete"
     );
 
@@ -1920,6 +1934,33 @@ mod tests {
         assert!(
             result.contains("# Big Title\n") || result.contains("# Big   Title"),
             "should match despite whitespace differences: {result:?}"
+        );
+    }
+
+    #[test]
+    fn insert_markers_skips_in_paragraph_occurrence() {
+        // "Background" appears mid-paragraph first, then as a heading on its
+        // own line. The matcher must skip the in-paragraph occurrence.
+        let page_text = "We discuss Background topics.\nBackground\nDetails here.";
+        let headings = vec![AcceptedHeading { level: 2, text: "Background".into() }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(
+            result.contains("We discuss Background topics."),
+            "in-paragraph occurrence must be preserved: {result:?}"
+        );
+        assert!(result.contains("\n## Background\n"), "heading marker expected: {result:?}");
+    }
+
+    #[test]
+    fn insert_markers_preserves_original_page_text() {
+        // Heading text from coalesced spans might differ from page text
+        // (e.g. extra spaces). The marker should wrap the original page text.
+        let page_text = "Big  Title\nBody.";
+        let headings = vec![AcceptedHeading { level: 1, text: "Big Title".into() }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(
+            result.contains("# Big  Title\n"),
+            "should preserve original double-space from page text: {result:?}"
         );
     }
 
