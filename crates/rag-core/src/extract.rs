@@ -378,6 +378,87 @@ fn compute_body_font_size(spans: &[ObjectSpan]) -> Option<f32> {
     Some(best_bucket as f32 / 10.0)
 }
 
+/// Coalesce `ObjectSpan`s into `LineSpan`s by y-position clustering.
+///
+/// Two objects share a line when their y-positions differ by less than
+/// `min(font_a, font_b) * 0.5`. Within a line, objects are sorted by
+/// x-position and concatenated with appropriate spacing.
+fn coalesce_into_lines(mut spans: Vec<ObjectSpan>) -> Vec<LineSpan> {
+    if spans.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort by y descending (top-to-bottom in PDF coords), then x ascending.
+    spans.sort_by(|a, b| {
+        b.y_position.partial_cmp(&a.y_position).unwrap_or(std::cmp::Ordering::Equal).then_with(
+            || a.x_position.partial_cmp(&b.x_position).unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+
+    let mut lines: Vec<Vec<ObjectSpan>> = Vec::new();
+
+    for span in spans {
+        let match_idx = lines.iter().position(|line| {
+            let representative = &line[0];
+            let tolerance = span.font_size.min(representative.font_size) * 0.5;
+            (span.y_position - representative.y_position).abs() < tolerance
+        });
+        match match_idx {
+            Some(idx) => lines[idx].push(span),
+            None => lines.push(vec![span]),
+        }
+    }
+
+    lines
+        .into_iter()
+        .map(|mut group| {
+            group.sort_by(|a, b| {
+                a.x_position.partial_cmp(&b.x_position).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let mut text = String::new();
+            let mut weighted_size_sum: f64 = 0.0;
+            let mut total_chars: usize = 0;
+            let mut bold_alpha: usize = 0;
+            let mut total_alpha: usize = 0;
+            let mut prev_x_end: Option<f32> = None;
+            let mut prev_ends_hyphen = false;
+
+            let first_y = group[0].y_position;
+            let first_x = group[0].x_position;
+
+            for span in &group {
+                let alpha_count = span.text.chars().filter(|c| c.is_alphabetic()).count();
+                let char_count = span.text.chars().count();
+                weighted_size_sum += span.font_size as f64 * char_count as f64;
+                total_chars += char_count;
+                total_alpha += alpha_count;
+                if span.is_bold {
+                    bold_alpha += alpha_count;
+                }
+
+                if !text.is_empty() {
+                    let needs_space = !prev_ends_hyphen
+                        && prev_x_end.map(|end| span.x_position > end).unwrap_or(true);
+                    if needs_space {
+                        text.push(' ');
+                    }
+                }
+                text.push_str(&span.text);
+                prev_x_end = Some(span.x_end);
+                prev_ends_hyphen = span.text.ends_with('-');
+            }
+
+            let dominant_font_size =
+                if total_chars > 0 { (weighted_size_sum / total_chars as f64) as f32 } else { 0.0 };
+
+            let is_bold = total_alpha > 0 && bold_alpha * 2 > total_alpha;
+
+            LineSpan { text, dominant_font_size, is_bold, y_position: first_y, x_position: first_x }
+        })
+        .collect()
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -1235,5 +1316,190 @@ mod tests {
         ];
         let result = compute_body_font_size(&spans);
         assert_eq!(result, Some(12.0));
+    }
+
+    // --- coalesce_into_lines tests ---
+
+    #[test]
+    fn coalesce_groups_by_y_position() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Hello".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+            ObjectSpan {
+                text: "World".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 55.0,
+                y_position: 100.5,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "New line".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 80.0,
+                x_end: 80.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "Hello World");
+        assert_eq!(lines[1].text, "New line");
+    }
+
+    #[test]
+    fn coalesce_sorts_by_x_within_line() {
+        let spans = vec![
+            ObjectSpan {
+                text: "World".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 60.0,
+                y_position: 100.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "Hello".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hello World");
+    }
+
+    #[test]
+    fn coalesce_no_space_when_overlapping() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Hel".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 30.0,
+            },
+            ObjectSpan {
+                text: "lo".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 28.0,
+                y_position: 100.0,
+                x_end: 45.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hello");
+    }
+
+    #[test]
+    fn coalesce_no_space_after_hyphen() {
+        let spans = vec![
+            ObjectSpan {
+                text: "self-".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 40.0,
+            },
+            ObjectSpan {
+                text: "aware".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 50.0,
+                y_position: 100.0,
+                x_end: 90.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "self-aware");
+    }
+
+    #[test]
+    fn coalesce_bold_majority_rule() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Abc".into(),
+                font_size: 12.0,
+                is_bold: true,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 30.0,
+            },
+            ObjectSpan {
+                text: "de".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 35.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].is_bold, "majority of alpha chars are bold");
+    }
+
+    #[test]
+    fn coalesce_dominant_font_size_weighted_average() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Abc".into(),
+                font_size: 24.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+            ObjectSpan {
+                text: "de".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 55.0,
+                y_position: 100.0,
+                x_end: 80.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert!((lines[0].dominant_font_size - 19.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn coalesce_mixed_font_size_uses_smaller_tolerance() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Small".into(),
+                font_size: 6.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 30.0,
+            },
+            ObjectSpan {
+                text: "Large".into(),
+                font_size: 24.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 96.0,
+                x_end: 80.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 2, "should not merge across tolerance boundary");
     }
 }
