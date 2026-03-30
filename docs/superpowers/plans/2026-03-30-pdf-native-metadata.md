@@ -104,40 +104,34 @@ git commit -m "feat(rag-core): add native_metadata field to ExtractionResult"
 
 **Files:**
 - Modify: `crates/rag-core/src/extract.rs:249-336` (PdfExtractor::extract)
-- Test: `crates/rag-core/src/extract.rs` (mod tests)
+- Test: `crates/rag-core/tests/integration_pdf.rs`
 
 - [ ] **Step 1: Write the failing test**
 
-Add a test to `crates/rag-core/src/extract.rs` inside `mod tests`:
+Add a test to `crates/rag-core/tests/integration_pdf.rs`:
 
 ```rust
 #[tokio::test]
-#[ignore] // requires PDFium installed
-#[allow(clippy::disallowed_methods)]
+#[allow(clippy::disallowed_methods)] // test assertions
 async fn pdf_extractor_returns_native_metadata() {
-    let config = match test_pdf_config(None) {
-        Some(c) => c,
-        None => {
-            eprintln!("skipping: PDFIUM_LIBRARY_PATH not set or not found");
-            return;
-        }
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
     };
 
-    let extractor = PdfExtractor::new(&config).expect("PdfExtractor should construct");
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
 
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-pages.pdf");
-    if !fixture.exists() {
-        eprintln!("skipping: fixture not found at {}", fixture.display());
-        return;
-    }
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-pages.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
 
-    let pdf_bytes = std::fs::read(&fixture).expect("reading PDF fixture");
-
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
     let result = extractor
         .extract(&pdf_bytes, &ExtractionOptions::default())
         .await
-        .expect("extraction should succeed");
+        .expect("PDF extraction should succeed");
 
     let metadata = result
         .native_metadata
@@ -154,12 +148,12 @@ async fn pdf_extractor_returns_native_metadata() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test -p rag-core pdf_extractor_returns_native_metadata -- --ignored --nocapture`
+Run: `cargo test -p rag-core --test integration_pdf pdf_extractor_returns_native_metadata -- --nocapture`
 Expected: FAIL — `native_metadata` is `None` (PdfExtractor currently returns `None`).
 
 - [ ] **Step 3: Implement metadata extraction**
 
-In `crates/rag-core/src/extract.rs`, in the `PdfExtractor::extract` method, add the import at the top of the file (after the existing `use` statements):
+In `crates/rag-core/src/extract.rs`, add the import at the top of the file (after the existing `use` statements):
 
 ```rust
 use pdfium_render::pdf::document::metadata::PdfDocumentMetadataTagType;
@@ -205,7 +199,7 @@ Ok(ExtractionResult {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cargo test -p rag-core pdf_extractor_returns_native_metadata -- --ignored --nocapture`
+Run: `cargo test -p rag-core --test integration_pdf pdf_extractor_returns_native_metadata -- --nocapture`
 Expected: PASS
 
 - [ ] **Step 5: Run cargo fmt and cargo check**
@@ -229,7 +223,7 @@ git commit -m "feat(rag-core): extract native metadata from PDF documents via PD
 **Files:**
 - Create: `crates/rag-core/tests/fixtures/titled.pdf`
 - Create: `crates/rag-core/tests/fixtures/generate_titled_pdf.py` (reproducible script)
-- Test: `crates/rag-core/src/extract.rs` (mod tests)
+- Test: `crates/rag-core/tests/integration_pdf.rs`
 
 - [ ] **Step 1: Write the fixture generation script**
 
@@ -239,9 +233,13 @@ Create `crates/rag-core/tests/fixtures/generate_titled_pdf.py`:
 #!/usr/bin/env python3
 """Generate a PDF with /Title and /Author metadata for testing.
 
-Usage:
-    uv add fpdf2
+Run once to regenerate the committed titled.pdf fixture:
+
+    pip install 'fpdf2==2.8.2'
     python generate_titled_pdf.py
+
+The output is a binary fixture committed to the repo. The script exists
+solely for reproducibility — it is NOT executed during tests or CI.
 """
 from fpdf import FPDF
 
@@ -259,7 +257,7 @@ print("Generated titled.pdf")
 
 ```bash
 cd crates/rag-core/tests/fixtures
-pip install fpdf2 --quiet 2>/dev/null || uv pip install fpdf2 --quiet
+pip install 'fpdf2==2.8.2' --quiet
 python generate_titled_pdf.py
 ```
 
@@ -275,34 +273,28 @@ Title:           Apex Test Document
 Author:          Test Author
 ```
 
-- [ ] **Step 4: Write the test**
+- [ ] **Step 4: Write test for titled PDF**
 
-Add a test to `crates/rag-core/src/extract.rs` inside `mod tests`:
+Add a test to `crates/rag-core/tests/integration_pdf.rs`:
 
 ```rust
 #[tokio::test]
-#[ignore] // requires PDFium installed
-#[allow(clippy::disallowed_methods)]
+#[allow(clippy::disallowed_methods)] // test assertions
 async fn pdf_extractor_returns_title_metadata_from_titled_fixture() {
-    let config = match test_pdf_config(None) {
-        Some(c) => c,
-        None => {
-            eprintln!("skipping: PDFIUM_LIBRARY_PATH not set or not found");
-            return;
-        }
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
     };
 
-    let extractor = PdfExtractor::new(&config).expect("PdfExtractor should construct");
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
 
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/titled.pdf");
-    if !fixture.exists() {
-        eprintln!("skipping: fixture not found at {}", fixture.display());
-        return;
-    }
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/titled.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
 
-    let pdf_bytes = std::fs::read(&fixture).expect("reading PDF fixture");
-
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
     let result = extractor
         .extract(&pdf_bytes, &ExtractionOptions::default())
         .await
@@ -328,37 +320,31 @@ async fn pdf_extractor_returns_title_metadata_from_titled_fixture() {
 
 - [ ] **Step 5: Run test to verify it passes**
 
-Run: `cargo test -p rag-core pdf_extractor_returns_title_metadata_from_titled_fixture -- --ignored --nocapture`
+Run: `cargo test -p rag-core --test integration_pdf pdf_extractor_returns_title_metadata -- --nocapture`
 Expected: PASS
 
 - [ ] **Step 6: Write test for PDF with no metadata**
 
-Add a test to `crates/rag-core/src/extract.rs` inside `mod tests`:
+Add a test to `crates/rag-core/tests/integration_pdf.rs`:
 
 ```rust
 #[tokio::test]
-#[ignore] // requires PDFium installed
-#[allow(clippy::disallowed_methods)]
+#[allow(clippy::disallowed_methods)] // test assertions
 async fn pdf_extractor_returns_none_metadata_for_bare_pdf() {
-    let config = match test_pdf_config(None) {
-        Some(c) => c,
-        None => {
-            eprintln!("skipping: PDFIUM_LIBRARY_PATH not set or not found");
-            return;
-        }
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
     };
 
-    let extractor = PdfExtractor::new(&config).expect("PdfExtractor should construct");
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
 
     let fixture =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.pdf");
-    if !fixture.exists() {
-        eprintln!("skipping: fixture not found at {}", fixture.display());
-        return;
-    }
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
 
-    let pdf_bytes = std::fs::read(&fixture).expect("reading PDF fixture");
-
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
     let result = extractor
         .extract(&pdf_bytes, &ExtractionOptions::default())
         .await
@@ -374,7 +360,7 @@ async fn pdf_extractor_returns_none_metadata_for_bare_pdf() {
 
 - [ ] **Step 7: Run test to verify it passes**
 
-Run: `cargo test -p rag-core pdf_extractor_returns_none_metadata_for_bare_pdf -- --ignored --nocapture`
+Run: `cargo test -p rag-core --test integration_pdf pdf_extractor_returns_none_metadata -- --nocapture`
 Expected: PASS
 
 - [ ] **Step 8: Run cargo fmt and cargo check**
@@ -389,7 +375,7 @@ cargo check -p rag-core
 ```bash
 git add crates/rag-core/tests/fixtures/titled.pdf \
         crates/rag-core/tests/fixtures/generate_titled_pdf.py \
-        crates/rag-core/src/extract.rs
+        crates/rag-core/tests/integration_pdf.rs
 git commit -m "test(rag-core): add titled.pdf fixture and metadata extraction tests"
 ```
 
@@ -410,7 +396,7 @@ This is a mechanical pass-through change with no behavior change yet.
 In `crates/rag-core/src/ingest.rs`, add `HashMap` to the imports at the top:
 
 ```rust
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 ```
 
 (Note: `HashSet` is already imported. Change the line to import both.)
@@ -596,6 +582,7 @@ fn resolve_title_returns_empty_when_neither() {
 }
 
 /// Build a minimal valid sidecar with the given title for test assertions.
+#[allow(clippy::disallowed_methods)] // test helper
 fn sidecar_with_title(title: &str) -> Sidecar {
     Sidecar::from_json(
         serde_json::json!({
@@ -655,13 +642,13 @@ Add to `mod tests` in `crates/rag-core/src/ingest.rs`:
 
 ```rust
 #[test]
-#[allow(clippy::disallowed_methods)] // serde_json::json! + test assertions
+#[allow(clippy::disallowed_methods)] // serde_json + test assertions
 fn build_metadata_json_returns_none_when_both_absent() {
     assert!(build_metadata_json(None, None).is_none());
 }
 
 #[test]
-#[allow(clippy::disallowed_methods)] // serde_json::json! + test assertions
+#[allow(clippy::disallowed_methods)] // serde_json + test assertions
 fn build_metadata_json_returns_sidecar_only() {
     let sidecar = sidecar_with_title("Title");
     let result = build_metadata_json(Some(&sidecar), None)
@@ -675,7 +662,7 @@ fn build_metadata_json_returns_sidecar_only() {
 }
 
 #[test]
-#[allow(clippy::disallowed_methods)] // serde_json::json! + test assertions
+#[allow(clippy::disallowed_methods)] // serde_json + test assertions
 fn build_metadata_json_returns_native_only() {
     let mut native = HashMap::new();
     native.insert("title".to_string(), "PDF Title".to_string());
@@ -685,17 +672,25 @@ fn build_metadata_json_returns_native_only() {
         build_metadata_json(None, Some(&native)).expect("should return Some for native metadata");
 
     assert_eq!(
-        result.get("native").and_then(|n| n.get("pdf")).and_then(|p| p.get("title")).and_then(|t| t.as_str()),
+        result
+            .get("native")
+            .and_then(|n| n.get("pdf"))
+            .and_then(|p| p.get("title"))
+            .and_then(|t| t.as_str()),
         Some("PDF Title"),
     );
     assert_eq!(
-        result.get("native").and_then(|n| n.get("pdf")).and_then(|p| p.get("author")).and_then(|a| a.as_str()),
+        result
+            .get("native")
+            .and_then(|n| n.get("pdf"))
+            .and_then(|p| p.get("author"))
+            .and_then(|a| a.as_str()),
         Some("Author"),
     );
 }
 
 #[test]
-#[allow(clippy::disallowed_methods)] // serde_json::json! + test assertions
+#[allow(clippy::disallowed_methods)] // serde_json + test assertions
 fn build_metadata_json_merges_native_into_sidecar() {
     let sidecar = sidecar_with_title("Sidecar Title");
     let mut native = HashMap::new();
@@ -723,7 +718,7 @@ fn build_metadata_json_merges_native_into_sidecar() {
 }
 
 #[test]
-#[allow(clippy::disallowed_methods)] // serde_json::json! + test assertions
+#[allow(clippy::disallowed_methods)] // serde_json + test assertions
 fn build_metadata_json_sidecar_native_key_takes_precedence() {
     // Simulate a future sidecar that already has a native.pdf.title key.
     // We can't easily add arbitrary keys to the typed Sidecar struct,
@@ -742,7 +737,7 @@ fn build_metadata_json_sidecar_native_key_takes_precedence() {
     native.insert("title".to_string(), "Overwritten Title".to_string());
     native.insert("author".to_string(), "New Author".to_string());
 
-    let result = merge_native_into_metadata(base.clone(), &native);
+    let result = merge_native_into_metadata(base, &native);
 
     let pdf = result
         .get("native")
@@ -762,11 +757,36 @@ fn build_metadata_json_sidecar_native_key_takes_precedence() {
         "missing native.pdf.author should be filled from PDF metadata"
     );
 }
+
+#[test]
+#[allow(clippy::disallowed_methods)] // serde_json + test assertions
+fn merge_native_preserves_non_object_native() {
+    // If sidecar already has `native` as a non-object (e.g. a string),
+    // merge_native_into_metadata must not panic or overwrite — the
+    // sidecar value is preserved as-is and PDF metadata is silently
+    // dropped (sidecar precedence at the `native` level).
+    let mut base = serde_json::json!({
+        "document": { "title": "T" },
+        "native": "some-string-value"
+    });
+
+    let mut native = HashMap::new();
+    native.insert("title".to_string(), "PDF Title".to_string());
+
+    let result = merge_native_into_metadata(base.clone(), &native);
+
+    assert_eq!(
+        result.get("native").and_then(|v| v.as_str()),
+        Some("some-string-value"),
+        "non-object native should be preserved (sidecar precedence)"
+    );
+}
 ```
 
 - [ ] **Step 6: Run tests to verify they fail**
 
 Run: `cargo test -p rag-core build_metadata_json -- --nocapture`
+Run: `cargo test -p rag-core merge_native_preserves -- --nocapture`
 Expected: FAIL — functions do not exist.
 
 - [ ] **Step 7: Implement `build_metadata_json` and `merge_native_into_metadata`**
@@ -802,6 +822,11 @@ fn build_metadata_json(
 ///
 /// Namespaces under `native.pdf`, preserving any existing keys at
 /// `native`, `native.pdf`, and `native.pdf.*` levels (sidecar precedence).
+///
+/// If `native` or `native.pdf` already exists as a non-object type,
+/// the sidecar value is left intact and PDF metadata is silently dropped.
+/// This is correct: sidecar precedence means we never overwrite
+/// sidecar-controlled structure.
 fn merge_native_into_metadata(
     mut base: serde_json::Value,
     native_metadata: &HashMap<String, String>,
@@ -821,7 +846,9 @@ fn merge_native_into_metadata(
                         .or_insert_with(|| serde_json::Value::String(v.clone()));
                 }
             }
+            // If pdf is not an object, sidecar value takes precedence (no-op).
         }
+        // If native is not an object, sidecar value takes precedence (no-op).
     }
     base
 }
@@ -840,6 +867,7 @@ fn native_map_to_value(nm: &HashMap<String, String>) -> serde_json::Value {
 
 Run: `cargo test -p rag-core build_metadata_json -- --nocapture`
 Run: `cargo test -p rag-core resolve_title -- --nocapture`
+Run: `cargo test -p rag-core merge_native_preserves -- --nocapture`
 Expected: All PASS
 
 - [ ] **Step 9: Run cargo fmt and cargo check**
@@ -1010,7 +1038,308 @@ git commit -m "feat(rag-core): wire metadata merge and title resolution into ing
 
 ---
 
-### Task 7: Verify full pipeline (manual sanity check)
+### Task 7: Ingest-level integration tests
+
+**Files:**
+- Modify: `crates/rag-core/tests/integration_ingest.rs` (add PDF ingest tests)
+
+These tests prove the full pipeline behavior: PDF metadata lands in the persisted `documents` row with correct title resolution, metadata shape, and sidecar precedence. They require PDFium + Postgres + Qdrant.
+
+- [ ] **Step 1: Add helper to copy PDF fixtures**
+
+Add to `crates/rag-core/tests/integration_ingest.rs`:
+
+```rust
+use std::path::PathBuf;
+
+/// Copy a test fixture from the fixtures directory into the given temp directory.
+#[allow(clippy::disallowed_methods)]
+fn copy_fixture(dir: &Path, fixture_name: &str) {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(fixture_name);
+    fs::copy(&src, dir.join(fixture_name)).expect("copying fixture");
+}
+
+/// Check whether PDF ingest tests can run (requires PDFIUM_LIBRARY_PATH + infra).
+fn pdf_ingest_available() -> bool {
+    std::env::var("PDFIUM_LIBRARY_PATH")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|v| std::path::Path::new(&v).exists())
+        .unwrap_or(false)
+}
+```
+
+- [ ] **Step 2: Write test — sidecar title beats PDF native title**
+
+```rust
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_with_sidecar_uses_sidecar_title() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "titled.pdf");
+    write_sidecar(dir.path(), "titled"); // title = "Test titled"
+
+    let tenant_str = format!("test-pdf-sidecar-{suffix}");
+    let collection = format!("test_pdf_sidecar_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("titled.pdf"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: false,
+        })
+        .await
+        .expect("ingest should succeed");
+
+    assert!(!outcome.skipped);
+
+    let row = stores
+        .get_document(&tenant_str, &outcome.document_id)
+        .await
+        .expect("get_document query")
+        .expect("document row should exist");
+
+    // Sidecar title wins over PDF native title
+    assert_eq!(
+        row.title, "Test titled",
+        "sidecar title should take precedence over PDF native title"
+    );
+
+    // native.pdf metadata should still be present in JSONB
+    let metadata = row.metadata.expect("metadata should be Some");
+    let pdf_meta = metadata
+        .get("native")
+        .and_then(|n| n.get("pdf"))
+        .expect("metadata should have native.pdf");
+
+    assert_eq!(
+        pdf_meta.get("title").and_then(|t| t.as_str()),
+        Some("Apex Test Document"),
+        "native.pdf.title should contain the PDF's own title"
+    );
+}
+```
+
+- [ ] **Step 3: Run test to verify it passes**
+
+Run: `cargo test -p rag-core --test integration_ingest pdf_with_sidecar_uses_sidecar_title -- --ignored --nocapture`
+Expected: PASS
+
+- [ ] **Step 4: Write test — no sidecar falls back to PDF native title**
+
+```rust
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_without_sidecar_uses_native_title() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "titled.pdf");
+    // No sidecar — title should fall back to PDF native
+
+    let tenant_str = format!("test-pdf-native-{suffix}");
+    let collection = format!("test_pdf_native_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("titled.pdf"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: false,
+        })
+        .await
+        .expect("ingest should succeed");
+
+    assert!(!outcome.skipped);
+
+    let row = stores
+        .get_document(&tenant_str, &outcome.document_id)
+        .await
+        .expect("get_document query")
+        .expect("document row should exist");
+
+    assert_eq!(
+        row.title, "Apex Test Document",
+        "without sidecar, title should fall back to PDF native title"
+    );
+
+    let metadata = row.metadata.expect("metadata should be Some");
+    let pdf_meta = metadata
+        .get("native")
+        .and_then(|n| n.get("pdf"))
+        .expect("metadata should have native.pdf");
+    assert!(
+        pdf_meta.get("title").is_some(),
+        "native.pdf should contain title"
+    );
+}
+```
+
+- [ ] **Step 5: Run test to verify it passes**
+
+Run: `cargo test -p rag-core --test integration_ingest pdf_without_sidecar_uses_native_title -- --ignored --nocapture`
+Expected: PASS
+
+- [ ] **Step 6: Write test — PDF with no native title stores empty title**
+
+```rust
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_without_native_title_stores_empty_title() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "two-pages.pdf");
+    // No sidecar; two-pages.pdf has creation_date but no title
+
+    let tenant_str = format!("test-pdf-notitle-{suffix}");
+    let collection = format!("test_pdf_notitle_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("two-pages.pdf"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: false,
+        })
+        .await
+        .expect("ingest should succeed");
+
+    assert!(!outcome.skipped);
+
+    let row = stores
+        .get_document(&tenant_str, &outcome.document_id)
+        .await
+        .expect("get_document query")
+        .expect("document row should exist");
+
+    assert_eq!(
+        row.title, "",
+        "PDF without native title and no sidecar should store empty title"
+    );
+
+    // Should still have native.pdf with creation_date
+    let metadata = row.metadata.expect("metadata should be Some");
+    let pdf_meta = metadata
+        .get("native")
+        .and_then(|n| n.get("pdf"))
+        .expect("metadata should have native.pdf");
+    assert!(
+        pdf_meta.get("creation_date").is_some(),
+        "native.pdf should contain creation_date"
+    );
+    assert!(
+        pdf_meta.get("title").is_none(),
+        "native.pdf should NOT contain title (two-pages.pdf has none)"
+    );
+}
+```
+
+- [ ] **Step 7: Run test to verify it passes**
+
+Run: `cargo test -p rag-core --test integration_ingest pdf_without_native_title -- --ignored --nocapture`
+Expected: PASS
+
+- [ ] **Step 8: Write test — skip-on-unchanged path writes same metadata shape**
+
+```rust
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_reingest_unchanged_preserves_metadata() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "titled.pdf");
+
+    let tenant_str = format!("test-pdf-reingest-{suffix}");
+    let collection = format!("test_pdf_reingest_{suffix}");
+
+    let make_req = || IngestFileRequest {
+        path: dir.path().join("titled.pdf"),
+        tenant: TenantId::new(&tenant_str).expect("tenant"),
+        collection_override: Some(collection.clone()),
+        dry_run: false,
+    };
+
+    // First ingest (normal persist path)
+    let first = service.ingest_file(make_req()).await.expect("first ingest");
+    assert!(!first.skipped);
+
+    let row_first = stores
+        .get_document(&tenant_str, &first.document_id)
+        .await
+        .expect("query")
+        .expect("row");
+
+    // Second ingest (skip-on-unchanged path)
+    let second = service.ingest_file(make_req()).await.expect("second ingest");
+    assert!(second.skipped);
+
+    let row_second = stores
+        .get_document(&tenant_str, &second.document_id)
+        .await
+        .expect("query")
+        .expect("row");
+
+    // Both paths should produce the same title and metadata shape
+    assert_eq!(
+        row_first.title, row_second.title,
+        "title should be identical across persist and skip paths"
+    );
+    assert_eq!(
+        row_first.metadata, row_second.metadata,
+        "metadata JSONB should be identical across persist and skip paths"
+    );
+}
+```
+
+- [ ] **Step 9: Run test to verify it passes**
+
+Run: `cargo test -p rag-core --test integration_ingest pdf_reingest_unchanged -- --ignored --nocapture`
+Expected: PASS
+
+- [ ] **Step 10: Run cargo fmt and cargo check**
+
+```bash
+cargo fmt --all
+cargo check -p rag-core
+```
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add crates/rag-core/tests/integration_ingest.rs
+git commit -m "test(rag-core): add ingest-level integration tests for PDF metadata and title resolution"
+```
+
+---
+
+### Task 8: Verify full pipeline (sanity check)
 
 This task is a verification pass — no new code, just running existing tests.
 
@@ -1025,10 +1354,10 @@ Expected: all pass. The `ExtractionResult` struct change is backward-compatible 
 - [ ] **Step 2: Run PDFium-dependent tests (if PDFium is available)**
 
 ```bash
-cargo test -p rag-core -- --ignored --nocapture 2>&1 | head -60
+cargo test -p rag-core --test integration_pdf -- --nocapture
 ```
 
-Expected: metadata tests pass. OCR tests pass (existing behavior preserved).
+Expected: metadata extraction tests pass. Existing text extraction and corruption tests still pass.
 
 - [ ] **Step 3: Run cargo check on entire workspace**
 
