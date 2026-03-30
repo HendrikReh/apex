@@ -96,3 +96,35 @@ async fn pdf_extractor_rejects_corrupt_pdf() {
     let result = extractor.extract(b"this is not a PDF", &ExtractionOptions::default()).await;
     assert!(result.is_err(), "corrupt PDF should produce an error");
 }
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)] // test assertions
+async fn pdf_extractor_returns_native_metadata() {
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
+    };
+
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
+
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/two-pages.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
+
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("PDF extraction should succeed");
+
+    let metadata =
+        result.native_metadata.as_ref().expect("two-pages.pdf should have native metadata");
+
+    assert!(
+        metadata.contains_key("creation_date"),
+        "two-pages.pdf should have creation_date, got keys: {:?}",
+        metadata.keys().collect::<Vec<_>>()
+    );
+}

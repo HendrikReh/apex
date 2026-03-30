@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures::future::BoxFuture;
+use pdfium_render::prelude::PdfDocumentMetadataTagType;
 use sha2::{Digest, Sha256};
 
 /// File formats currently recognized by the extraction layer.
@@ -267,6 +268,31 @@ impl FormatExtractor for PdfExtractor {
                     .load_pdf_from_byte_vec(owned_bytes, None)
                     .map_err(|e| anyhow!("loading PDF document: {e}"))?;
 
+                let native_metadata: HashMap<String, String> = doc
+                    .metadata()
+                    .iter()
+                    .filter_map(|tag| {
+                        let key = match tag.tag_type() {
+                            PdfDocumentMetadataTagType::Title => "title",
+                            PdfDocumentMetadataTagType::Author => "author",
+                            PdfDocumentMetadataTagType::Subject => "subject",
+                            PdfDocumentMetadataTagType::Keywords => "keywords",
+                            PdfDocumentMetadataTagType::Creator => "creator",
+                            PdfDocumentMetadataTagType::Producer => "producer",
+                            PdfDocumentMetadataTagType::CreationDate => "creation_date",
+                            PdfDocumentMetadataTagType::ModificationDate => "modification_date",
+                        };
+                        let value = tag.value();
+                        if value.is_empty() {
+                            None
+                        } else {
+                            Some((key.to_string(), value.to_string()))
+                        }
+                    })
+                    .collect();
+                let native_metadata =
+                    if native_metadata.is_empty() { None } else { Some(native_metadata) };
+
                 // Resolve OCR settings once before page loop.
                 let settings =
                     resolve_ocr_settings(ocr_options.as_ref(), &default_language, default_timeout);
@@ -331,7 +357,7 @@ impl FormatExtractor for PdfExtractor {
                     );
                 }
 
-                Ok(ExtractionResult { text: pages.join("\u{000C}"), native_metadata: None })
+                Ok(ExtractionResult { text: pages.join("\u{000C}"), native_metadata })
             })
             .await
             .context("PDF extraction task panicked")?
