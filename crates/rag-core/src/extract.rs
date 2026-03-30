@@ -796,7 +796,10 @@ impl FormatExtractor for PdfExtractor {
 
                     match page_ocr_decision(settings.force, &native_text, ocr_available) {
                         PageOcrDecision::UseNativeText => {
-                            pages.push(native_text);
+                            let page_idx = pages.len();
+                            let text = detect_and_insert_headings(&page, &native_text, page_idx)
+                                .unwrap_or(native_text);
+                            pages.push(text);
                         }
                         PageOcrDecision::SkipUnavailable => {
                             ocr_skipped_pages += 1;
