@@ -328,13 +328,8 @@ mod tests {
                 }
             }
         }"#;
-        let sc = Sidecar::from_json(json.as_bytes())
-            .expect("should parse with OCR overrides");
-        let ocr = sc
-            .ingestion
-            .expect("ingestion should be Some")
-            .ocr
-            .expect("ocr should be Some");
+        let sc = Sidecar::from_json(json.as_bytes()).expect("should parse with OCR overrides");
+        let ocr = sc.ingestion.expect("ingestion should be Some").ocr.expect("ocr should be Some");
         assert!(ocr.force);
         assert_eq!(ocr.language_hints, vec!["eng", "deu"]);
         assert_eq!(ocr.timeout_secs, Some(60));

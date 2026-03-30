@@ -97,8 +97,7 @@ impl ExtractorRegistry {
             vec![Box::new(MarkdownExtractor), Box::new(TextExtractor)];
 
         if config.pdfium_library_path.is_some() {
-            let pdf =
-                PdfExtractor::new(config).context("configuring PDF extractor")?;
+            let pdf = PdfExtractor::new(config).context("configuring PDF extractor")?;
             extractors.push(Box::new(pdf));
         }
 
@@ -184,9 +183,10 @@ impl PdfExtractor {
     /// override happens in `AppConfig` loading, not here. Eagerly loads
     /// PDFium and validates tessdata (if configured) at startup.
     pub fn new(config: &crate::config::AppConfig) -> Result<Self> {
-        let library_path = config.pdfium_library_path.clone().ok_or_else(|| {
-            anyhow!("pdfium_library_path is required for PdfExtractor")
-        })?;
+        let library_path = config
+            .pdfium_library_path
+            .clone()
+            .ok_or_else(|| anyhow!("pdfium_library_path is required for PdfExtractor"))?;
 
         // Validate PDFium library is loadable at construction time.
         // Use bind_to_library() with the exact configured path — do NOT
@@ -194,14 +194,9 @@ impl PdfExtractor {
         // platform-default filename from a directory and would ignore
         // custom filenames, symlinks, or nonstandard install locations.
         drop(pdfium_render::prelude::Pdfium::new(
-            pdfium_render::prelude::Pdfium::bind_to_library(
-                library_path.to_str().with_context(|| {
-                    format!(
-                        "pdfium_library_path is not valid UTF-8: {}",
-                        library_path.display()
-                    )
-                })?,
-            )
+            pdfium_render::prelude::Pdfium::bind_to_library(library_path.to_str().with_context(
+                || format!("pdfium_library_path is not valid UTF-8: {}", library_path.display()),
+            )?)
             .with_context(|| {
                 format!(
                     "failed to load PDFium native library from {}: \
@@ -265,10 +260,7 @@ impl FormatExtractor for PdfExtractor {
                         })?,
                     )
                     .with_context(|| {
-                        format!(
-                            "binding PDFium library from {}",
-                            lib_path.display()
-                        )
+                        format!("binding PDFium library from {}", lib_path.display())
                     })?,
                 );
 
@@ -277,11 +269,8 @@ impl FormatExtractor for PdfExtractor {
                     .map_err(|e| anyhow!("loading PDF document: {e}"))?;
 
                 // Resolve OCR settings once before page loop.
-                let settings = resolve_ocr_settings(
-                    ocr_options.as_ref(),
-                    &default_language,
-                    default_timeout,
-                );
+                let settings =
+                    resolve_ocr_settings(ocr_options.as_ref(), &default_language, default_timeout);
                 let ocr_available = tessdata_dir.is_some();
 
                 // Fail early if forced but unavailable.
@@ -298,16 +287,10 @@ impl FormatExtractor for PdfExtractor {
                 for page in doc.pages().iter() {
                     let native_text = page
                         .text()
-                        .map_err(|e| {
-                            anyhow!("extracting text from PDF page: {e}")
-                        })?
+                        .map_err(|e| anyhow!("extracting text from PDF page: {e}"))?
                         .all();
 
-                    match page_ocr_decision(
-                        settings.force,
-                        &native_text,
-                        ocr_available,
-                    ) {
+                    match page_ocr_decision(settings.force, &native_text, ocr_available) {
                         PageOcrDecision::UseNativeText => {
                             pages.push(native_text);
                         }
@@ -318,9 +301,7 @@ impl FormatExtractor for PdfExtractor {
                         PageOcrDecision::PerformOcr => {
                             let tessdata = tessdata_dir
                                 .as_ref()
-                                .ok_or_else(|| {
-                                    anyhow!("tessdata_dir is None")
-                                })?;
+                                .ok_or_else(|| anyhow!("tessdata_dir is None"))?;
 
                             let png_bytes = render_page_to_png(&page)?;
 
@@ -345,9 +326,7 @@ impl FormatExtractor for PdfExtractor {
                     );
                 }
 
-                Ok(ExtractionResult {
-                    text: pages.join("\u{000C}"),
-                })
+                Ok(ExtractionResult { text: pages.join("\u{000C}") })
             })
             .await
             .context("PDF extraction task panicked")?
@@ -385,11 +364,7 @@ enum PageOcrDecision {
 /// before the page loop (early bail). This function is only called
 /// when that combination is impossible, so `SkipUnavailable` only
 /// arises for automatic (non-forced) OCR triggers.
-fn page_ocr_decision(
-    force: bool,
-    native_text: &str,
-    ocr_available: bool,
-) -> PageOcrDecision {
+fn page_ocr_decision(force: bool, native_text: &str, ocr_available: bool) -> PageOcrDecision {
     let needs_ocr = force || native_text.trim().is_empty();
     if !needs_ocr {
         PageOcrDecision::UseNativeText
@@ -424,9 +399,7 @@ fn resolve_ocr_settings(
     let force = opts.force;
     let timeout_override = opts.timeout_secs;
 
-    let timeout = std::time::Duration::from_secs(
-        timeout_override.unwrap_or(default_timeout_secs),
-    );
+    let timeout = std::time::Duration::from_secs(timeout_override.unwrap_or(default_timeout_secs));
 
     ResolvedOcrSettings { force, language, timeout }
 }
@@ -440,18 +413,12 @@ const OCR_RENDER_DPI: f32 = 300.0;
 /// via the `image` crate.
 ///
 /// Must be called from a blocking context (inside `spawn_blocking`).
-fn render_page_to_png(
-    page: &pdfium_render::prelude::PdfPage<'_>,
-) -> Result<Vec<u8>> {
+fn render_page_to_png(page: &pdfium_render::prelude::PdfPage<'_>) -> Result<Vec<u8>> {
     let scale = OCR_RENDER_DPI / 72.0;
     let width_f = page.width().value * scale;
     let height_f = page.height().value * scale;
 
-    if width_f < 1.0
-        || height_f < 1.0
-        || width_f > i32::MAX as f32
-        || height_f > i32::MAX as f32
-    {
+    if width_f < 1.0 || height_f < 1.0 || width_f > i32::MAX as f32 || height_f > i32::MAX as f32 {
         bail!(
             "PDF page dimensions out of range for OCR rendering \
              ({width_f:.0} x {height_f:.0} px at {OCR_RENDER_DPI} DPI)"
@@ -471,9 +438,7 @@ fn render_page_to_png(
 
     let image = bitmap.as_image();
     let mut cursor = std::io::Cursor::new(Vec::new());
-    image
-        .write_to(&mut cursor, image::ImageFormat::Png)
-        .context("encoding page bitmap as PNG")?;
+    image.write_to(&mut cursor, image::ImageFormat::Png).context("encoding page bitmap as PNG")?;
 
     Ok(cursor.into_inner())
 }
@@ -495,12 +460,7 @@ fn run_tesseract(
     use std::process::{Command, Stdio};
 
     let mut cmd = Command::new("tesseract");
-    cmd.arg("stdin")
-        .arg("stdout")
-        .arg("-l")
-        .arg(language)
-        .arg("--tessdata-dir")
-        .arg(tessdata_dir);
+    cmd.arg("stdin").arg("stdout").arg("-l").arg(language).arg("--tessdata-dir").arg(tessdata_dir);
     cmd.env("TESSDATA_PREFIX", tessdata_dir);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
@@ -509,18 +469,12 @@ fn run_tesseract(
     let mut child = cmd.spawn().context("spawning tesseract subprocess")?;
 
     // Take all three pipes before spawning threads.
-    let mut stdin_pipe = child
-        .stdin
-        .take()
-        .ok_or_else(|| anyhow!("missing tesseract stdin pipe"))?;
-    let mut stdout_pipe = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("missing tesseract stdout pipe"))?;
-    let mut stderr_pipe = child
-        .stderr
-        .take()
-        .ok_or_else(|| anyhow!("missing tesseract stderr pipe"))?;
+    let mut stdin_pipe =
+        child.stdin.take().ok_or_else(|| anyhow!("missing tesseract stdin pipe"))?;
+    let mut stdout_pipe =
+        child.stdout.take().ok_or_else(|| anyhow!("missing tesseract stdout pipe"))?;
+    let mut stderr_pipe =
+        child.stderr.take().ok_or_else(|| anyhow!("missing tesseract stderr pipe"))?;
 
     // Write PNG to stdin on a separate thread to avoid deadlock.
     let owned_bytes = png_bytes.to_vec();
@@ -552,10 +506,7 @@ fn run_tesseract(
                 let _ = stdin_thread.join();
                 let _ = stdout_thread.join();
                 let _ = stderr_thread.join();
-                bail!(
-                    "tesseract timed out (exceeded {} ms)",
-                    timeout.as_millis()
-                );
+                bail!("tesseract timed out (exceeded {} ms)", timeout.as_millis());
             }
             None => {
                 std::thread::sleep(std::time::Duration::from_millis(100));
@@ -578,14 +529,10 @@ fn run_tesseract(
         .context("reading tesseract stderr")?;
 
     if !status.success() {
-        bail!(
-            "tesseract failed: {}",
-            String::from_utf8_lossy(&stderr_bytes)
-        );
+        bail!("tesseract failed: {}", String::from_utf8_lossy(&stderr_bytes));
     }
 
-    let text = String::from_utf8(stdout_bytes)
-        .context("tesseract output is not valid UTF-8")?;
+    let text = String::from_utf8(stdout_bytes).context("tesseract output is not valid UTF-8")?;
     Ok(text.trim().to_string())
 }
 
@@ -716,46 +663,25 @@ mod tests {
 
     #[test]
     fn page_ocr_decision_native_text_no_force() {
-        assert_eq!(
-            page_ocr_decision(false, "content", true),
-            PageOcrDecision::UseNativeText,
-        );
-        assert_eq!(
-            page_ocr_decision(false, "content", false),
-            PageOcrDecision::UseNativeText,
-        );
+        assert_eq!(page_ocr_decision(false, "content", true), PageOcrDecision::UseNativeText,);
+        assert_eq!(page_ocr_decision(false, "content", false), PageOcrDecision::UseNativeText,);
     }
 
     #[test]
     fn page_ocr_decision_empty_text_ocr_available() {
-        assert_eq!(
-            page_ocr_decision(false, "", true),
-            PageOcrDecision::PerformOcr,
-        );
-        assert_eq!(
-            page_ocr_decision(false, "   ", true),
-            PageOcrDecision::PerformOcr,
-        );
-        assert_eq!(
-            page_ocr_decision(false, "\n\t ", true),
-            PageOcrDecision::PerformOcr,
-        );
+        assert_eq!(page_ocr_decision(false, "", true), PageOcrDecision::PerformOcr,);
+        assert_eq!(page_ocr_decision(false, "   ", true), PageOcrDecision::PerformOcr,);
+        assert_eq!(page_ocr_decision(false, "\n\t ", true), PageOcrDecision::PerformOcr,);
     }
 
     #[test]
     fn page_ocr_decision_empty_text_ocr_unavailable() {
-        assert_eq!(
-            page_ocr_decision(false, "", false),
-            PageOcrDecision::SkipUnavailable,
-        );
+        assert_eq!(page_ocr_decision(false, "", false), PageOcrDecision::SkipUnavailable,);
     }
 
     #[test]
     fn page_ocr_decision_force_overrides_native_text() {
-        assert_eq!(
-            page_ocr_decision(true, "has content", true),
-            PageOcrDecision::PerformOcr,
-        );
+        assert_eq!(page_ocr_decision(true, "has content", true), PageOcrDecision::PerformOcr,);
     }
 
     // --- resolve_ocr_settings tests ---
@@ -783,11 +709,7 @@ mod tests {
 
     #[test]
     fn resolve_ocr_settings_empty_hints_uses_default_language() {
-        let opts = OcrOptions {
-            force: false,
-            language_hints: vec![],
-            timeout_secs: None,
-        };
+        let opts = OcrOptions { force: false, language_hints: vec![], timeout_secs: None };
         let resolved = resolve_ocr_settings(Some(&opts), "fra", 45);
         assert_eq!(resolved.language, "fra");
         assert_eq!(resolved.timeout.as_secs(), 45);
@@ -820,11 +742,7 @@ mod tests {
 
     /// Check whether tesseract is installed and tessdata is available.
     fn tesseract_available() -> Option<std::path::PathBuf> {
-        if std::process::Command::new("tesseract")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if std::process::Command::new("tesseract").arg("--version").output().is_err() {
             return None;
         }
         find_tessdata_dir()
@@ -859,8 +777,8 @@ mod tests {
             }
         };
 
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/hello_ocr.png");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.png");
         if !fixture.exists() {
             eprintln!("skipping: fixture not found at {}", fixture.display());
             return;
@@ -868,13 +786,8 @@ mod tests {
 
         let png_bytes = std::fs::read(&fixture).expect("reading PNG fixture");
 
-        let text = run_tesseract(
-            &png_bytes,
-            "eng",
-            std::time::Duration::from_secs(30),
-            &tessdata,
-        )
-        .expect("tesseract should succeed on fixture");
+        let text = run_tesseract(&png_bytes, "eng", std::time::Duration::from_secs(30), &tessdata)
+            .expect("tesseract should succeed on fixture");
 
         assert!(
             text.to_uppercase().contains("HELLO"),
@@ -897,23 +810,17 @@ mod tests {
         let config = match test_pdf_config(Some(tessdata)) {
             Some(c) => c,
             None => {
-                eprintln!(
-                    "skipping: PDFIUM_LIBRARY_PATH not set or not found"
-                );
+                eprintln!("skipping: PDFIUM_LIBRARY_PATH not set or not found");
                 return;
             }
         };
 
-        let extractor =
-            PdfExtractor::new(&config).expect("PdfExtractor should construct");
+        let extractor = PdfExtractor::new(&config).expect("PdfExtractor should construct");
 
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/hello_ocr.pdf");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.pdf");
         if !fixture.exists() {
-            eprintln!(
-                "skipping: PDF fixture not found at {}",
-                fixture.display()
-            );
+            eprintln!("skipping: PDF fixture not found at {}", fixture.display());
             return;
         }
 
@@ -938,34 +845,25 @@ mod tests {
         let config = match test_pdf_config(None) {
             Some(c) => c,
             None => {
-                eprintln!(
-                    "skipping: PDFIUM_LIBRARY_PATH not set or not found"
-                );
+                eprintln!("skipping: PDFIUM_LIBRARY_PATH not set or not found");
                 return;
             }
         };
 
-        let extractor = PdfExtractor::new(&config)
-            .expect("PdfExtractor should construct without tessdata");
+        let extractor =
+            PdfExtractor::new(&config).expect("PdfExtractor should construct without tessdata");
 
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/hello_ocr.pdf");
+        let fixture =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.pdf");
         if !fixture.exists() {
-            eprintln!(
-                "skipping: PDF fixture not found at {}",
-                fixture.display()
-            );
+            eprintln!("skipping: PDF fixture not found at {}", fixture.display());
             return;
         }
 
         let pdf_bytes = std::fs::read(&fixture).expect("reading PDF fixture");
 
         let options = ExtractionOptions {
-            ocr: Some(OcrOptions {
-                force: true,
-                language_hints: vec![],
-                timeout_secs: None,
-            }),
+            ocr: Some(OcrOptions { force: true, language_hints: vec![], timeout_secs: None }),
         };
 
         let err = extractor

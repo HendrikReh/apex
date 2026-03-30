@@ -528,9 +528,8 @@ impl AppConfig {
             .or_else(|| extract_settings.tessdata_dir.clone())
             .map(std::path::PathBuf::from);
 
-        let ocr_timeout_secs = env_parsed("OCR_TIMEOUT_SECS")?
-            .or(extract_settings.ocr_timeout_secs)
-            .unwrap_or(30);
+        let ocr_timeout_secs =
+            env_parsed("OCR_TIMEOUT_SECS")?.or(extract_settings.ocr_timeout_secs).unwrap_or(30);
 
         let ocr_default_language = env_string("OCR_DEFAULT_LANGUAGE")
             .or_else(|| extract_settings.ocr_default_language.clone())
@@ -707,10 +706,7 @@ mod tests {
         assert_eq!(cfg.llm_prompt_template_path, "prompts/chat_system.hbs");
         assert!(cfg.pdfium_library_path.is_none(), "pdfium_library_path should default to None");
         // OCR defaults
-        assert!(
-            cfg.tessdata_dir.is_none(),
-            "tessdata_dir should default to None"
-        );
+        assert!(cfg.tessdata_dir.is_none(), "tessdata_dir should default to None");
         assert_eq!(cfg.ocr_timeout_secs, 30);
         assert_eq!(cfg.ocr_default_language, "eng");
 
@@ -765,8 +761,7 @@ mod tests {
 
         // -- Part 5: TESSDATA_PREFIX env override --
         unsafe { std::env::set_var("TESSDATA_PREFIX", "/opt/tessdata") };
-        let cfg = AppConfig::from_current_env()
-            .expect("from_env with TESSDATA_PREFIX");
+        let cfg = AppConfig::from_current_env().expect("from_env with TESSDATA_PREFIX");
         assert_eq!(
             cfg.tessdata_dir.as_deref(),
             Some(std::path::Path::new("/opt/tessdata")),
