@@ -4,8 +4,11 @@
 //! These tests require `DATABASE_URL` to be set and both services running.
 
 use qdrant_client::Payload;
-use qdrant_client::qdrant::{Distance, PointStruct};
+use qdrant_client::qdrant::{
+    DenseVector, Distance, NamedVectors, PointStruct, Vector as QdrantVector, Vectors,
+};
 use rag_core::{AppConfig, Stores};
+use rag_core::stores::vectors::DENSE_VECTOR_NAME;
 use sqlx::Error as SqlxError;
 use uuid::Uuid;
 
@@ -167,7 +170,16 @@ async fn qdrant_collection_lifecycle() {
     }))
     .expect("Payload construction should succeed");
 
-    let point = PointStruct::new(point_id, vec![0.1_f32, 0.2, 0.3, 0.4], payload);
+    let mut named = std::collections::HashMap::new();
+    named.insert(
+        DENSE_VECTOR_NAME.to_string(),
+        QdrantVector::from(DenseVector { data: vec![0.1_f32, 0.2, 0.3, 0.4] }),
+    );
+    let point = PointStruct {
+        id: Some(point_id.into()),
+        payload: payload.into(),
+        vectors: Some(Vectors::from(NamedVectors { vectors: named })),
+    };
     stores.upsert_points(&collection, vec![point]).await.expect("upsert_points should succeed");
 
     // 5. search_dense -> returns our point.
