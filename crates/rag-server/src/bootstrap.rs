@@ -4,31 +4,50 @@
 pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     const GREEN: &str = "\x1b[32m";
     const RESET: &str = "\x1b[0m";
-    const INNER_WIDTH: usize = 84;
-    const TITLE_LINES: [&str; 4] = [
-        "___   ____  _______  __   _____ ______ ____ _    _______ ____",
-        "/ _ | / __ \\/ __/ _ \\/ /  / ___// __/ // / // / / __/ _ \\/ __/",
-        "/ __ |/ /_/ / _// // / /__/ /__ / _// _  / _  / _\\\\ \\/ , _/\\\\ \\\\",
-        "/_/ |_|\\\\____/___/____/____/\\\\___//___/_//_/_//_/ /___/_/|_/___/",
+    const MIN_INNER_WIDTH: usize = 84;
+    const TITLE_LINES: [&str; 6] = [
+        "█████╗ ██████╗ ███████╗██╗  ██╗   ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗",
+        "██╔══██╗██╔══██╗██╔════╝╚██╗██╔╝   ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗",
+        "███████║██████╔╝█████╗   ╚███╔╝    ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝",
+        "██╔══██║██╔═══╝ ██╔══╝   ██╔██╗    ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗",
+        "██║  ██║██║     ███████╗██╔╝ ██╗   ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║",
+        "╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝",
     ];
+
+    let tagline_text = format!("Apex Accelerator  ·  HTTP RAG API  ·  v{version}");
+    let license_text = license_info.to_string();
+    let bind_text = format!("bind {bind_addr}");
+
+    let inner_width = TITLE_LINES
+        .iter()
+        .map(|line| line.chars().count())
+        .chain([
+            tagline_text.chars().count(),
+            license_text.chars().count(),
+            bind_text.chars().count(),
+        ])
+        .max()
+        .unwrap_or(MIN_INNER_WIDTH)
+        .max(MIN_INNER_WIDTH);
 
     let center_line = |text: &str| -> String {
         let width = text.chars().count();
-        let padding = INNER_WIDTH.saturating_sub(width);
+        let padding = inner_width.saturating_sub(width);
         let left = padding / 2;
         let right = padding - left;
         format!("  ║{}{}{}║", " ".repeat(left), text, " ".repeat(right))
     };
 
-    let tagline = center_line(&format!("Apex Accelerator  ·  HTTP RAG API  ·  v{version}"));
-    let license = center_line(license_info);
-    let bind = center_line(&format!("bind {bind_addr}"));
+    let tagline = center_line(&tagline_text);
+    let license = center_line(&license_text);
+    let bind = center_line(&bind_text);
     let empty = center_line("");
     let title = TITLE_LINES.iter().map(|line| center_line(line)).collect::<Vec<_>>().join("\n");
+    let border = "═".repeat(inner_width);
 
     let banner = format!(
         r#"
-  ╔════════════════════════════════════════════════════════════════════════════════════╗
+  ╔{border}╗
 {empty}
 {title}
 {empty}
@@ -36,8 +55,9 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
 {license}
 {bind}
 {empty}
-  ╚════════════════════════════════════════════════════════════════════════════════════╝
+  ╚{border}╝
 "#,
+        border = border,
         empty = empty,
         title = title,
         tagline = tagline,
