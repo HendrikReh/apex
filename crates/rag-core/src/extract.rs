@@ -293,6 +293,54 @@ impl Default for HeadingThresholds {
 }
 
 // ---------------------------------------------------------------------------
+// Heading detection PDFium collectors
+// ---------------------------------------------------------------------------
+
+/// Collect text object spans from a PDF page for font analysis.
+fn collect_object_spans(page: &pdfium_render::prelude::PdfPage<'_>) -> Vec<ObjectSpan> {
+    use pdfium_render::prelude::{PdfPageObjectCommon, PdfPageObjectsCommon};
+
+    let mut spans = Vec::new();
+
+    for object in page.objects().iter() {
+        let Some(text_obj) = object.as_text_object() else {
+            continue;
+        };
+        let text = text_obj.text();
+        if text.trim().is_empty() {
+            continue;
+        }
+        let font_size = text_obj.unscaled_font_size().value;
+        if !font_size.is_finite() || font_size <= 0.0 {
+            continue;
+        }
+
+        let is_bold = is_bold_weight(text_obj.font().weight().ok());
+
+        let (x_position, y_position, x_end) = match object.bounds() {
+            Ok(bounds) => (bounds.left().value, bounds.bottom().value, bounds.right().value),
+            Err(_) => continue,
+        };
+
+        spans.push(ObjectSpan { text, font_size, is_bold, x_position, y_position, x_end });
+    }
+
+    spans
+}
+
+/// Check if a font weight indicates bold (>= 700).
+fn is_bold_weight(weight: Option<pdfium_render::prelude::PdfFontWeight>) -> bool {
+    use pdfium_render::prelude::PdfFontWeight;
+    match weight {
+        Some(PdfFontWeight::Weight700Bold)
+        | Some(PdfFontWeight::Weight800)
+        | Some(PdfFontWeight::Weight900) => true,
+        Some(PdfFontWeight::Custom(value)) => value >= 700,
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Heading detection helpers
 // ---------------------------------------------------------------------------
 
@@ -610,6 +658,61 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
     }
 
     result
+}
+
+/// Orchestrator: detect headings on a native-text PDF page and insert
+/// inline markdown markers. Returns the original text on any failure or
+/// when no headings are detected.
+// tracing macros internally use .expect()
+#[allow(clippy::disallowed_methods)]
+fn detect_and_insert_headings(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+    native_text: &str,
+    page_index: usize,
+) -> Result<String> {
+    let spans = collect_object_spans(page);
+
+    tracing::debug!(page_index, page_objects_count = spans.len(), "collected text object spans");
+
+    if spans.is_empty() {
+        return Ok(native_text.to_string());
+    }
+
+    let body_size = match compute_body_font_size(&spans) {
+        Some(size) => {
+            tracing::debug!(page_index, body_font_size = size, "computed body font size");
+            size
+        }
+        None => {
+            tracing::debug!(page_index, "no stable body font size, skipping heading detection");
+            return Ok(native_text.to_string());
+        }
+    };
+
+    let lines = coalesce_into_lines(spans);
+    let thresholds = HeadingThresholds::default();
+    let headings = classify_line_headings(&lines, body_size, &thresholds);
+
+    if headings.is_empty() {
+        tracing::debug!(page_index, "no headings classified");
+        return Ok(native_text.to_string());
+    }
+
+    let result = insert_heading_markers(native_text, &headings);
+
+    let accepted = headings.len();
+    let markers_found = result.matches("\n# ").count()
+        + result.matches("\n## ").count()
+        + result.matches("\n### ").count();
+
+    tracing::debug!(
+        page_index,
+        headings_accepted = accepted,
+        candidates_skipped = accepted.saturating_sub(markers_found),
+        "heading detection complete"
+    );
+
+    Ok(result)
 }
 
 impl FormatExtractor for PdfExtractor {
