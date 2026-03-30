@@ -155,7 +155,7 @@ impl IngestService {
         if existing_checksum.as_deref() == Some(&prepared.checksum) {
             // Checksum match — update metadata if sidecar changed, skip re-chunking.
             let metadata_json =
-                build_metadata_json(prepared.sidecar.as_ref(), prepared.native_metadata.as_ref());
+                build_metadata_json(prepared.sidecar.as_ref(), prepared.native_metadata.as_ref())?;
             let title = resolve_title(prepared.sidecar.as_ref(), prepared.native_metadata.as_ref());
             self.stores
                 .upsert_document(
@@ -403,7 +403,8 @@ impl IngestService {
         self.ensure_collection_cached(&doc.collection, vector_size).await?;
 
         // Upsert document row in Postgres.
-        let metadata_json = build_metadata_json(doc.sidecar.as_ref(), doc.native_metadata.as_ref());
+        let metadata_json =
+            build_metadata_json(doc.sidecar.as_ref(), doc.native_metadata.as_ref())?;
         let title = resolve_title(doc.sidecar.as_ref(), doc.native_metadata.as_ref());
         self.stores
             .upsert_document(
@@ -625,7 +626,9 @@ fn resolve_title<'a>(
     native_metadata: Option<&'a HashMap<String, String>>,
 ) -> &'a str {
     if let Some(s) = sidecar {
-        return &s.document.title;
+        if !s.document.title.is_empty() {
+            return &s.document.title;
+        }
     }
     if let Some(nm) = native_metadata {
         if let Some(title) = nm.get("title") {
@@ -641,20 +644,20 @@ fn resolve_title<'a>(
 ///
 /// Combines sidecar JSON with native PDF metadata namespaced under
 /// `native.pdf`. Sidecar values take precedence at every nesting level.
-#[allow(clippy::disallowed_methods)] // serde_json::to_value internally uses .expect()
+#[allow(clippy::disallowed_methods)] // serde_json::json! internally uses .expect()
 fn build_metadata_json(
     sidecar: Option<&Sidecar>,
     native_metadata: Option<&HashMap<String, String>>,
-) -> Option<serde_json::Value> {
+) -> Result<Option<serde_json::Value>> {
     match (sidecar, native_metadata) {
-        (None, None) => None,
-        (Some(s), None) => Some(serde_json::to_value(s).unwrap_or(serde_json::Value::Null)),
-        (None, Some(nm)) => Some(serde_json::json!({
+        (None, None) => Ok(None),
+        (Some(s), None) => Ok(Some(serde_json::to_value(s)?)),
+        (None, Some(nm)) => Ok(Some(serde_json::json!({
             "native": { "pdf": native_map_to_value(nm) }
-        })),
+        }))),
         (Some(s), Some(nm)) => {
-            let base = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
-            Some(merge_native_into_metadata(base, nm))
+            let base = serde_json::to_value(s)?;
+            Ok(Some(merge_native_into_metadata(base, nm)))
         }
     }
 }
@@ -664,8 +667,9 @@ fn build_metadata_json(
 /// Namespaces under `native.pdf`, preserving any existing keys at
 /// `native`, `native.pdf`, and `native.pdf.*` levels (sidecar precedence).
 ///
-/// If `native` or `native.pdf` already exists as a non-object type,
-/// the sidecar value is left intact and PDF metadata is silently dropped.
+/// If `base` is not a JSON object, returns it unchanged and PDF metadata
+/// is dropped. If `native` or `native.pdf` already exists as a non-object
+/// type, the sidecar value is left intact and PDF metadata is silently dropped.
 fn merge_native_into_metadata(
     mut base: serde_json::Value,
     native_metadata: &HashMap<String, String>,
@@ -822,6 +826,13 @@ mod tests {
         assert_eq!(resolve_title(None, None), "");
     }
 
+    #[test]
+    fn resolve_title_skips_empty_native_title() {
+        let mut native = HashMap::new();
+        native.insert("title".to_string(), "".to_string());
+        assert_eq!(resolve_title(None, Some(&native)), "");
+    }
+
     /// Build a minimal valid sidecar with the given title for test assertions.
     #[allow(clippy::disallowed_methods)] // test helper
     fn sidecar_with_title(title: &str) -> Sidecar {
@@ -845,7 +856,7 @@ mod tests {
     #[test]
     #[allow(clippy::disallowed_methods)] // serde_json + test assertions
     fn build_metadata_json_returns_none_when_both_absent() {
-        assert!(build_metadata_json(None, None).is_none());
+        assert!(build_metadata_json(None, None).expect("no error").is_none());
     }
 
     #[test]
@@ -853,6 +864,7 @@ mod tests {
     fn build_metadata_json_returns_sidecar_only() {
         let sidecar = sidecar_with_title("Title");
         let result = build_metadata_json(Some(&sidecar), None)
+            .expect("no error")
             .expect("should return Some when sidecar exists");
 
         assert!(result.is_object());
@@ -870,6 +882,7 @@ mod tests {
         native.insert("author".to_string(), "Author".to_string());
 
         let result = build_metadata_json(None, Some(&native))
+            .expect("no error")
             .expect("should return Some for native metadata");
 
         assert_eq!(
@@ -899,6 +912,7 @@ mod tests {
         native.insert("creation_date".to_string(), "D:20260101".to_string());
 
         let result = build_metadata_json(Some(&sidecar), Some(&native))
+            .expect("no error")
             .expect("should merge sidecar + native");
 
         // Sidecar fields preserved

@@ -34,7 +34,9 @@ impl FileType {
 pub struct ExtractionResult {
     pub text: String,
     /// Native metadata from the source format (e.g. PDF document info).
-    /// Non-PDF extractors return `None`.
+    /// Non-PDF extractors return `None`. Date values (e.g. `creation_date`,
+    /// `modification_date`) are stored raw in PDF date format
+    /// (`D:YYYYMMDDHHmmSSOHH'mm'`), not ISO-8601.
     pub native_metadata: Option<HashMap<String, String>>,
 }
 
