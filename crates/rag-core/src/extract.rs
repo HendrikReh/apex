@@ -1975,4 +1975,30 @@ mod tests {
             "should match despite whitespace differences: {result:?}"
         );
     }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn heading_detection_does_not_affect_non_pdf_extractors() {
+        let registry = test_registry();
+
+        let md_input = b"# Existing Heading\n\nBody text";
+        let md_result = registry
+            .extract(FileType::Markdown, md_input, &ExtractionOptions::default())
+            .await
+            .expect("markdown extraction");
+        assert_eq!(
+            md_result.text, "# Existing Heading\n\nBody text",
+            "markdown extractor must not alter content"
+        );
+
+        let txt_input = b"Plain text with no headings";
+        let txt_result = registry
+            .extract(FileType::Text, txt_input, &ExtractionOptions::default())
+            .await
+            .expect("text extraction");
+        assert_eq!(
+            txt_result.text, "Plain text with no headings",
+            "text extractor must not alter content"
+        );
+    }
 }
