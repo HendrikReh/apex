@@ -250,18 +250,13 @@ impl FormatExtractor for PdfExtractor {
 
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
+                // UTF-8 validity already checked in PdfExtractor::new().
+                let lib_str =
+                    lib_path.to_str().ok_or_else(|| anyhow!("non-UTF-8 pdfium library path"))?;
                 let pdfium = pdfium_render::prelude::Pdfium::new(
-                    pdfium_render::prelude::Pdfium::bind_to_library(
-                        lib_path.to_str().with_context(|| {
-                            format!(
-                                "pdfium_library_path is not valid UTF-8: {}",
-                                lib_path.display()
-                            )
-                        })?,
-                    )
-                    .with_context(|| {
-                        format!("binding PDFium library from {}", lib_path.display())
-                    })?,
+                    pdfium_render::prelude::Pdfium::bind_to_library(lib_str).with_context(
+                        || format!("binding PDFium library from {}", lib_path.display()),
+                    )?,
                 );
 
                 let doc = pdfium
@@ -318,6 +313,12 @@ impl FormatExtractor for PdfExtractor {
                 }
 
                 if ocr_skipped_pages > 0 {
+                    if ocr_skipped_pages as usize == pages.len() {
+                        bail!(
+                            "all {ocr_skipped_pages} page(s) need OCR but \
+                             Tesseract is not configured (tessdata_dir not set)"
+                        );
+                    }
                     tracing::warn!(
                         skipped_pages = ocr_skipped_pages,
                         "OCR fallback skipped for \
@@ -420,7 +421,8 @@ fn render_page_to_png(page: &pdfium_render::prelude::PdfPage<'_>) -> Result<Vec<
     let width_f = page.width().value * scale;
     let height_f = page.height().value * scale;
 
-    if width_f < 1.0 || height_f < 1.0 || width_f > i32::MAX as f32 || height_f > i32::MAX as f32 {
+    if width_f < 1.0 || height_f < 1.0 || width_f >= i32::MAX as f32 || height_f >= i32::MAX as f32
+    {
         bail!(
             "PDF page dimensions out of range for OCR rendering \
              ({width_f:.0} x {height_f:.0} px at {OCR_RENDER_DPI} DPI)"
@@ -463,7 +465,6 @@ fn run_tesseract(
 
     let mut cmd = Command::new("tesseract");
     cmd.arg("stdin").arg("stdout").arg("-l").arg(language).arg("--tessdata-dir").arg(tessdata_dir);
-    cmd.env("TESSDATA_PREFIX", tessdata_dir);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -516,10 +517,11 @@ fn run_tesseract(
         }
     };
 
-    stdin_thread
-        .join()
-        .map_err(|_| anyhow!("tesseract stdin writer panicked"))?
-        .context("writing PNG to tesseract stdin")?;
+    // Collect stdin result WITHOUT propagating yet — if the child
+    // exits early with an error, the stdin writer gets BrokenPipe
+    // which would hide the real diagnostic from stderr.
+    let stdin_result =
+        stdin_thread.join().map_err(|_| anyhow!("tesseract stdin writer panicked"))?;
 
     let stdout_bytes = stdout_thread
         .join()
@@ -530,9 +532,14 @@ fn run_tesseract(
         .map_err(|_| anyhow!("tesseract stderr reader panicked"))?
         .context("reading tesseract stderr")?;
 
+    // Check exit status first — surfaces the stderr diagnostic
+    // instead of a misleading BrokenPipe from stdin.
     if !status.success() {
         bail!("tesseract failed: {}", String::from_utf8_lossy(&stderr_bytes));
     }
+
+    // Only propagate stdin errors when Tesseract itself succeeded.
+    stdin_result.context("writing PNG to tesseract stdin")?;
 
     let text = String::from_utf8(stdout_bytes).context("tesseract output is not valid UTF-8")?;
     Ok(text.trim().to_string())

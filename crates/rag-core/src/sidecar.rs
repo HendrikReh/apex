@@ -159,18 +159,23 @@ impl Sidecar {
             bail!("provenance.retrieved_by must not be empty");
         }
 
-        if let Some(ref ing) = self.ingestion
-            && let Some(ref chunking) = ing.chunking
-        {
-            if let Some(max) = chunking.max_tokens
-                && max == 0
-            {
-                bail!("ingestion.chunking.max_tokens must be > 0");
+        if let Some(ref ing) = self.ingestion {
+            if let Some(ref chunking) = ing.chunking {
+                if let Some(max) = chunking.max_tokens
+                    && max == 0
+                {
+                    bail!("ingestion.chunking.max_tokens must be > 0");
+                }
+                if let Some(ratio) = chunking.overlap_ratio
+                    && !(0.0..1.0).contains(&ratio)
+                {
+                    bail!("ingestion.chunking.overlap_ratio must be in [0.0, 1.0), got {}", ratio);
+                }
             }
-            if let Some(ratio) = chunking.overlap_ratio
-                && !(0.0..1.0).contains(&ratio)
+            if let Some(ref ocr) = ing.ocr
+                && ocr.timeout_secs == Some(0)
             {
-                bail!("ingestion.chunking.overlap_ratio must be in [0.0, 1.0), got {}", ratio);
+                bail!("ingestion.ocr.timeout_secs must be > 0");
             }
         }
 
@@ -333,6 +338,29 @@ mod tests {
         assert!(ocr.force);
         assert_eq!(ocr.language_hints, vec!["eng", "deu"]);
         assert_eq!(ocr.timeout_secs, Some(60));
+    }
+
+    #[test]
+    fn rejects_zero_ocr_timeout() {
+        let json = r#"{
+            "schema_version": 1,
+            "document": { "title": "T", "category": "c" },
+            "source": { "url": "u", "domain": "d", "publisher": "p" },
+            "language": "en",
+            "tags": ["t"],
+            "acl": { "allow_roles": ["*"] },
+            "security": { "classification": "public", "requires_evidence_pack": false },
+            "provenance": { "retrieved_at": "now", "retrieved_by": "me" },
+            "ingestion": {
+                "ocr": { "timeout_secs": 0 }
+            }
+        }"#;
+        let err =
+            Sidecar::from_json(json.as_bytes()).expect_err("timeout_secs 0 should be rejected");
+        assert!(
+            err.to_string().contains("timeout_secs must be > 0"),
+            "error should mention timeout_secs, got: {err}"
+        );
     }
 
     #[test]
