@@ -459,6 +459,87 @@ fn coalesce_into_lines(mut spans: Vec<ObjectSpan>) -> Vec<LineSpan> {
         .collect()
 }
 
+/// Check if a line of text is a plausible heading candidate.
+///
+/// Filters: 3-180 chars, >= 3 alphabetic chars, >= 50% alphabetic density,
+/// <= 20 words, < 3 sentence-ending punctuation marks.
+fn is_heading_candidate(text: &str) -> bool {
+    let char_count = text.chars().count();
+    if char_count < 3 || char_count > 180 {
+        return false;
+    }
+
+    let alpha_count = text.chars().filter(|c| c.is_alphabetic()).count();
+    if alpha_count < 3 {
+        return false;
+    }
+
+    if alpha_count * 2 < char_count {
+        return false;
+    }
+
+    if text.split_whitespace().count() > 20 {
+        return false;
+    }
+
+    let sentence_ends = text.chars().filter(|&c| c == '.' || c == '?' || c == '!').count();
+    if sentence_ends >= 3 {
+        return false;
+    }
+
+    true
+}
+
+/// Classify line spans as headings based on font-size ratio to body size.
+///
+/// Returns accepted headings in the order they appear in `lines`.
+fn classify_line_headings(
+    lines: &[LineSpan],
+    body_size: f32,
+    thresholds: &HeadingThresholds,
+) -> Vec<AcceptedHeading> {
+    let mut headings = Vec::new();
+
+    for line in lines {
+        if !is_heading_candidate(&line.text) {
+            continue;
+        }
+
+        // Use f64 arithmetic to reduce floating-point precision loss when
+        // comparing font-size ratios. A tiny epsilon absorbs rounding from
+        // f32 storage (e.g. 14.4f32 / 12.0f32 is slightly below 1.2f32).
+        const RATIO_EPS: f64 = 1e-6;
+        let ratio = line.dominant_font_size as f64 / body_size as f64;
+
+        let level = if ratio >= thresholds.h1_ratio as f64 - RATIO_EPS {
+            Some(1u8)
+        } else if ratio >= thresholds.h2_ratio as f64 - RATIO_EPS {
+            Some(2)
+        } else if ratio >= thresholds.h3_ratio as f64 - RATIO_EPS {
+            Some(3)
+        } else if thresholds.bold_as_h3
+            && line.is_bold
+            && ratio >= thresholds.bold_min_ratio as f64 - RATIO_EPS
+        {
+            let has_sentence_end = line.text.chars().any(|c| c == '.' || c == '?' || c == '!');
+            if has_sentence_end { None } else { Some(3) }
+        } else {
+            None
+        };
+
+        if let Some(level) = level {
+            headings.push(AcceptedHeading {
+                level,
+                text: line.text.clone(),
+                y_position: line.y_position,
+                x_position: line.x_position,
+            });
+        }
+    }
+
+    headings
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -1501,5 +1582,141 @@ mod tests {
         ];
         let lines = coalesce_into_lines(spans);
         assert_eq!(lines.len(), 2, "should not merge across tolerance boundary");
+    }
+
+    // --- is_heading_candidate tests ---
+
+    #[test]
+    fn heading_candidate_rejects_too_short() {
+        assert!(!is_heading_candidate("ab"));
+        assert!(is_heading_candidate("abc"));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_too_long() {
+        let long = "a".repeat(180);
+        assert!(is_heading_candidate(&long));
+        let too_long = "a".repeat(181);
+        assert!(!is_heading_candidate(&too_long));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_no_alpha() {
+        assert!(!is_heading_candidate("12345"));
+        assert!(!is_heading_candidate("---..."));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_low_alpha_density() {
+        assert!(!is_heading_candidate("a11111111"));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_too_many_words() {
+        let words: String = (0..21).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+        assert!(!is_heading_candidate(&words));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_prose_punctuation() {
+        assert!(!is_heading_candidate("Sentence one. Sentence two. Sentence three."));
+    }
+
+    #[test]
+    fn heading_candidate_accepts_valid_heading() {
+        assert!(is_heading_candidate("Introduction"));
+        assert!(is_heading_candidate("Chapter 1: Getting Started"));
+    }
+
+    #[test]
+    fn heading_candidate_requires_min_three_alpha() {
+        assert!(!is_heading_candidate("a 1"));
+        assert!(!is_heading_candidate("ab 1"));
+        assert!(is_heading_candidate("abc 1"));
+    }
+
+    // --- classify_line_headings tests ---
+
+    #[test]
+    fn classify_headings_by_ratio() {
+        let lines = vec![
+            LineSpan {
+                text: "Big Title".into(),
+                dominant_font_size: 24.0,
+                is_bold: false,
+                y_position: 700.0,
+                x_position: 0.0,
+            },
+            LineSpan {
+                text: "Section Header".into(),
+                dominant_font_size: 19.2,
+                is_bold: false,
+                y_position: 600.0,
+                x_position: 0.0,
+            },
+            LineSpan {
+                text: "Subsection".into(),
+                dominant_font_size: 14.4,
+                is_bold: false,
+                y_position: 500.0,
+                x_position: 0.0,
+            },
+            LineSpan {
+                text: "Body text that is long enough to be a real paragraph of text.".into(),
+                dominant_font_size: 12.0,
+                is_bold: false,
+                y_position: 400.0,
+                x_position: 0.0,
+            },
+        ];
+        let thresholds = HeadingThresholds::default();
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert_eq!(headings.len(), 3);
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(headings[1].level, 2);
+        assert_eq!(headings[2].level, 3);
+    }
+
+    #[test]
+    fn classify_headings_bold_as_h3() {
+        let lines = vec![LineSpan {
+            text: "Bold Subhead".into(),
+            dominant_font_size: 13.2,
+            is_bold: true,
+            y_position: 600.0,
+            x_position: 0.0,
+        }];
+        let thresholds = HeadingThresholds::default();
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].level, 3);
+    }
+
+    #[test]
+    fn classify_headings_bold_rejected_with_punctuation() {
+        let lines = vec![LineSpan {
+            text: "Bold sentence.".into(),
+            dominant_font_size: 13.2,
+            is_bold: true,
+            y_position: 600.0,
+            x_position: 0.0,
+        }];
+        let thresholds = HeadingThresholds::default();
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert!(headings.is_empty(), "bold with sentence punctuation rejected");
+    }
+
+    #[test]
+    fn classify_headings_skips_body_text() {
+        let lines = vec![LineSpan {
+            text: "Just normal body text here".into(),
+            dominant_font_size: 12.0,
+            is_bold: false,
+            y_position: 400.0,
+            x_position: 0.0,
+        }];
+        let thresholds = HeadingThresholds::default();
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert!(headings.is_empty());
     }
 }
