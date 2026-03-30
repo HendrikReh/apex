@@ -334,6 +334,50 @@ fn normalize_with_offset_map(text: &str) -> (String, Vec<usize>) {
     (normalized, offset_map)
 }
 
+/// Compute the body (most common) font size from object spans using a
+/// histogram mode weighted by alphabetic character count.
+///
+/// Returns `None` if no usable samples exist or the winning bucket covers
+/// less than 20% of total alphabetic characters (stability gate).
+fn compute_body_font_size(spans: &[ObjectSpan]) -> Option<f32> {
+    if spans.is_empty() {
+        return None;
+    }
+
+    let mut buckets: HashMap<i32, usize> = HashMap::new();
+    let mut total_alpha: usize = 0;
+
+    for span in spans {
+        if !span.font_size.is_finite() || span.font_size <= 0.0 {
+            continue;
+        }
+        let alpha_count = span.text.chars().filter(|c| c.is_alphabetic()).count();
+        if alpha_count == 0 {
+            continue;
+        }
+        let bucket = (span.font_size * 10.0).round() as i32;
+        *buckets.entry(bucket).or_insert(0) += alpha_count;
+        total_alpha += alpha_count;
+    }
+
+    if total_alpha == 0 {
+        return None;
+    }
+
+    // Select bucket with highest weight; tie-break to smaller font size.
+    let (best_bucket, best_weight) =
+        buckets.into_iter().max_by(|(bucket_a, weight_a), (bucket_b, weight_b)| {
+            weight_a.cmp(weight_b).then_with(|| bucket_b.cmp(bucket_a))
+        })?;
+
+    // Stability gate: winning bucket must cover >= 20% of total alpha chars.
+    if (best_weight as f64) < (total_alpha as f64 * 0.2) {
+        return None;
+    }
+
+    Some(best_bucket as f32 / 10.0)
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -1089,5 +1133,107 @@ mod tests {
     fn normalize_with_offset_map_preserves_case_and_punctuation() {
         let (normalized, _) = normalize_with_offset_map("  Hello, World!  ");
         assert_eq!(normalized, "Hello, World!");
+    }
+
+    #[test]
+    fn body_font_size_picks_mode() {
+        let spans = vec![
+            ObjectSpan {
+                text: "a".repeat(100),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 0.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "b".repeat(20),
+                font_size: 24.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 50.0,
+                x_end: 100.0,
+            },
+        ];
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, Some(12.0));
+    }
+
+    #[test]
+    fn body_font_size_tie_breaks_to_smaller() {
+        let spans = vec![
+            ObjectSpan {
+                text: "a".repeat(50),
+                font_size: 14.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 0.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "b".repeat(50),
+                font_size: 16.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 50.0,
+                x_end: 100.0,
+            },
+        ];
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, Some(14.0));
+    }
+
+    #[test]
+    fn body_font_size_stability_gate_rejects_low_coverage() {
+        let mut spans = vec![ObjectSpan {
+            text: "a".repeat(10),
+            font_size: 12.0,
+            is_bold: false,
+            x_position: 0.0,
+            y_position: 0.0,
+            x_end: 100.0,
+        }];
+        for i in 1..10 {
+            spans.push(ObjectSpan {
+                text: "b".repeat(10),
+                font_size: 12.0 + i as f32 * 2.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: i as f32 * 50.0,
+                x_end: 100.0,
+            });
+        }
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, None, "no bucket reaches 20% coverage");
+    }
+
+    #[test]
+    fn body_font_size_empty_spans() {
+        let result = compute_body_font_size(&[]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn body_font_size_ignores_non_alphabetic() {
+        let spans = vec![
+            ObjectSpan {
+                text: "12345".to_string(),
+                font_size: 20.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 0.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "hello".to_string(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 50.0,
+                x_end: 100.0,
+            },
+        ];
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, Some(12.0));
     }
 }
