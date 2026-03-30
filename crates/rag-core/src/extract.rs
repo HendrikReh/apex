@@ -616,6 +616,14 @@ fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> Stri
                 let cand_start = from + pos;
                 let cand_end = cand_start + normalized_heading.len();
 
+                // NB: `offset_map[i]` points to the *first* byte of the
+                // original whitespace run that was collapsed into a single
+                // space.  If the original text has trailing spaces before a
+                // newline (e.g. "text   \nHeading"), the mapped byte is the
+                // first space, not the '\n', so the check returns false and
+                // the heading is skipped.  PDFium's `page.text().all()`
+                // typically emits '\n' directly at line breaks without
+                // surrounding spaces, so this is safe for real PDF output.
                 let at_line_boundary = cand_start == 0 || {
                     let orig_prev = offset_map[cand_start - 1];
                     matches!(page_text.as_bytes().get(orig_prev), Some(b'\n') | Some(b'\r'))
@@ -1932,8 +1940,8 @@ mod tests {
         let headings = vec![AcceptedHeading { level: 1, text: "Big Title".into() }];
         let result = insert_heading_markers(page_text, &headings);
         assert!(
-            result.contains("# Big Title\n") || result.contains("# Big   Title"),
-            "should match despite whitespace differences: {result:?}"
+            result.contains("# Big   Title\n"),
+            "should preserve original (multi-space) heading text: {result:?}"
         );
     }
 
