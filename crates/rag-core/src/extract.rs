@@ -33,6 +33,9 @@ impl FileType {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExtractionResult {
     pub text: String,
+    /// Native metadata from the source format (e.g. PDF document info).
+    /// Non-PDF extractors return `None`.
+    pub native_metadata: Option<HashMap<String, String>>,
 }
 
 /// Options that control extraction behavior beyond raw content.
@@ -328,7 +331,7 @@ impl FormatExtractor for PdfExtractor {
                     );
                 }
 
-                Ok(ExtractionResult { text: pages.join("\u{000C}") })
+                Ok(ExtractionResult { text: pages.join("\u{000C}"), native_metadata: None })
             })
             .await
             .context("PDF extraction task panicked")?
@@ -341,7 +344,7 @@ fn extract_utf8_passthrough(content: &[u8], format_name: &str) -> Result<Extract
         .with_context(|| format!("decoding {format_name} content as UTF-8"))?
         .to_owned();
 
-    Ok(ExtractionResult { text })
+    Ok(ExtractionResult { text, native_metadata: None })
 }
 
 // ---------------------------------------------------------------------------
@@ -652,6 +655,22 @@ mod tests {
         assert!(
             err.chain().any(|cause| cause.is::<std::str::Utf8Error>()),
             "expected underlying Utf8Error to remain in the chain, got {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test assertions
+    async fn non_pdf_extractors_return_no_native_metadata() {
+        let registry = test_registry();
+
+        let result = registry
+            .extract(FileType::Text, b"hello", &ExtractionOptions::default())
+            .await
+            .expect("text extraction should succeed");
+
+        assert!(
+            result.native_metadata.is_none(),
+            "non-PDF extractors should return native_metadata: None"
         );
     }
 
