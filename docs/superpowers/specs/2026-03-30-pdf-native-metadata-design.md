@@ -99,7 +99,7 @@ In the `upsert_document` call, build the JSONB metadata as:
 }
 ```
 
-When a sidecar exists, sidecar JSON is the base and `native.pdf` is merged in without overwriting any sidecar keys at the top level. The namespace prevents collisions.
+When a sidecar exists, sidecar JSON is the base and `native.pdf` is merged in. Sidecar precedence applies at every level: if sidecar JSON already contains a `native`, `native.pdf`, or any `native.pdf.*` key, those values are preserved and only missing keys are filled from the PDF. This prevents both top-level collisions and nested key overwrites.
 
 ### 5. Title resolution
 
@@ -109,7 +109,7 @@ Title for the `documents.title` column follows this precedence:
 2. PDF native `title` metadata (producer-supplied)
 3. Empty string `""` (fallback)
 
-This is applied in `extract_and_checksum` or the upsert call site — wherever `title` is currently resolved.
+This resolution applies in **both** upsert call sites in `ingest_file()`: the normal persist path and the skip-on-unchanged metadata update path. Both must use the same title resolution and metadata merge logic to avoid inconsistent behavior on re-ingest.
 
 ### 6. Non-PDF extractors
 
@@ -123,7 +123,7 @@ This is applied in `extract_and_checksum` or the upsert call site — wherever `
 
 ### Ingest-level
 - PDF with sidecar: `documents.title` uses sidecar title, not PDF title. `metadata.native.pdf` is present alongside sidecar data.
-- PDF without sidecar: `documents.title` falls back to PDF native title if present.
+- PDF without sidecar: `documents.title` falls back to PDF native title if present. **Requires a test fixture with `/Title` set** — `two-pages.pdf` has `CreationDate` but no title. Either create a dedicated fixture (e.g., `titled.pdf` generated via a reproducible script) or add `/Title` to the existing `two-pages.pdf` generation step.
 - PDF with no native metadata: `native_metadata` field is `None`, no `native.pdf` key in JSONB.
 
 ## Crates touched
