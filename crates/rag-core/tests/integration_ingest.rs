@@ -5,7 +5,7 @@
 //! across runs without needing cleanup.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use rag_core::config::{AppConfig, EmbedderKind};
@@ -69,6 +69,22 @@ fn write_sidecar_with_chunking(dir: &Path, stem: &str, max_tokens: usize) {
         }}"#
     );
     fs::write(dir.join(format!("{stem}.metadata.json")), json).expect("writing sidecar");
+}
+
+/// Copy a test fixture from the fixtures directory into the given temp directory.
+#[allow(clippy::disallowed_methods)]
+fn copy_fixture(dir: &Path, fixture_name: &str) {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(fixture_name);
+    fs::copy(&src, dir.join(fixture_name)).expect("copying fixture");
+}
+
+/// Check whether PDF ingest tests can run (requires PDFIUM_LIBRARY_PATH + infra).
+fn pdf_ingest_available() -> bool {
+    std::env::var("PDFIUM_LIBRARY_PATH")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(|v| std::path::Path::new(&v).exists())
+        .unwrap_or(false)
 }
 
 #[tokio::test]
@@ -294,4 +310,199 @@ async fn dry_run_unchanged_file_returns_skipped() {
 
     assert!(second.skipped, "unchanged file should be marked as skipped");
     assert_eq!(second.chunks_created, 0, "dry-run must not create chunks");
+}
+
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_with_sidecar_uses_sidecar_title() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "titled.pdf");
+    write_sidecar(dir.path(), "titled"); // title = "Test titled"
+
+    let tenant_str = format!("test-pdf-sidecar-{suffix}");
+    let collection = format!("test_pdf_sidecar_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("titled.pdf"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: false,
+        })
+        .await
+        .expect("ingest should succeed");
+
+    assert!(!outcome.skipped);
+
+    let row = stores
+        .get_document(&tenant_str, &outcome.document_id)
+        .await
+        .expect("get_document query")
+        .expect("document row should exist");
+
+    // Sidecar title wins over PDF native title
+    assert_eq!(
+        row.title, "Test titled",
+        "sidecar title should take precedence over PDF native title"
+    );
+
+    // native.pdf metadata should still be present in JSONB
+    let metadata = row.metadata.expect("metadata should be Some");
+    let pdf_meta =
+        metadata.get("native").and_then(|n| n.get("pdf")).expect("metadata should have native.pdf");
+
+    assert_eq!(
+        pdf_meta.get("title").and_then(|t| t.as_str()),
+        Some("Apex Test Document"),
+        "native.pdf.title should contain the PDF's own title"
+    );
+}
+
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_without_sidecar_uses_native_title() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "titled.pdf");
+    // No sidecar — title should fall back to PDF native
+
+    let tenant_str = format!("test-pdf-native-{suffix}");
+    let collection = format!("test_pdf_native_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("titled.pdf"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: false,
+        })
+        .await
+        .expect("ingest should succeed");
+
+    assert!(!outcome.skipped);
+
+    let row = stores
+        .get_document(&tenant_str, &outcome.document_id)
+        .await
+        .expect("get_document query")
+        .expect("document row should exist");
+
+    assert_eq!(
+        row.title, "Apex Test Document",
+        "without sidecar, title should fall back to PDF native title"
+    );
+
+    let metadata = row.metadata.expect("metadata should be Some");
+    let pdf_meta =
+        metadata.get("native").and_then(|n| n.get("pdf")).expect("metadata should have native.pdf");
+    assert!(pdf_meta.get("title").is_some(), "native.pdf should contain title");
+}
+
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_without_native_title_stores_empty_title() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "two-pages.pdf");
+    // No sidecar; two-pages.pdf has creation_date but no title
+
+    let tenant_str = format!("test-pdf-notitle-{suffix}");
+    let collection = format!("test_pdf_notitle_{suffix}");
+
+    let outcome = service
+        .ingest_file(IngestFileRequest {
+            path: dir.path().join("two-pages.pdf"),
+            tenant: TenantId::new(&tenant_str).expect("tenant"),
+            collection_override: Some(collection),
+            dry_run: false,
+        })
+        .await
+        .expect("ingest should succeed");
+
+    assert!(!outcome.skipped);
+
+    let row = stores
+        .get_document(&tenant_str, &outcome.document_id)
+        .await
+        .expect("get_document query")
+        .expect("document row should exist");
+
+    assert_eq!(row.title, "", "PDF without native title and no sidecar should store empty title");
+
+    // Should still have native.pdf with creation_date
+    let metadata = row.metadata.expect("metadata should be Some");
+    let pdf_meta =
+        metadata.get("native").and_then(|n| n.get("pdf")).expect("metadata should have native.pdf");
+    assert!(pdf_meta.get("creation_date").is_some(), "native.pdf should contain creation_date");
+    assert!(
+        pdf_meta.get("title").is_none(),
+        "native.pdf should NOT contain title (two-pages.pdf has none)"
+    );
+}
+
+#[tokio::test]
+#[ignore] // requires PDFium + Postgres + Qdrant
+#[allow(clippy::disallowed_methods)]
+async fn pdf_reingest_unchanged_preserves_metadata() {
+    if !pdf_ingest_available() {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set or not found");
+        return;
+    }
+
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    copy_fixture(dir.path(), "titled.pdf");
+
+    let tenant_str = format!("test-pdf-reingest-{suffix}");
+    let collection = format!("test_pdf_reingest_{suffix}");
+
+    let make_req = || IngestFileRequest {
+        path: dir.path().join("titled.pdf"),
+        tenant: TenantId::new(&tenant_str).expect("tenant"),
+        collection_override: Some(collection.clone()),
+        dry_run: false,
+    };
+
+    // First ingest (normal persist path)
+    let first = service.ingest_file(make_req()).await.expect("first ingest");
+    assert!(!first.skipped);
+
+    let row_first =
+        stores.get_document(&tenant_str, &first.document_id).await.expect("query").expect("row");
+
+    // Second ingest (skip-on-unchanged path)
+    let second = service.ingest_file(make_req()).await.expect("second ingest");
+    assert!(second.skipped);
+
+    let row_second =
+        stores.get_document(&tenant_str, &second.document_id).await.expect("query").expect("row");
+
+    // Both paths should produce the same title and metadata shape
+    assert_eq!(
+        row_first.title, row_second.title,
+        "title should be identical across persist and skip paths"
+    );
+    assert_eq!(
+        row_first.metadata, row_second.metadata,
+        "metadata JSONB should be identical across persist and skip paths"
+    );
 }

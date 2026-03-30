@@ -7,8 +7,8 @@ use qdrant_client::Payload;
 use qdrant_client::qdrant::{
     DenseVector, Distance, NamedVectors, PointStruct, Vector as QdrantVector, Vectors,
 };
-use rag_core::{AppConfig, Stores};
 use rag_core::stores::vectors::DENSE_VECTOR_NAME;
+use rag_core::{AppConfig, Stores};
 use sqlx::Error as SqlxError;
 use uuid::Uuid;
 
