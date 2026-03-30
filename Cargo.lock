@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-core"
-version = "0.1.0"
+version = "0.8.0"
 
 [[package]]
 name = "ahash"
@@ -1761,7 +1761,7 @@ dependencies = [
 
 [[package]]
 name = "obfuscate-macros"
-version = "0.1.0"
+version = "0.8.0"
 
 [[package]]
 name = "once_cell"
@@ -2153,7 +2153,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rag-chunking"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "async-openai",
  "serde",
@@ -2168,7 +2168,7 @@ dependencies = [
 
 [[package]]
 name = "rag-cli"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2184,7 +2184,7 @@ dependencies = [
 
 [[package]]
 name = "rag-client"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "percent-encoding",
@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "rag-core"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-openai",
@@ -2234,23 +2234,23 @@ dependencies = [
 
 [[package]]
 name = "rag-evidence"
-version = "0.1.0"
+version = "0.8.0"
 
 [[package]]
 name = "rag-license"
-version = "0.1.0"
+version = "0.8.0"
 
 [[package]]
 name = "rag-notifications"
-version = "0.1.0"
+version = "0.8.0"
 
 [[package]]
 name = "rag-sbom"
-version = "0.1.0"
+version = "0.8.0"
 
 [[package]]
 name = "rag-server"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -3158,7 +3158,7 @@ dependencies = [
 
 [[package]]
 name = "test-support"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "axum",
  "tokio",
