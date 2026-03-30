@@ -107,7 +107,7 @@ impl LlmProvider {
     fn default_model(&self) -> &'static str {
         match self {
             Self::OpenAiCompatible => "gpt-5",
-            Self::Anthropic => "claude-3-5-haiku-20241022",
+            Self::Anthropic => "claude-haiku-4-5",
         }
     }
 
@@ -740,7 +740,7 @@ mod tests {
         let cfg = AppConfig::from_current_env().expect("anthropic defaults");
         assert_eq!(cfg.llm_provider, LlmProvider::Anthropic);
         assert!(cfg.llm_api_key.is_none());
-        assert_eq!(cfg.llm_model, "claude-3-5-haiku-20241022");
+        assert_eq!(cfg.llm_model, "claude-haiku-4-5");
         assert_eq!(cfg.llm_base_url, "https://api.anthropic.com");
         unsafe { std::env::remove_var("LLM_PROVIDER") };
 
