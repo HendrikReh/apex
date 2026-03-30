@@ -689,9 +689,10 @@ fn detect_and_insert_headings(
     let result = insert_heading_markers(native_text, &headings);
 
     let accepted = headings.len();
-    let markers_found = result.matches("\n# ").count()
-        + result.matches("\n## ").count()
-        + result.matches("\n### ").count();
+    let h3_count = result.matches("\n### ").count();
+    let h2_count = result.matches("\n## ").count() - h3_count;
+    let h1_count = result.matches("\n# ").count() - h2_count - h3_count;
+    let markers_found = h1_count + h2_count + h3_count;
 
     tracing::debug!(
         page_index,
