@@ -24,6 +24,8 @@ async fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         env!("CARGO_PKG_LICENSE"),
         &config.bind_addr,
+        &config.llm_provider.to_string(),
+        &config.llm_model,
     );
 
     let stores = Stores::new(&config).await.context("connecting stores")?;

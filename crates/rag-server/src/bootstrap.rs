@@ -1,7 +1,13 @@
 //! Startup banner and shutdown helpers for the `rag-server` binary.
 
-/// Prints a green ASCII-art startup banner with version, license, and bind address info.
-pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
+/// Prints a green ASCII-art startup banner with version, license, bind address, and active LLM.
+pub(crate) fn print_banner(
+    version: &str,
+    license_info: &str,
+    bind_addr: &str,
+    llm_provider: &str,
+    llm_model: &str,
+) {
     const GREEN: &str = "\x1b[32m";
     const RESET: &str = "\x1b[0m";
     const MIN_INNER_WIDTH: usize = 84;
@@ -18,6 +24,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     let tagline_text = format!("Apex Accelerator  ·  HTTP RAG API  ·  v{version}");
     let license_text = license_info.to_string();
     let bind_text = format!("bind {bind_addr}");
+    let llm_text = format!("llm {llm_provider} / {llm_model}");
 
     let max_content_width = TITLE_LINES
         .iter()
@@ -26,6 +33,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
             tagline_text.chars().count(),
             license_text.chars().count(),
             bind_text.chars().count(),
+            llm_text.chars().count(),
         ])
         .max()
         .unwrap_or(MIN_INNER_WIDTH);
@@ -43,6 +51,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     let tagline = center_line(&tagline_text);
     let license = center_line(&license_text);
     let bind = center_line(&bind_text);
+    let llm = center_line(&llm_text);
     let empty = center_line("");
     let title = TITLE_LINES.iter().map(|line| center_line(line)).collect::<Vec<_>>().join("\n");
     let border = "═".repeat(inner_width);
@@ -55,6 +64,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
 {empty}
 {tagline}
 {license}
+{llm}
 {bind}
 {empty}
   ╚{border}╝
@@ -64,6 +74,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
         title = title,
         tagline = tagline,
         license = license,
+        llm = llm,
         bind = bind,
     );
 
