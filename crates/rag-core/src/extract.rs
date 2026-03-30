@@ -399,7 +399,9 @@ fn resolve_ocr_settings(
     let force = opts.force;
     let timeout_override = opts.timeout_secs;
 
-    let timeout = std::time::Duration::from_secs(timeout_override.unwrap_or(default_timeout_secs));
+    let raw_secs = timeout_override.unwrap_or(default_timeout_secs);
+    // A zero timeout would cause immediate kill — clamp to 1s minimum.
+    let timeout = std::time::Duration::from_secs(raw_secs.max(1));
 
     ResolvedOcrSettings { force, language, timeout }
 }
@@ -713,6 +715,13 @@ mod tests {
         let resolved = resolve_ocr_settings(Some(&opts), "fra", 45);
         assert_eq!(resolved.language, "fra");
         assert_eq!(resolved.timeout.as_secs(), 45);
+    }
+
+    #[test]
+    fn resolve_ocr_settings_clamps_zero_timeout() {
+        let opts = OcrOptions { force: false, language_hints: vec![], timeout_secs: Some(0) };
+        let resolved = resolve_ocr_settings(Some(&opts), "eng", 30);
+        assert_eq!(resolved.timeout.as_secs(), 1, "zero timeout should be clamped to 1s");
     }
 
     // --- OCR integration test helpers ---

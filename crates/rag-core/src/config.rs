@@ -524,12 +524,25 @@ impl AppConfig {
             .or_else(|| extract_settings.pdfium_library_path.clone())
             .map(std::path::PathBuf::from);
 
+        // Tesseract's TESSDATA_PREFIX conventionally points to the *parent*
+        // of the tessdata directory (e.g. `/usr/share` when trained-data
+        // files live in `/usr/share/tessdata/`).  Some installations set it
+        // directly to the tessdata dir instead.  Normalise here so the rest
+        // of the code can always assume `tessdata_dir` points straight at
+        // the directory that contains `*.traineddata` files.
         let tessdata_dir: Option<std::path::PathBuf> = env_string("TESSDATA_PREFIX")
             .or_else(|| extract_settings.tessdata_dir.clone())
-            .map(std::path::PathBuf::from);
+            .map(std::path::PathBuf::from)
+            .map(|p| {
+                let candidate = p.join("tessdata");
+                if candidate.is_dir() { candidate } else { p }
+            });
 
         let ocr_timeout_secs =
             env_parsed("OCR_TIMEOUT_SECS")?.or(extract_settings.ocr_timeout_secs).unwrap_or(30);
+        if ocr_timeout_secs == 0 {
+            anyhow::bail!("ocr_timeout_secs must be > 0");
+        }
 
         let ocr_default_language = env_string("OCR_DEFAULT_LANGUAGE")
             .or_else(|| extract_settings.ocr_default_language.clone())
@@ -768,6 +781,17 @@ mod tests {
             "TESSDATA_PREFIX env should set tessdata_dir"
         );
         unsafe { std::env::remove_var("TESSDATA_PREFIX") };
+
+        // -- Part 6: zero ocr_timeout_secs rejected --
+        unsafe { std::env::set_var("OCR_TIMEOUT_SECS", "0") };
+        let err = AppConfig::from_current_env()
+            .expect_err("zero ocr_timeout_secs should be rejected")
+            .to_string();
+        assert!(
+            err.contains("ocr_timeout_secs"),
+            "error should mention ocr_timeout_secs, got: {err}"
+        );
+        unsafe { std::env::remove_var("OCR_TIMEOUT_SECS") };
     }
 
     #[test]
