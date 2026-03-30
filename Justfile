@@ -7,6 +7,8 @@ compose_file := "docker-compose.yml"
 target_dir_check := "target/check"
 target_dir_clippy := "target/clippy"
 target_dir_test := "target/test"
+target_dir_itest := "target/itest"
+target_dir_smoke := "target/smoke"
 target_dir_run := "target/run"
 
 # Shared RUST_LOG presets.
@@ -42,6 +44,35 @@ clippy:
 # Full suite: fmt check -> clippy -> cargo test
 test: fmt clippy
     CARGO_TARGET_DIR={{target_dir_test}} cargo test --workspace
+
+# Fast crate-local unit tests (`src/*`, plus testable binary crates)
+unit-test:
+    CARGO_TARGET_DIR={{target_dir_test}} cargo test --workspace --lib --bins
+
+# Integration tests and API smoke against local Postgres + Qdrant.
+# Starts Docker infra first and then runs the repo's non-provider integration suites.
+integration-tests: up
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-client --test client_tests -- --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health_degraded -- --ignored --nocapture --test-threads=1
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test ingest -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test search -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test e2e -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_conversations -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_ingest -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_lifecycle -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_retrieval -- --ignored --nocapture
+
+# Optional provider/native smoke tests.
+# These require extra local setup such as PDFium, Tesseract, or live LLM credentials.
+smoke-tests: up
+    CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_pdf -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_chat -- --ignored --nocapture
+    CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test smoke_llm -- --ignored --nocapture
+
+# Compatibility alias.
+integrations-tests: integration-tests
 
 # ── Server ────────────────────────────────────────────────────────────
 
