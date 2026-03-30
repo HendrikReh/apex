@@ -63,9 +63,9 @@ pub(crate) fn print_banner(
 {title}
 {empty}
 {tagline}
-{license}
-{llm}
 {bind}
+{llm}
+{license}
 {empty}
   ╚{border}╝
 "#,
