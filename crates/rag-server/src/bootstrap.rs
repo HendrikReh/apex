@@ -5,6 +5,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     const GREEN: &str = "\x1b[32m";
     const RESET: &str = "\x1b[0m";
     const MIN_INNER_WIDTH: usize = 84;
+    const SIDE_PADDING: usize = 2;
     const TITLE_LINES: [&str; 6] = [
         "█████╗ ██████╗ ███████╗██╗  ██╗   ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗",
         "██╔══██╗██╔══██╗██╔════╝╚██╗██╔╝   ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗",
@@ -18,7 +19,7 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     let license_text = license_info.to_string();
     let bind_text = format!("bind {bind_addr}");
 
-    let inner_width = TITLE_LINES
+    let max_content_width = TITLE_LINES
         .iter()
         .map(|line| line.chars().count())
         .chain([
@@ -27,8 +28,9 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
             bind_text.chars().count(),
         ])
         .max()
-        .unwrap_or(MIN_INNER_WIDTH)
-        .max(MIN_INNER_WIDTH);
+        .unwrap_or(MIN_INNER_WIDTH);
+
+    let inner_width = (max_content_width + (SIDE_PADDING * 2)).max(MIN_INNER_WIDTH);
 
     let center_line = |text: &str| -> String {
         let width = text.chars().count();
