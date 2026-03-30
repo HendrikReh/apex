@@ -26,6 +26,7 @@ It does not run ignored integration or smoke tests.
 ## Contents
 
 - [Command Reference](#command-reference)
+- [just test](#just-test)
 - [Test Taxonomy](#test-taxonomy)
 - [Writing New Tests](#writing-new-tests)
 - [Execution Workflow](#execution-workflow)
@@ -34,6 +35,24 @@ It does not run ignored integration or smoke tests.
 - [Troubleshooting](#troubleshooting)
 
 ## Command Reference
+
+### `just test`
+
+Use this as the default pre-push quality gate.
+
+Runs:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings -D clippy::disallowed_methods
+cargo test --workspace
+```
+
+This is broader than the other tiered commands:
+
+- includes formatting and lint checks
+- runs the full non-ignored workspace test suite
+- does not run ignored integration or smoke tests
 
 ### `just unit-test`
 
