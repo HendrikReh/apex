@@ -100,11 +100,16 @@ Multi-tenancy is built in. Pass `x-tenant` header to isolate data per tenant (de
 
 ```bash
 just test          # fmt + clippy + cargo test
+just unit-test     # fast unit-only loop
+just integration-tests  # Docker-backed integration suites
+just smoke-tests   # optional provider/native smoke suites
 just fmt           # Check formatting
 just clippy        # Lint with strict settings
 just up            # Start docker services
 just down-v        # Stop services and wipe data
 ```
+
+See [docs/howto/testing.md](docs/howto/testing.md) for the full testing workflow, where to place tests, prerequisites, and concrete examples.
 
 ## License
 

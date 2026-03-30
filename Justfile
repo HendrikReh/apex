@@ -71,9 +71,6 @@ smoke-tests: up
     CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_chat -- --ignored --nocapture
     CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test smoke_llm -- --ignored --nocapture
 
-# Compatibility alias.
-integrations-tests: integration-tests
-
 # ── Server ────────────────────────────────────────────────────────────
 
 # Run server with OpenAI embeddings (needs OPENAI_API_KEY)

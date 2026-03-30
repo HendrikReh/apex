@@ -11,7 +11,6 @@ The commands below are the supported entry points:
 ```bash
 just unit-test
 just integration-tests
-just integrations-tests
 just smoke-tests
 just test
 ```
@@ -243,8 +242,6 @@ When changing ingest, retrieval, stores, or server routes:
 ```bash
 just integration-tests
 ```
-
-`just integrations-tests` is available as a compatibility alias.
 
 To run a specific ignored integration test:
 
