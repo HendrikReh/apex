@@ -23,6 +23,16 @@ just test
 
 It does not run ignored integration or smoke tests.
 
+## Contents
+
+- [Command Reference](#command-reference)
+- [Test Taxonomy](#test-taxonomy)
+- [Writing New Tests](#writing-new-tests)
+- [Execution Workflow](#execution-workflow)
+- [Recommended Development Flow](#recommended-development-flow)
+- [Current Mapping In This Repo](#current-mapping-in-this-repo)
+- [Troubleshooting](#troubleshooting)
+
 ## Command Reference
 
 ### `just unit-test`

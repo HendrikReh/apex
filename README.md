@@ -6,6 +6,16 @@
 
 A Rust workspace for Retrieval-Augmented Generation (RAG). Ingests documents (PDF, Markdown, plain text), chunks with configurable strategies, generates embeddings (OpenAI or mock), and stores in Postgres (metadata) + Qdrant (vectors) for hybrid retrieval (dense + BM25 sparse).
 
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [Quickstart](#quickstart)
+- [Architecture](#architecture)
+- [API](#api)
+- [Configuration](#configuration)
+- [Development](#development)
+- [License](#license)
+
 ## Prerequisites
 
 - **Rust** 1.94+ (edition 2024)

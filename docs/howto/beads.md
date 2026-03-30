@@ -4,6 +4,14 @@ This repository uses `bd` (Beads) for issue tracking.
 
 Use Beads for all task tracking. Do not use markdown TODO files or ad hoc task lists.
 
+## Contents
+
+- [Core CRUD](#core-crud)
+- [Typical Workflow](#typical-workflow)
+- [Repository-Specific Rules](#repository-specific-rules)
+- [Handy Commands](#handy-commands)
+- [Cheat Sheet](#cheat-sheet)
+
 ## Core CRUD
 
 ### Create
