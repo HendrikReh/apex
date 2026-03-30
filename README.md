@@ -111,8 +111,8 @@ Multi-tenancy is built in. Pass `x-tenant` header to isolate data per tenant (de
 ```bash
 just test          # fmt + clippy + cargo test
 just unit-test     # fast unit-only loop
-just integration-tests  # Docker-backed integration suites
-just smoke-tests   # optional provider/native smoke suites
+just integration-test  # Docker-backed integration suites
+just smoke-test    # optional provider/native smoke suites
 just fmt           # Check formatting
 just clippy        # Lint with strict settings
 just up            # Start docker services

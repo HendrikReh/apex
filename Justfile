@@ -51,7 +51,7 @@ unit-test:
 
 # Integration tests and API smoke against local Postgres + Qdrant.
 # Starts Docker infra first and then runs the repo's non-provider integration suites.
-integration-tests: up
+integration-test: up
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-client --test client_tests -- --nocapture
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --nocapture
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --ignored --nocapture
@@ -66,7 +66,7 @@ integration-tests: up
 
 # Optional provider/native smoke tests.
 # These require extra local setup such as PDFium, Tesseract, or live LLM credentials.
-smoke-tests: up
+smoke-test: up
     CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_pdf -- --ignored --nocapture
     CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_chat -- --ignored --nocapture
     CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test smoke_llm -- --ignored --nocapture

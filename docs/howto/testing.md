@@ -3,15 +3,15 @@
 This repo uses three test tiers:
 
 - `unit-test`: fast crate-local tests with no Docker, provider, or native-library requirements
-- `integration-tests`: tests that exercise real Postgres/Qdrant, HTTP routes, and end-to-end application wiring
-- `smoke-tests`: optional higher-cost tests that need external providers or native tools such as PDFium or Tesseract
+- `integration-test`: tests that exercise real Postgres/Qdrant, HTTP routes, and end-to-end application wiring
+- `smoke-test`: optional higher-cost tests that need external providers or native tools such as PDFium or Tesseract
 
 The commands below are the supported entry points:
 
 ```bash
 just unit-test
-just integration-tests
-just smoke-tests
+just integration-test
+just smoke-test
 just test
 ```
 
@@ -57,7 +57,7 @@ Good use cases:
 - request validation logic
 - formatter/output helpers
 
-### `just integration-tests`
+### `just integration-test`
 
 Use this for real application behavior with Docker-backed infra.
 
@@ -86,7 +86,7 @@ These cover behavior such as:
 - end-to-end API journeys
 - tenant isolation through the API
 
-### `just smoke-tests`
+### `just smoke-test`
 
 Use this for optional environment-specific verification.
 
@@ -250,7 +250,7 @@ cargo test -p rag-cli ingest_human_output -- --nocapture
 When changing ingest, retrieval, stores, or server routes:
 
 ```bash
-just integration-tests
+just integration-test
 ```
 
 To run a specific ignored integration test:
@@ -266,7 +266,7 @@ cargo test -p rag-server --test e2e tenant_isolation_through_api -- --ignored --
 When changing OCR, PDF extraction, or LLM integrations:
 
 ```bash
-just smoke-tests
+just smoke-test
 ```
 
 Targeted examples:
@@ -283,8 +283,8 @@ For a normal feature:
 
 1. Write or update a unit test first if the logic is local.
 2. Run `just unit-test`.
-3. If the change touches real storage or HTTP behavior, run `just integration-tests`.
-4. If the change touches providers or native tooling, run `just smoke-tests` when your environment is configured.
+3. If the change touches real storage or HTTP behavior, run `just integration-test`.
+4. If the change touches providers or native tooling, run `just smoke-test` when your environment is configured.
 5. Before pushing, run at least:
 
 ```bash
