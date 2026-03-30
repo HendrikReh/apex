@@ -128,3 +128,68 @@ async fn pdf_extractor_returns_native_metadata() {
         metadata.keys().collect::<Vec<_>>()
     );
 }
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)] // test assertions
+async fn pdf_extractor_returns_title_metadata_from_titled_fixture() {
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
+    };
+
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
+
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/titled.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
+
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("extraction should succeed");
+
+    let metadata = result.native_metadata.as_ref().expect("titled.pdf should have native metadata");
+
+    assert_eq!(
+        metadata.get("title").map(String::as_str),
+        Some("Apex Test Document"),
+        "titled.pdf should have title 'Apex Test Document'"
+    );
+    assert_eq!(
+        metadata.get("author").map(String::as_str),
+        Some("Test Author"),
+        "titled.pdf should have author 'Test Author'"
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)] // test assertions
+async fn pdf_extractor_returns_none_metadata_for_bare_pdf() {
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
+    };
+
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor::new should succeed");
+
+    let fixture =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading test fixture PDF");
+
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("extraction should succeed");
+
+    assert!(
+        result.native_metadata.is_none(),
+        "hello_ocr.pdf has no metadata, expected None, got: {:?}",
+        result.native_metadata
+    );
+}
