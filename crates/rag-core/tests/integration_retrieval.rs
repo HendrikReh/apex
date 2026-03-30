@@ -89,6 +89,7 @@ async fn ingest_fixtures(ingest: &IngestService, dir: &TempDir) -> Result<(Tenan
             path: dir.path().to_owned(),
             tenant: tenant.clone(),
             collection_override: Some(collection.clone()),
+            dry_run: false,
         })
         .await?;
 

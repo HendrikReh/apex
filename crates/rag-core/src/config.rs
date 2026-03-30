@@ -126,6 +126,9 @@ impl LlmProvider {
 #[derive(Deserialize, Default)]
 struct ExtractSection {
     pdfium_library_path: Option<String>,
+    tessdata_dir: Option<String>,
+    ocr_timeout_secs: Option<u64>,
+    ocr_default_language: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -255,6 +258,10 @@ pub struct AppConfig {
     pub llm_prompt_template_path: String,
     // Extraction
     pub pdfium_library_path: Option<std::path::PathBuf>,
+    // OCR (Tesseract)
+    pub tessdata_dir: Option<std::path::PathBuf>,
+    pub ocr_timeout_secs: u64,
+    pub ocr_default_language: String,
 }
 
 impl AppConfig {
@@ -517,6 +524,30 @@ impl AppConfig {
             .or_else(|| extract_settings.pdfium_library_path.clone())
             .map(std::path::PathBuf::from);
 
+        // Tesseract's TESSDATA_PREFIX conventionally points to the *parent*
+        // of the tessdata directory (e.g. `/usr/share` when trained-data
+        // files live in `/usr/share/tessdata/`).  Some installations set it
+        // directly to the tessdata dir instead.  Normalise here so the rest
+        // of the code can always assume `tessdata_dir` points straight at
+        // the directory that contains `*.traineddata` files.
+        let tessdata_dir: Option<std::path::PathBuf> = env_string("TESSDATA_PREFIX")
+            .or_else(|| extract_settings.tessdata_dir.clone())
+            .map(std::path::PathBuf::from)
+            .map(|p| {
+                let candidate = p.join("tessdata");
+                if candidate.is_dir() { candidate } else { p }
+            });
+
+        let ocr_timeout_secs =
+            env_parsed("OCR_TIMEOUT_SECS")?.or(extract_settings.ocr_timeout_secs).unwrap_or(30);
+        if ocr_timeout_secs == 0 {
+            anyhow::bail!("ocr_timeout_secs must be > 0");
+        }
+
+        let ocr_default_language = env_string("OCR_DEFAULT_LANGUAGE")
+            .or_else(|| extract_settings.ocr_default_language.clone())
+            .unwrap_or_else(|| "eng".to_owned());
+
         Ok(Self {
             qdrant_url,
             qdrant_api_key,
@@ -559,6 +590,9 @@ impl AppConfig {
             llm_retry_backoff_ms,
             llm_prompt_template_path,
             pdfium_library_path,
+            tessdata_dir,
+            ocr_timeout_secs,
+            ocr_default_language,
         })
     }
 }
@@ -622,6 +656,9 @@ mod tests {
             std::env::remove_var("LLM_RETRY_BACKOFF_MS");
             std::env::remove_var("LLM_PROMPT_TEMPLATE_PATH");
             std::env::remove_var("PDFIUM_LIBRARY_PATH");
+            std::env::remove_var("TESSDATA_PREFIX");
+            std::env::remove_var("OCR_TIMEOUT_SECS");
+            std::env::remove_var("OCR_DEFAULT_LANGUAGE");
         }
     }
 
@@ -681,6 +718,10 @@ mod tests {
         assert_eq!(cfg.llm_retry_backoff_ms, 500);
         assert_eq!(cfg.llm_prompt_template_path, "prompts/chat_system.hbs");
         assert!(cfg.pdfium_library_path.is_none(), "pdfium_library_path should default to None");
+        // OCR defaults
+        assert!(cfg.tessdata_dir.is_none(), "tessdata_dir should default to None");
+        assert_eq!(cfg.ocr_timeout_secs, 30);
+        assert_eq!(cfg.ocr_default_language, "eng");
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };
@@ -730,6 +771,27 @@ mod tests {
             "PDFIUM_LIBRARY_PATH env should set pdfium_library_path"
         );
         unsafe { std::env::remove_var("PDFIUM_LIBRARY_PATH") };
+
+        // -- Part 5: TESSDATA_PREFIX env override --
+        unsafe { std::env::set_var("TESSDATA_PREFIX", "/opt/tessdata") };
+        let cfg = AppConfig::from_current_env().expect("from_env with TESSDATA_PREFIX");
+        assert_eq!(
+            cfg.tessdata_dir.as_deref(),
+            Some(std::path::Path::new("/opt/tessdata")),
+            "TESSDATA_PREFIX env should set tessdata_dir"
+        );
+        unsafe { std::env::remove_var("TESSDATA_PREFIX") };
+
+        // -- Part 6: zero ocr_timeout_secs rejected --
+        unsafe { std::env::set_var("OCR_TIMEOUT_SECS", "0") };
+        let err = AppConfig::from_current_env()
+            .expect_err("zero ocr_timeout_secs should be rejected")
+            .to_string();
+        assert!(
+            err.contains("ocr_timeout_secs"),
+            "error should mention ocr_timeout_secs, got: {err}"
+        );
+        unsafe { std::env::remove_var("OCR_TIMEOUT_SECS") };
     }
 
     #[test]
