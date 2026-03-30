@@ -160,7 +160,7 @@ bd doctor                                # Verify: should show 0 errors
 
 ## Verification & Testing Policies
 
-- **Before any commit/push/PR**: Only run `cargo check`. Do NOT run the full test suite autonomously.
+- **Before any commit**: Run `cargo fmt --all` then `cargo check`. This applies to direct work AND subagent-dispatched work — include both commands in every implementer subagent prompt.
 - **NEVER run `just test` autonomously.** Only run it when the user explicitly requests it.
 - **Doctest compilation requires Postgres running** (sqlx macros verify SQL at compile time via `DATABASE_URL`). Run `just up` before `just test`.
 
