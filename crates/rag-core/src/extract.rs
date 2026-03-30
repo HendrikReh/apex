@@ -239,6 +239,506 @@ impl PdfExtractor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Heading detection types
+// ---------------------------------------------------------------------------
+
+/// Collected text object from a PDF page, used for font analysis and line
+/// coalescing. Positions are in PDF coordinates (origin bottom-left).
+#[derive(Debug, Clone)]
+struct ObjectSpan {
+    text: String,
+    font_size: f32,
+    is_bold: bool,
+    x_position: f32,
+    y_position: f32,
+    x_end: f32,
+}
+
+/// A line of text coalesced from one or more `ObjectSpan`s that share the
+/// same approximate y-position.
+#[derive(Debug, Clone)]
+struct LineSpan {
+    text: String,
+    dominant_font_size: f32,
+    is_bold: bool,
+}
+
+/// A heading accepted for marker insertion.
+#[derive(Debug, Clone)]
+struct AcceptedHeading {
+    level: u8,
+    text: String,
+}
+
+/// Font-size ratio thresholds for heading classification.
+/// Hardcoded defaults; configurability deferred.
+#[derive(Debug, Clone, Copy)]
+struct HeadingThresholds {
+    h1_ratio: f32,
+    h2_ratio: f32,
+    h3_ratio: f32,
+    bold_min_ratio: f32,
+    bold_as_h3: bool,
+}
+
+impl HeadingThresholds {
+    const DEFAULT: Self =
+        Self { h1_ratio: 2.0, h2_ratio: 1.6, h3_ratio: 1.2, bold_min_ratio: 1.1, bold_as_h3: true };
+}
+
+// ---------------------------------------------------------------------------
+// Heading detection PDFium collectors
+// ---------------------------------------------------------------------------
+
+/// Collect text object spans from a PDF page for font analysis.
+fn collect_object_spans(page: &pdfium_render::prelude::PdfPage<'_>) -> Vec<ObjectSpan> {
+    use pdfium_render::prelude::{PdfPageObjectCommon, PdfPageObjectsCommon};
+
+    let mut spans = Vec::new();
+
+    for object in page.objects().iter() {
+        let Some(text_obj) = object.as_text_object() else {
+            continue;
+        };
+        let text = text_obj.text();
+        if text.trim().is_empty() {
+            continue;
+        }
+        let font_size = text_obj.unscaled_font_size().value;
+        if !font_size.is_finite() || font_size <= 0.0 {
+            continue;
+        }
+
+        let is_bold = is_bold_weight(text_obj.font().weight().ok());
+
+        let (x_position, y_position, x_end) = match object.bounds() {
+            Ok(bounds) => (bounds.left().value, bounds.bottom().value, bounds.right().value),
+            Err(_) => continue,
+        };
+
+        spans.push(ObjectSpan { text, font_size, is_bold, x_position, y_position, x_end });
+    }
+
+    spans
+}
+
+/// Check if a font weight indicates bold (>= 700).
+///
+/// Note: PDFs that encode boldness via font name (e.g. "HelveticaNeue-Bold")
+/// rather than `PdfFontWeight` are not detected here. This is a known
+/// limitation of the pdfium-render API surface — only the weight enum is
+/// inspected.
+fn is_bold_weight(weight: Option<pdfium_render::prelude::PdfFontWeight>) -> bool {
+    use pdfium_render::prelude::PdfFontWeight;
+    match weight {
+        Some(PdfFontWeight::Weight700Bold)
+        | Some(PdfFontWeight::Weight800)
+        | Some(PdfFontWeight::Weight900) => true,
+        Some(PdfFontWeight::Custom(value)) => value >= 700,
+        _ => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Heading detection helpers
+// ---------------------------------------------------------------------------
+
+/// Normalize text by trimming and collapsing internal whitespace to single
+/// spaces. Returns the normalized string and a byte-offset map where
+/// `map[normalized_byte_pos] = original_byte_pos`.
+fn normalize_with_offset_map(text: &str) -> (String, Vec<usize>) {
+    let mut normalized = String::with_capacity(text.len());
+    let mut offset_map: Vec<usize> = Vec::with_capacity(text.len());
+    let mut in_whitespace = true; // start true to trim leading
+
+    for (byte_idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if !in_whitespace && !normalized.is_empty() {
+                // Emit a single space for the first whitespace char in a run.
+                normalized.push(' ');
+                offset_map.push(byte_idx);
+                in_whitespace = true;
+            }
+        } else {
+            in_whitespace = false;
+            normalized.push(ch);
+            // Map each byte of this char to its original byte offset.
+            for i in 0..ch.len_utf8() {
+                offset_map.push(byte_idx + i);
+            }
+        }
+    }
+
+    // Trim trailing space.
+    if normalized.ends_with(' ') {
+        normalized.pop();
+        offset_map.pop();
+    }
+
+    (normalized, offset_map)
+}
+
+/// Compute the body (most common) font size from object spans using a
+/// histogram mode weighted by alphabetic character count.
+///
+/// Returns `None` if no usable samples exist or the winning bucket covers
+/// less than 20% of total alphabetic characters (stability gate).
+fn compute_body_font_size(spans: &[ObjectSpan]) -> Option<f32> {
+    if spans.is_empty() {
+        return None;
+    }
+
+    let mut buckets: HashMap<i32, usize> = HashMap::new();
+    let mut total_alpha: usize = 0;
+
+    for span in spans {
+        if !span.font_size.is_finite() || span.font_size <= 0.0 {
+            continue;
+        }
+        let alpha_count = span.text.chars().filter(|c| c.is_alphabetic()).count();
+        if alpha_count == 0 {
+            continue;
+        }
+        let bucket = (span.font_size * 10.0).round() as i32;
+        *buckets.entry(bucket).or_insert(0) += alpha_count;
+        total_alpha += alpha_count;
+    }
+
+    if total_alpha == 0 {
+        return None;
+    }
+
+    // Select bucket with highest weight; tie-break to smaller font size.
+    let (best_bucket, best_weight) =
+        buckets.into_iter().max_by(|(bucket_a, weight_a), (bucket_b, weight_b)| {
+            weight_a.cmp(weight_b).then_with(|| bucket_b.cmp(bucket_a))
+        })?;
+
+    // Stability gate: winning bucket must cover >= 20% of total alpha chars.
+    if (best_weight as f64) < (total_alpha as f64 * 0.2) {
+        return None;
+    }
+
+    Some(best_bucket as f32 / 10.0)
+}
+
+/// Coalesce `ObjectSpan`s into `LineSpan`s by y-position clustering.
+///
+/// Two objects share a line when their y-positions differ by less than
+/// `min(font_a, font_b) * 0.5`. Within a line, objects are sorted by
+/// x-position and concatenated with appropriate spacing.
+fn coalesce_into_lines(mut spans: Vec<ObjectSpan>) -> Vec<LineSpan> {
+    if spans.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort by y descending (top-to-bottom in PDF coords), then x ascending.
+    spans.sort_by(|a, b| {
+        b.y_position.partial_cmp(&a.y_position).unwrap_or(std::cmp::Ordering::Equal).then_with(
+            || a.x_position.partial_cmp(&b.x_position).unwrap_or(std::cmp::Ordering::Equal),
+        )
+    });
+
+    let mut lines: Vec<Vec<ObjectSpan>> = Vec::new();
+
+    for span in spans {
+        let match_idx = lines.iter().position(|line| {
+            let representative = &line[0];
+            let tolerance = span.font_size.min(representative.font_size) * 0.5;
+            (span.y_position - representative.y_position).abs() < tolerance
+        });
+        match match_idx {
+            Some(idx) => lines[idx].push(span),
+            None => lines.push(vec![span]),
+        }
+    }
+
+    lines
+        .into_iter()
+        .map(|mut group| {
+            group.sort_by(|a, b| {
+                a.x_position.partial_cmp(&b.x_position).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            let mut text = String::new();
+            let mut weighted_size_sum: f64 = 0.0;
+            let mut total_chars: usize = 0;
+            let mut bold_alpha: usize = 0;
+            let mut total_alpha: usize = 0;
+            let mut prev_x_end: Option<f32> = None;
+            let mut prev_ends_hyphen = false;
+
+            for span in &group {
+                let alpha_count = span.text.chars().filter(|c| c.is_alphabetic()).count();
+                let char_count = span.text.chars().count();
+                weighted_size_sum += span.font_size as f64 * char_count as f64;
+                total_chars += char_count;
+                total_alpha += alpha_count;
+                if span.is_bold {
+                    bold_alpha += alpha_count;
+                }
+
+                if !text.is_empty() {
+                    let needs_space = !prev_ends_hyphen
+                        && prev_x_end.map(|end| span.x_position > end).unwrap_or(true);
+                    if needs_space {
+                        text.push(' ');
+                    }
+                }
+                text.push_str(&span.text);
+                prev_x_end = Some(span.x_end);
+                prev_ends_hyphen = span.text.ends_with('-');
+            }
+
+            let dominant_font_size =
+                if total_chars > 0 { (weighted_size_sum / total_chars as f64) as f32 } else { 0.0 };
+
+            let is_bold = total_alpha > 0 && bold_alpha * 2 > total_alpha;
+
+            LineSpan { text, dominant_font_size, is_bold }
+        })
+        .collect()
+}
+
+/// Check if a line of text is a plausible heading candidate.
+///
+/// Filters: 3-180 chars, >= 3 alphabetic chars, >= 50% alphabetic density,
+/// <= 20 words, < 3 sentence-ending punctuation marks.
+fn is_heading_candidate(text: &str) -> bool {
+    let char_count = text.chars().count();
+    if !(3..=180).contains(&char_count) {
+        return false;
+    }
+
+    let alpha_count = text.chars().filter(|c| c.is_alphabetic()).count();
+    if alpha_count < 3 {
+        return false;
+    }
+
+    if alpha_count * 2 < char_count {
+        return false;
+    }
+
+    if text.split_whitespace().count() > 20 {
+        return false;
+    }
+
+    let sentence_ends = text.chars().filter(|&c| c == '.' || c == '?' || c == '!').count();
+    if sentence_ends >= 3 {
+        return false;
+    }
+
+    true
+}
+
+/// Classify line spans as headings based on font-size ratio to body size.
+///
+/// Returns accepted headings in the order they appear in `lines`.
+fn classify_line_headings(
+    lines: &[LineSpan],
+    body_size: f32,
+    thresholds: &HeadingThresholds,
+) -> Vec<AcceptedHeading> {
+    let mut headings = Vec::new();
+
+    for line in lines {
+        if !is_heading_candidate(&line.text) {
+            continue;
+        }
+
+        // Use f64 arithmetic to reduce floating-point precision loss when
+        // comparing font-size ratios. A tiny epsilon absorbs rounding from
+        // f32 storage (e.g. 14.4f32 / 12.0f32 is slightly below 1.2f32).
+        const RATIO_EPS: f64 = 1e-6;
+        let ratio = line.dominant_font_size as f64 / body_size as f64;
+
+        let level = if ratio >= thresholds.h1_ratio as f64 - RATIO_EPS {
+            Some(1u8)
+        } else if ratio >= thresholds.h2_ratio as f64 - RATIO_EPS {
+            Some(2)
+        } else if ratio >= thresholds.h3_ratio as f64 - RATIO_EPS {
+            Some(3)
+        } else if thresholds.bold_as_h3
+            && line.is_bold
+            && ratio >= thresholds.bold_min_ratio as f64 - RATIO_EPS
+        {
+            let has_sentence_end = line.text.chars().any(|c| c == '.' || c == '?' || c == '!');
+            if has_sentence_end { None } else { Some(3) }
+        } else {
+            None
+        };
+
+        if let Some(level) = level {
+            headings.push(AcceptedHeading { level, text: line.text.clone() });
+        }
+    }
+
+    headings
+}
+
+/// Insert markdown heading markers into page text at positions found by
+/// monotonic left-to-right matching. Returns the original text unchanged
+/// if no headings could be matched.
+// tracing::debug! internally uses .expect()
+#[allow(clippy::disallowed_methods)]
+fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> String {
+    if headings.is_empty() {
+        return page_text.to_string();
+    }
+
+    let (normalized_page, offset_map) = normalize_with_offset_map(page_text);
+
+    struct MatchedHeading {
+        original_byte_start: usize,
+        original_byte_end: usize,
+        level: u8,
+    }
+
+    let mut matched: Vec<MatchedHeading> = Vec::new();
+    let mut search_start: usize = 0;
+
+    for heading in headings {
+        let (normalized_heading, _) = normalize_with_offset_map(&heading.text);
+        if normalized_heading.is_empty() {
+            continue;
+        }
+
+        // Search forward for the heading text, requiring it to be at a line
+        // boundary (start of text, or preceded by a newline in the original).
+        // This prevents matching an in-paragraph mention of the heading phrase.
+        let found = {
+            let mut from = search_start;
+            loop {
+                let Some(pos) = normalized_page[from..].find(&normalized_heading) else {
+                    break None;
+                };
+                let cand_start = from + pos;
+                let cand_end = cand_start + normalized_heading.len();
+
+                // NB: `offset_map[i]` points to the *first* byte of the
+                // original whitespace run that was collapsed into a single
+                // space.  If the original text has trailing spaces before a
+                // newline (e.g. "text   \nHeading"), the mapped byte is the
+                // first space, not the '\n', so the check returns false and
+                // the heading is skipped.  PDFium's `page.text().all()`
+                // typically emits '\n' directly at line breaks without
+                // surrounding spaces, so this is safe for real PDF output.
+                let at_line_boundary = cand_start == 0 || {
+                    let orig_prev = offset_map[cand_start - 1];
+                    matches!(page_text.as_bytes().get(orig_prev), Some(b'\n') | Some(b'\r'))
+                };
+
+                if at_line_boundary {
+                    break Some((cand_start, cand_end));
+                }
+                from = cand_end;
+            }
+        };
+        let Some((norm_start, norm_end)) = found else {
+            tracing::debug!(
+                heading_text = %heading.text,
+                "heading candidate could not be matched at a line boundary, skipping"
+            );
+            continue;
+        };
+
+        let orig_start = offset_map[norm_start];
+        let orig_end =
+            if norm_end < offset_map.len() { offset_map[norm_end] } else { page_text.len() };
+
+        matched.push(MatchedHeading {
+            original_byte_start: orig_start,
+            original_byte_end: orig_end,
+            level: heading.level,
+        });
+
+        search_start = norm_end;
+    }
+
+    if matched.is_empty() {
+        return page_text.to_string();
+    }
+
+    // Insert markers in reverse byte-offset order to preserve positions.
+    let mut result = page_text.to_string();
+    for m in matched.iter().rev() {
+        let prefix = match m.level {
+            1 => "# ",
+            2 => "## ",
+            _ => "### ",
+        };
+        // Use the original page text (not coalesced heading text) to preserve
+        // document fidelity — only add the markdown prefix around it.
+        let original_substr = &result[m.original_byte_start..m.original_byte_end];
+        let replacement = format!("\n{prefix}{original_substr}\n");
+        result.replace_range(m.original_byte_start..m.original_byte_end, &replacement);
+    }
+
+    result
+}
+
+/// Orchestrator: detect headings on a native-text PDF page and insert
+/// inline markdown markers. Returns the original text on any failure or
+/// when no headings are detected.
+// tracing macros internally use .expect()
+#[allow(clippy::disallowed_methods)]
+fn detect_and_insert_headings(
+    page: &pdfium_render::prelude::PdfPage<'_>,
+    native_text: &str,
+    page_index: usize,
+) -> Result<String> {
+    let spans = collect_object_spans(page);
+
+    tracing::debug!(page_index, page_objects_count = spans.len(), "collected text object spans");
+
+    if spans.is_empty() {
+        return Ok(native_text.to_string());
+    }
+
+    let body_size = match compute_body_font_size(&spans) {
+        Some(size) => {
+            tracing::debug!(page_index, body_font_size = size, "computed body font size");
+            size
+        }
+        None => {
+            tracing::debug!(page_index, "no stable body font size, skipping heading detection");
+            return Ok(native_text.to_string());
+        }
+    };
+
+    let lines = coalesce_into_lines(spans);
+    let thresholds = HeadingThresholds::DEFAULT;
+    let headings = classify_line_headings(&lines, body_size, &thresholds);
+
+    if headings.is_empty() {
+        tracing::debug!(page_index, "no headings classified");
+        return Ok(native_text.to_string());
+    }
+
+    let result = insert_heading_markers(native_text, &headings);
+
+    let accepted = headings.len();
+    // The three patterns are disjoint: "\n# " does not match inside "\n## "
+    // (the char after `#` is `#`, not ` `), so raw counts are correct.
+    // Note: if the original PDF text already contained markdown heading
+    // markers, this count may be inflated — acceptable for debug telemetry.
+    let markers_found = result.matches("\n# ").count()
+        + result.matches("\n## ").count()
+        + result.matches("\n### ").count();
+
+    // `candidates_unmatched`: headings classified but not matched back into
+    // the page text (e.g. due to line-boundary requirement or text mismatch).
+    tracing::debug!(
+        page_index,
+        headings_accepted = accepted,
+        candidates_unmatched = accepted.saturating_sub(markers_found),
+        "heading detection complete"
+    );
+
+    Ok(result)
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -320,7 +820,13 @@ impl FormatExtractor for PdfExtractor {
 
                     match page_ocr_decision(settings.force, &native_text, ocr_available) {
                         PageOcrDecision::UseNativeText => {
-                            pages.push(native_text);
+                            let page_idx = pages.len();
+                            let text = detect_and_insert_headings(&page, &native_text, page_idx)
+                                .unwrap_or_else(|e| {
+                                    tracing::debug!(page_index = page_idx, error = %e, "heading detection failed, using plain text");
+                                    native_text
+                                });
+                            pages.push(text);
                         }
                         PageOcrDecision::SkipUnavailable => {
                             ocr_skipped_pages += 1;
@@ -581,6 +1087,7 @@ fn run_tesseract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pdfium_render::prelude::PdfFontWeight;
 
     /// Build a test registry with text + markdown extractors (no PDF — no native lib in CI).
     #[allow(clippy::disallowed_methods)] // test helper
@@ -780,6 +1287,16 @@ mod tests {
         assert_eq!(resolved.timeout.as_secs(), 1, "zero timeout should be clamped to 1s");
     }
 
+    #[test]
+    fn heading_thresholds_default_values() {
+        let t = HeadingThresholds::DEFAULT;
+        assert!((t.h1_ratio - 2.0).abs() < f32::EPSILON);
+        assert!((t.h2_ratio - 1.6).abs() < f32::EPSILON);
+        assert!((t.h3_ratio - 1.2).abs() < f32::EPSILON);
+        assert!((t.bold_min_ratio - 1.1).abs() < f32::EPSILON);
+        assert!(t.bold_as_h3);
+    }
+
     // --- OCR integration test helpers ---
 
     /// Find a usable tessdata directory from common system locations.
@@ -941,5 +1458,582 @@ mod tests {
             msg.contains("not configured"),
             "error should mention OCR not configured, got: {msg}"
         );
+    }
+
+    // --- normalize_with_offset_map tests ---
+
+    #[test]
+    fn normalize_with_offset_map_collapses_whitespace() {
+        let (normalized, map) = normalize_with_offset_map("  hello   world  ");
+        assert_eq!(normalized, "hello world");
+        // 'h' at normalized byte 0 maps to original byte 2
+        assert_eq!(map[0], 2);
+        // 'w' at normalized byte 6 maps to original byte 10
+        assert_eq!(map[6], 10);
+    }
+
+    #[test]
+    fn normalize_with_offset_map_tabs_and_newlines() {
+        let (normalized, map) = normalize_with_offset_map("foo\t\n  bar");
+        assert_eq!(normalized, "foo bar");
+        // 'b' at normalized byte 4 maps to original byte 7
+        assert_eq!(map[4], 7);
+    }
+
+    #[test]
+    fn normalize_with_offset_map_empty_input() {
+        let (normalized, map) = normalize_with_offset_map("");
+        assert_eq!(normalized, "");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn normalize_with_offset_map_no_whitespace() {
+        let (normalized, map) = normalize_with_offset_map("abc");
+        assert_eq!(normalized, "abc");
+        assert_eq!(map.len(), 3);
+        assert_eq!(map[0], 0);
+        assert_eq!(map[1], 1);
+        assert_eq!(map[2], 2);
+    }
+
+    #[test]
+    fn normalize_with_offset_map_preserves_case_and_punctuation() {
+        let (normalized, _) = normalize_with_offset_map("  Hello, World!  ");
+        assert_eq!(normalized, "Hello, World!");
+    }
+
+    #[test]
+    fn body_font_size_picks_mode() {
+        let spans = vec![
+            ObjectSpan {
+                text: "a".repeat(100),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 0.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "b".repeat(20),
+                font_size: 24.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 50.0,
+                x_end: 100.0,
+            },
+        ];
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, Some(12.0));
+    }
+
+    #[test]
+    fn body_font_size_tie_breaks_to_smaller() {
+        let spans = vec![
+            ObjectSpan {
+                text: "a".repeat(50),
+                font_size: 14.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 0.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "b".repeat(50),
+                font_size: 16.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 50.0,
+                x_end: 100.0,
+            },
+        ];
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, Some(14.0));
+    }
+
+    #[test]
+    fn body_font_size_stability_gate_rejects_low_coverage() {
+        let mut spans = vec![ObjectSpan {
+            text: "a".repeat(10),
+            font_size: 12.0,
+            is_bold: false,
+            x_position: 0.0,
+            y_position: 0.0,
+            x_end: 100.0,
+        }];
+        for i in 1..10 {
+            spans.push(ObjectSpan {
+                text: "b".repeat(10),
+                font_size: 12.0 + i as f32 * 2.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: i as f32 * 50.0,
+                x_end: 100.0,
+            });
+        }
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, None, "no bucket reaches 20% coverage");
+    }
+
+    #[test]
+    fn body_font_size_empty_spans() {
+        let result = compute_body_font_size(&[]);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn body_font_size_ignores_non_alphabetic() {
+        let spans = vec![
+            ObjectSpan {
+                text: "12345".to_string(),
+                font_size: 20.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 0.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "hello".to_string(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 50.0,
+                x_end: 100.0,
+            },
+        ];
+        let result = compute_body_font_size(&spans);
+        assert_eq!(result, Some(12.0));
+    }
+
+    // --- coalesce_into_lines tests ---
+
+    #[test]
+    fn coalesce_groups_by_y_position() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Hello".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+            ObjectSpan {
+                text: "World".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 55.0,
+                y_position: 100.5,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "New line".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 80.0,
+                x_end: 80.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "Hello World");
+        assert_eq!(lines[1].text, "New line");
+    }
+
+    #[test]
+    fn coalesce_sorts_by_x_within_line() {
+        let spans = vec![
+            ObjectSpan {
+                text: "World".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 60.0,
+                y_position: 100.0,
+                x_end: 100.0,
+            },
+            ObjectSpan {
+                text: "Hello".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hello World");
+    }
+
+    #[test]
+    fn coalesce_no_space_when_overlapping() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Hel".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 30.0,
+            },
+            ObjectSpan {
+                text: "lo".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 28.0,
+                y_position: 100.0,
+                x_end: 45.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "Hello");
+    }
+
+    #[test]
+    fn coalesce_no_space_after_hyphen() {
+        let spans = vec![
+            ObjectSpan {
+                text: "self-".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 40.0,
+            },
+            ObjectSpan {
+                text: "aware".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 50.0,
+                y_position: 100.0,
+                x_end: 90.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].text, "self-aware");
+    }
+
+    #[test]
+    fn coalesce_bold_majority_rule() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Abc".into(),
+                font_size: 12.0,
+                is_bold: true,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 30.0,
+            },
+            ObjectSpan {
+                text: "de".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 35.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].is_bold, "majority of alpha chars are bold");
+    }
+
+    #[test]
+    fn coalesce_dominant_font_size_weighted_average() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Abc".into(),
+                font_size: 24.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 50.0,
+            },
+            ObjectSpan {
+                text: "de".into(),
+                font_size: 12.0,
+                is_bold: false,
+                x_position: 55.0,
+                y_position: 100.0,
+                x_end: 80.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 1);
+        assert!((lines[0].dominant_font_size - 19.2).abs() < 0.01);
+    }
+
+    #[test]
+    fn coalesce_mixed_font_size_uses_smaller_tolerance() {
+        let spans = vec![
+            ObjectSpan {
+                text: "Small".into(),
+                font_size: 6.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 100.0,
+                x_end: 30.0,
+            },
+            ObjectSpan {
+                text: "Large".into(),
+                font_size: 24.0,
+                is_bold: false,
+                x_position: 0.0,
+                y_position: 96.0,
+                x_end: 80.0,
+            },
+        ];
+        let lines = coalesce_into_lines(spans);
+        assert_eq!(lines.len(), 2, "should not merge across tolerance boundary");
+    }
+
+    // --- is_heading_candidate tests ---
+
+    #[test]
+    fn heading_candidate_rejects_too_short() {
+        assert!(!is_heading_candidate("ab"));
+        assert!(is_heading_candidate("abc"));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_too_long() {
+        let long = "a".repeat(180);
+        assert!(is_heading_candidate(&long));
+        let too_long = "a".repeat(181);
+        assert!(!is_heading_candidate(&too_long));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_no_alpha() {
+        assert!(!is_heading_candidate("12345"));
+        assert!(!is_heading_candidate("---..."));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_low_alpha_density() {
+        assert!(!is_heading_candidate("a11111111"));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_too_many_words() {
+        let words: String = (0..21).map(|i| format!("word{i}")).collect::<Vec<_>>().join(" ");
+        assert!(!is_heading_candidate(&words));
+    }
+
+    #[test]
+    fn heading_candidate_rejects_prose_punctuation() {
+        assert!(!is_heading_candidate("Sentence one. Sentence two. Sentence three."));
+    }
+
+    #[test]
+    fn heading_candidate_accepts_valid_heading() {
+        assert!(is_heading_candidate("Introduction"));
+        assert!(is_heading_candidate("Chapter 1: Getting Started"));
+    }
+
+    #[test]
+    fn heading_candidate_requires_min_three_alpha() {
+        assert!(!is_heading_candidate("a 1"));
+        assert!(!is_heading_candidate("ab 1"));
+        assert!(is_heading_candidate("abc 1"));
+    }
+
+    // --- classify_line_headings tests ---
+
+    #[test]
+    fn classify_headings_by_ratio() {
+        let lines = vec![
+            LineSpan { text: "Big Title".into(), dominant_font_size: 24.0, is_bold: false },
+            LineSpan { text: "Section Header".into(), dominant_font_size: 19.2, is_bold: false },
+            LineSpan { text: "Subsection".into(), dominant_font_size: 14.4, is_bold: false },
+            LineSpan {
+                text: "Body text that is long enough to be a real paragraph of text.".into(),
+                dominant_font_size: 12.0,
+                is_bold: false,
+            },
+        ];
+        let thresholds = HeadingThresholds::DEFAULT;
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert_eq!(headings.len(), 3);
+        assert_eq!(headings[0].level, 1);
+        assert_eq!(headings[1].level, 2);
+        assert_eq!(headings[2].level, 3);
+    }
+
+    #[test]
+    fn classify_headings_bold_as_h3() {
+        let lines =
+            vec![LineSpan { text: "Bold Subhead".into(), dominant_font_size: 13.2, is_bold: true }];
+        let thresholds = HeadingThresholds::DEFAULT;
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert_eq!(headings.len(), 1);
+        assert_eq!(headings[0].level, 3);
+    }
+
+    #[test]
+    fn classify_headings_bold_rejected_with_punctuation() {
+        let lines = vec![LineSpan {
+            text: "Bold sentence.".into(),
+            dominant_font_size: 13.2,
+            is_bold: true,
+        }];
+        let thresholds = HeadingThresholds::DEFAULT;
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert!(headings.is_empty(), "bold with sentence punctuation rejected");
+    }
+
+    #[test]
+    fn classify_headings_skips_body_text() {
+        let lines = vec![LineSpan {
+            text: "Just normal body text here".into(),
+            dominant_font_size: 12.0,
+            is_bold: false,
+        }];
+        let thresholds = HeadingThresholds::DEFAULT;
+        let headings = classify_line_headings(&lines, 12.0, &thresholds);
+        assert!(headings.is_empty());
+    }
+
+    // --- insert_heading_markers tests ---
+
+    #[test]
+    fn insert_markers_basic() {
+        let page_text = "Introduction\nBody text here.\nConclusion";
+        let headings = vec![
+            AcceptedHeading { level: 1, text: "Introduction".into() },
+            AcceptedHeading { level: 2, text: "Conclusion".into() },
+        ];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(result.contains("\n# Introduction\n"), "H1 marker: {result:?}");
+        assert!(result.contains("\n## Conclusion\n"), "H2 marker: {result:?}");
+    }
+
+    #[test]
+    fn insert_markers_preserves_unmatched_text() {
+        let page_text = "Body text that stays the same.";
+        let headings = vec![AcceptedHeading { level: 1, text: "Not In Text".into() }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert_eq!(result, page_text, "unmatched heading should leave text unchanged");
+    }
+
+    #[test]
+    fn insert_markers_duplicate_text_monotonic() {
+        let page_text = "Summary\nBody\nSummary";
+        let headings = vec![
+            AcceptedHeading { level: 2, text: "Summary".into() },
+            AcceptedHeading { level: 3, text: "Summary".into() },
+        ];
+        let result = insert_heading_markers(page_text, &headings);
+        let first = result.find("## Summary");
+        let second = result.find("### Summary");
+        assert!(first.is_some(), "first match missing: {result:?}");
+        assert!(second.is_some(), "second match missing: {result:?}");
+        assert!(first < second, "first match should appear before second: {result:?}");
+    }
+
+    #[test]
+    fn insert_markers_whitespace_normalization_match() {
+        let page_text = "  Big   Title  \nBody text.";
+        let headings = vec![AcceptedHeading { level: 1, text: "Big Title".into() }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(
+            result.contains("# Big   Title\n"),
+            "should preserve original (multi-space) heading text: {result:?}"
+        );
+    }
+
+    #[test]
+    fn insert_markers_skips_in_paragraph_occurrence() {
+        // "Background" appears mid-paragraph first, then as a heading on its
+        // own line. The matcher must skip the in-paragraph occurrence.
+        let page_text = "We discuss Background topics.\nBackground\nDetails here.";
+        let headings = vec![AcceptedHeading { level: 2, text: "Background".into() }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(
+            result.contains("We discuss Background topics."),
+            "in-paragraph occurrence must be preserved: {result:?}"
+        );
+        assert!(result.contains("\n## Background\n"), "heading marker expected: {result:?}");
+    }
+
+    #[test]
+    fn insert_markers_preserves_original_page_text() {
+        // Heading text from coalesced spans might differ from page text
+        // (e.g. extra spaces). The marker should wrap the original page text.
+        let page_text = "Big  Title\nBody.";
+        let headings = vec![AcceptedHeading { level: 1, text: "Big Title".into() }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(
+            result.contains("# Big  Title\n"),
+            "should preserve original double-space from page text: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn heading_detection_does_not_affect_non_pdf_extractors() {
+        let registry = test_registry();
+
+        let md_input = b"# Existing Heading\n\nBody text";
+        let md_result = registry
+            .extract(FileType::Markdown, md_input, &ExtractionOptions::default())
+            .await
+            .expect("markdown extraction");
+        assert_eq!(
+            md_result.text, "# Existing Heading\n\nBody text",
+            "markdown extractor must not alter content"
+        );
+
+        let txt_input = b"Plain text with no headings";
+        let txt_result = registry
+            .extract(FileType::Text, txt_input, &ExtractionOptions::default())
+            .await
+            .expect("text extraction");
+        assert_eq!(
+            txt_result.text, "Plain text with no headings",
+            "text extractor must not alter content"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // is_bold_weight tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bold_weight_700_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Weight700Bold)));
+    }
+
+    #[test]
+    fn bold_weight_800_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Weight800)));
+    }
+
+    #[test]
+    fn bold_weight_900_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Weight900)));
+    }
+
+    #[test]
+    fn bold_custom_700_is_bold() {
+        assert!(is_bold_weight(Some(PdfFontWeight::Custom(700))));
+    }
+
+    #[test]
+    fn bold_custom_699_is_not_bold() {
+        assert!(!is_bold_weight(Some(PdfFontWeight::Custom(699))));
+    }
+
+    #[test]
+    fn bold_none_is_not_bold() {
+        assert!(!is_bold_weight(None));
+    }
+
+    #[test]
+    fn bold_weight_400_is_not_bold() {
+        assert!(!is_bold_weight(Some(PdfFontWeight::Weight400Normal)));
     }
 }
