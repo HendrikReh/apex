@@ -540,6 +540,78 @@ fn classify_line_headings(
     headings
 }
 
+/// Insert markdown heading markers into page text at positions found by
+/// monotonic left-to-right matching. Returns the original text unchanged
+/// if no headings could be matched.
+// tracing::debug! internally uses .expect()
+#[allow(clippy::disallowed_methods)]
+fn insert_heading_markers(page_text: &str, headings: &[AcceptedHeading]) -> String {
+    if headings.is_empty() {
+        return page_text.to_string();
+    }
+
+    let (normalized_page, offset_map) = normalize_with_offset_map(page_text);
+
+    struct MatchedHeading {
+        original_byte_start: usize,
+        original_byte_end: usize,
+        level: u8,
+        text: String,
+    }
+
+    let mut matched: Vec<MatchedHeading> = Vec::new();
+    let mut search_start: usize = 0;
+
+    for heading in headings {
+        let (normalized_heading, _) = normalize_with_offset_map(&heading.text);
+        if normalized_heading.is_empty() {
+            continue;
+        }
+
+        let Some(pos) = normalized_page[search_start..].find(&normalized_heading) else {
+            tracing::debug!(
+                heading_text = %heading.text,
+                "heading candidate could not be matched in page text, skipping"
+            );
+            continue;
+        };
+
+        let norm_start = search_start + pos;
+        let norm_end = norm_start + normalized_heading.len();
+
+        let orig_start = offset_map[norm_start];
+        let orig_end =
+            if norm_end < offset_map.len() { offset_map[norm_end] } else { page_text.len() };
+
+        matched.push(MatchedHeading {
+            original_byte_start: orig_start,
+            original_byte_end: orig_end,
+            level: heading.level,
+            text: heading.text.clone(),
+        });
+
+        search_start = norm_end;
+    }
+
+    if matched.is_empty() {
+        return page_text.to_string();
+    }
+
+    // Insert markers in reverse byte-offset order to preserve positions.
+    let mut result = page_text.to_string();
+    for m in matched.iter().rev() {
+        let prefix = match m.level {
+            1 => "# ",
+            2 => "## ",
+            _ => "### ",
+        };
+        let replacement = format!("\n{prefix}{}\n", m.text);
+        result.replace_range(m.original_byte_start..m.original_byte_end, &replacement);
+    }
+
+    result
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -1718,5 +1790,83 @@ mod tests {
         let thresholds = HeadingThresholds::default();
         let headings = classify_line_headings(&lines, 12.0, &thresholds);
         assert!(headings.is_empty());
+    }
+
+    // --- insert_heading_markers tests ---
+
+    #[test]
+    fn insert_markers_basic() {
+        let page_text = "Introduction\nBody text here.\nConclusion";
+        let headings = vec![
+            AcceptedHeading {
+                level: 1,
+                text: "Introduction".into(),
+                y_position: 700.0,
+                x_position: 0.0,
+            },
+            AcceptedHeading {
+                level: 2,
+                text: "Conclusion".into(),
+                y_position: 300.0,
+                x_position: 0.0,
+            },
+        ];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(result.contains("\n# Introduction\n"), "H1 marker: {result:?}");
+        assert!(result.contains("\n## Conclusion\n"), "H2 marker: {result:?}");
+    }
+
+    #[test]
+    fn insert_markers_preserves_unmatched_text() {
+        let page_text = "Body text that stays the same.";
+        let headings = vec![AcceptedHeading {
+            level: 1,
+            text: "Not In Text".into(),
+            y_position: 700.0,
+            x_position: 0.0,
+        }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert_eq!(result, page_text, "unmatched heading should leave text unchanged");
+    }
+
+    #[test]
+    fn insert_markers_duplicate_text_monotonic() {
+        let page_text = "Summary\nBody\nSummary";
+        let headings = vec![
+            AcceptedHeading {
+                level: 2,
+                text: "Summary".into(),
+                y_position: 700.0,
+                x_position: 0.0,
+            },
+            AcceptedHeading {
+                level: 3,
+                text: "Summary".into(),
+                y_position: 300.0,
+                x_position: 0.0,
+            },
+        ];
+        let result = insert_heading_markers(page_text, &headings);
+        let first = result.find("## Summary");
+        let second = result.find("### Summary");
+        assert!(first.is_some(), "first match missing: {result:?}");
+        assert!(second.is_some(), "second match missing: {result:?}");
+        assert!(first < second, "first match should appear before second: {result:?}");
+    }
+
+    #[test]
+    fn insert_markers_whitespace_normalization_match() {
+        let page_text = "  Big   Title  \nBody text.";
+        let headings = vec![AcceptedHeading {
+            level: 1,
+            text: "Big Title".into(),
+            y_position: 700.0,
+            x_position: 0.0,
+        }];
+        let result = insert_heading_markers(page_text, &headings);
+        assert!(
+            result.contains("# Big Title\n") || result.contains("# Big   Title"),
+            "should match despite whitespace differences: {result:?}"
+        );
     }
 }
