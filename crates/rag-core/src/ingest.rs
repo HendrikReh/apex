@@ -3,7 +3,7 @@
 //! `IngestService` orchestrates extraction, chunking, embedding, and storage
 //! for individual files and directory batches.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::stores::vectors::{DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME};
@@ -320,6 +320,7 @@ impl IngestService {
             text: result.text,
             checksum,
             source_path,
+            native_metadata: result.native_metadata,
         })
     }
 
@@ -362,6 +363,7 @@ impl IngestService {
             source_path: prepared.source_path,
             chunks,
             actual_max_tokens: max_tokens,
+            native_metadata: prepared.native_metadata,
         })
     }
 
@@ -388,6 +390,7 @@ impl IngestService {
             dense_vectors,
             sparse_vectors,
             total_tokens,
+            native_metadata: chunked.native_metadata,
         })
     }
 
@@ -528,6 +531,7 @@ struct PreparedDocument {
     text: String,
     checksum: String,
     source_path: String,
+    native_metadata: Option<HashMap<String, String>>,
 }
 
 /// Intermediate: text chunked.
@@ -539,6 +543,7 @@ struct ChunkedDocument {
     source_path: String,
     chunks: Vec<ChunkWithSection>,
     actual_max_tokens: usize,
+    native_metadata: Option<HashMap<String, String>>,
 }
 
 /// Intermediate: chunks embedded (dense + sparse).
@@ -552,6 +557,7 @@ struct EmbeddedDocument {
     dense_vectors: Vec<Vec<f32>>,
     sparse_vectors: Vec<SparseVector>,
     total_tokens: i64,
+    native_metadata: Option<HashMap<String, String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -743,6 +749,7 @@ mod tests {
             dense_vectors: vec![vec![0.1, 0.2, 0.3]],
             sparse_vectors: Vec::new(),
             total_tokens: 0,
+            native_metadata: None,
         };
 
         let err = build_qdrant_points("tenant", &doc).expect_err("mismatched vectors should fail");
