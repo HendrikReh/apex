@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow, bail};
 use futures::future::BoxFuture;
-use pdfium_render::prelude::PdfDocumentMetadataTagType;
 use sha2::{Digest, Sha256};
 
 /// File formats currently recognized by the extraction layer.
@@ -267,6 +266,8 @@ impl FormatExtractor for PdfExtractor {
                 let doc = pdfium
                     .load_pdf_from_byte_vec(owned_bytes, None)
                     .map_err(|e| anyhow!("loading PDF document: {e}"))?;
+
+                use pdfium_render::prelude::PdfDocumentMetadataTagType;
 
                 let native_metadata: HashMap<String, String> = doc
                     .metadata()
