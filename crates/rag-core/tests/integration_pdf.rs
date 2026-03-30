@@ -193,3 +193,102 @@ async fn pdf_extractor_returns_none_metadata_for_bare_pdf() {
         result.native_metadata
     );
 }
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn pdf_heading_detection_inserts_markers() {
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
+    };
+
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor should construct");
+
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/headings_structured.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading fixture");
+
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("extraction should succeed");
+
+    assert!(
+        result.text.contains("# Document Title"),
+        "should contain H1 marker, got:\n{}",
+        &result.text[..result.text.len().min(500)]
+    );
+    assert!(
+        result.text.contains("## First Section") || result.text.contains("## Second Section"),
+        "should contain H2 marker, got:\n{}",
+        &result.text[..result.text.len().min(500)]
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn pdf_heading_detection_ocr_no_markers() {
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
+    };
+
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor should construct");
+
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hello_ocr.pdf");
+    if !fixture.exists() {
+        eprintln!("SKIP: hello_ocr.pdf fixture not found");
+        return;
+    }
+    let pdf_bytes = std::fs::read(&fixture).expect("reading fixture");
+
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("extraction should succeed");
+
+    assert!(
+        !result.text.contains("\n# "),
+        "OCR text should not contain heading markers, got:\n{}",
+        &result.text[..result.text.len().min(500)]
+    );
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn pdf_heading_detection_no_signal_fallback() {
+    let Some(lib_path) = pdfium_library_path() else {
+        eprintln!("SKIP: PDFIUM_LIBRARY_PATH not set");
+        return;
+    };
+
+    let config = test_app_config(lib_path);
+    let extractor =
+        rag_core::extract::PdfExtractor::new(&config).expect("PdfExtractor should construct");
+
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/uniform_font.pdf");
+    let pdf_bytes = std::fs::read(&fixture).expect("reading fixture");
+
+    use rag_core::extract::{ExtractionOptions, FormatExtractor};
+    let result = extractor
+        .extract(&pdf_bytes, &ExtractionOptions::default())
+        .await
+        .expect("extraction should succeed");
+
+    assert!(
+        !result.text.contains("\n# "),
+        "uniform-font text should not contain heading markers, got:\n{}",
+        &result.text[..result.text.len().min(500)]
+    );
+
+    assert!(
+        result.text.contains("All text at same size"),
+        "extracted text should contain fixture content"
+    );
+}
