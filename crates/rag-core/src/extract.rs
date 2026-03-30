@@ -170,7 +170,9 @@ impl FormatExtractor for MarkdownExtractor {
 /// issues with the C library handle.
 #[derive(Debug)]
 pub struct PdfExtractor {
-    library_path: std::path::PathBuf,
+    /// PDFium library path, stored as `String` because `bind_to_library()`
+    /// requires `&str`. UTF-8 validity is checked once in `new()`.
+    library_path: String,
     tessdata_dir: Option<std::path::PathBuf>,
     ocr_timeout_secs: u64,
     ocr_default_language: String,
@@ -183,10 +185,17 @@ impl PdfExtractor {
     /// override happens in `AppConfig` loading, not here. Eagerly loads
     /// PDFium and validates tessdata (if configured) at startup.
     pub fn new(config: &crate::config::AppConfig) -> Result<Self> {
-        let library_path = config
+        let path_buf = config
             .pdfium_library_path
             .clone()
             .ok_or_else(|| anyhow!("pdfium_library_path is required for PdfExtractor"))?;
+
+        let library_path = path_buf
+            .to_str()
+            .with_context(|| {
+                format!("pdfium_library_path is not valid UTF-8: {}", path_buf.display())
+            })?
+            .to_owned();
 
         // Validate PDFium library is loadable at construction time.
         // Use bind_to_library() with the exact configured path — do NOT
@@ -194,15 +203,11 @@ impl PdfExtractor {
         // platform-default filename from a directory and would ignore
         // custom filenames, symlinks, or nonstandard install locations.
         drop(pdfium_render::prelude::Pdfium::new(
-            pdfium_render::prelude::Pdfium::bind_to_library(library_path.to_str().with_context(
-                || format!("pdfium_library_path is not valid UTF-8: {}", library_path.display()),
-            )?)
-            .with_context(|| {
+            pdfium_render::prelude::Pdfium::bind_to_library(&library_path).with_context(|| {
                 format!(
-                    "failed to load PDFium native library from {}: \
+                    "failed to load PDFium native library from {library_path}: \
                      verify the path points to a valid PDFium binary \
                      (.dylib on macOS, .so on Linux, .dll on Windows)",
-                    library_path.display()
                 )
             })?,
         ));
@@ -250,13 +255,9 @@ impl FormatExtractor for PdfExtractor {
 
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                // UTF-8 validity already checked in PdfExtractor::new().
-                let lib_str =
-                    lib_path.to_str().ok_or_else(|| anyhow!("non-UTF-8 pdfium library path"))?;
                 let pdfium = pdfium_render::prelude::Pdfium::new(
-                    pdfium_render::prelude::Pdfium::bind_to_library(lib_str).with_context(
-                        || format!("binding PDFium library from {}", lib_path.display()),
-                    )?,
+                    pdfium_render::prelude::Pdfium::bind_to_library(&lib_path)
+                        .with_context(|| format!("binding PDFium library from {lib_path}"))?,
                 );
 
                 let doc = pdfium
