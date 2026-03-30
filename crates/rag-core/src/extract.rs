@@ -292,6 +292,48 @@ impl Default for HeadingThresholds {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Heading detection helpers
+// ---------------------------------------------------------------------------
+
+/// Normalize text by trimming and collapsing internal whitespace to single
+/// spaces. Returns the normalized string and a byte-offset map where
+/// `map[normalized_byte_pos] = original_byte_pos`.
+fn normalize_with_offset_map(text: &str) -> (String, Vec<usize>) {
+    let mut normalized = String::with_capacity(text.len());
+    let mut offset_map: Vec<usize> = Vec::with_capacity(text.len());
+    let mut in_whitespace = true; // start true to trim leading
+
+    for (byte_idx, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            if !in_whitespace && !normalized.is_empty() {
+                // Emit a single space for the first whitespace char in a run.
+                normalized.push(' ');
+                offset_map.push(byte_idx);
+                in_whitespace = true;
+            }
+        } else {
+            in_whitespace = false;
+            let start = normalized.len();
+            normalized.push(ch);
+            // Map each byte of this char to its original byte offset.
+            for i in 0..ch.len_utf8() {
+                if start + i >= offset_map.len() {
+                    offset_map.push(byte_idx + i);
+                }
+            }
+        }
+    }
+
+    // Trim trailing space.
+    if normalized.ends_with(' ') {
+        normalized.pop();
+        offset_map.pop();
+    }
+
+    (normalized, offset_map)
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -1004,5 +1046,48 @@ mod tests {
             msg.contains("not configured"),
             "error should mention OCR not configured, got: {msg}"
         );
+    }
+
+    // --- normalize_with_offset_map tests ---
+
+    #[test]
+    fn normalize_with_offset_map_collapses_whitespace() {
+        let (normalized, map) = normalize_with_offset_map("  hello   world  ");
+        assert_eq!(normalized, "hello world");
+        // 'h' at normalized byte 0 maps to original byte 2
+        assert_eq!(map[0], 2);
+        // 'w' at normalized byte 6 maps to original byte 10
+        assert_eq!(map[6], 10);
+    }
+
+    #[test]
+    fn normalize_with_offset_map_tabs_and_newlines() {
+        let (normalized, map) = normalize_with_offset_map("foo\t\n  bar");
+        assert_eq!(normalized, "foo bar");
+        // 'b' at normalized byte 4 maps to original byte 7
+        assert_eq!(map[4], 7);
+    }
+
+    #[test]
+    fn normalize_with_offset_map_empty_input() {
+        let (normalized, map) = normalize_with_offset_map("");
+        assert_eq!(normalized, "");
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn normalize_with_offset_map_no_whitespace() {
+        let (normalized, map) = normalize_with_offset_map("abc");
+        assert_eq!(normalized, "abc");
+        assert_eq!(map.len(), 3);
+        assert_eq!(map[0], 0);
+        assert_eq!(map[1], 1);
+        assert_eq!(map[2], 2);
+    }
+
+    #[test]
+    fn normalize_with_offset_map_preserves_case_and_punctuation() {
+        let (normalized, _) = normalize_with_offset_map("  Hello, World!  ");
+        assert_eq!(normalized, "Hello, World!");
     }
 }
