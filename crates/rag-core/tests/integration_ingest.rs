@@ -151,10 +151,8 @@ async fn reingest_modified_file_updates_chunks_in_place() {
     assert!(!first.skipped);
     assert!(first.chunks_created > 1, "initial ingest should produce multiple chunks");
 
-    let first_chunks = stores
-        .get_chunks_by_document(&tenant_str, "mutable")
-        .await
-        .expect("first chunk fetch");
+    let first_chunks =
+        stores.get_chunks_by_document(&tenant_str, "mutable").await.expect("first chunk fetch");
     assert_eq!(
         first_chunks.len(),
         first.chunks_created,
@@ -171,10 +169,8 @@ async fn reingest_modified_file_updates_chunks_in_place() {
         "modified content should produce fewer chunks"
     );
 
-    let second_chunks = stores
-        .get_chunks_by_document(&tenant_str, "mutable")
-        .await
-        .expect("second chunk fetch");
+    let second_chunks =
+        stores.get_chunks_by_document(&tenant_str, "mutable").await.expect("second chunk fetch");
     assert_eq!(
         second_chunks.len(),
         second.chunks_created,
