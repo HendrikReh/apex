@@ -239,6 +239,59 @@ impl PdfExtractor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Heading detection types
+// ---------------------------------------------------------------------------
+
+/// Collected text object from a PDF page, used for font analysis and line
+/// coalescing. Positions are in PDF coordinates (origin bottom-left).
+#[derive(Debug, Clone)]
+struct ObjectSpan {
+    text: String,
+    font_size: f32,
+    is_bold: bool,
+    x_position: f32,
+    y_position: f32,
+    x_end: f32,
+}
+
+/// A line of text coalesced from one or more `ObjectSpan`s that share the
+/// same approximate y-position.
+#[derive(Debug, Clone)]
+struct LineSpan {
+    text: String,
+    dominant_font_size: f32,
+    is_bold: bool,
+    y_position: f32,
+    x_position: f32,
+}
+
+/// A heading accepted for marker insertion.
+#[derive(Debug, Clone)]
+struct AcceptedHeading {
+    level: u8,
+    text: String,
+    y_position: f32,
+    x_position: f32,
+}
+
+/// Font-size ratio thresholds for heading classification.
+/// Hardcoded defaults; configurability deferred.
+#[derive(Debug, Clone, Copy)]
+struct HeadingThresholds {
+    h1_ratio: f32,
+    h2_ratio: f32,
+    h3_ratio: f32,
+    bold_min_ratio: f32,
+    bold_as_h3: bool,
+}
+
+impl Default for HeadingThresholds {
+    fn default() -> Self {
+        Self { h1_ratio: 2.0, h2_ratio: 1.6, h3_ratio: 1.2, bold_min_ratio: 1.1, bold_as_h3: true }
+    }
+}
+
 impl FormatExtractor for PdfExtractor {
     fn supported_types(&self) -> &'static [FileType] {
         &[FileType::Pdf]
@@ -778,6 +831,16 @@ mod tests {
         let opts = OcrOptions { force: false, language_hints: vec![], timeout_secs: Some(0) };
         let resolved = resolve_ocr_settings(Some(&opts), "eng", 30);
         assert_eq!(resolved.timeout.as_secs(), 1, "zero timeout should be clamped to 1s");
+    }
+
+    #[test]
+    fn heading_thresholds_default_values() {
+        let t = HeadingThresholds::default();
+        assert!((t.h1_ratio - 2.0).abs() < f32::EPSILON);
+        assert!((t.h2_ratio - 1.6).abs() < f32::EPSILON);
+        assert!((t.h3_ratio - 1.2).abs() < f32::EPSILON);
+        assert!((t.bold_min_ratio - 1.1).abs() < f32::EPSILON);
+        assert!(t.bold_as_h3);
     }
 
     // --- OCR integration test helpers ---
