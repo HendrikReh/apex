@@ -408,7 +408,7 @@ apex/
 - [x] Corpus stats update
 - [x] Integration test: ingest a directory of test files, verify documents + chunks in Postgres, points in Qdrant
 - [x] Test: re-ingest same files → no changes (checksum skip)
-- [ ] Integration test: modify a file → chunks updated in place (stable UUID overwrite); explicit old-chunk cleanup path is not applicable in the current design
+- [x] Integration test: modify a file → chunks updated in place (stable UUID overwrite); explicit old-chunk cleanup path is not applicable in the current design
 - [x] Sidecar metadata support (beyond original scope)
 - [x] Dry-run support (beyond original scope)
 
@@ -420,7 +420,7 @@ apex/
 
 **Exit criteria:** Can ingest a directory of PDF/MD/TXT files. Documents and chunks persisted. Re-ingest is idempotent. Stale chunks cleaned up.
 
-**Status: COMPLETE** ✓ — Stale chunk cleanup is a no-op (stable UUIDs overwrite in place); modify-file integration test not yet written.
+**Status: COMPLETE** ✓ — Stale chunk cleanup is a no-op (stable UUIDs overwrite in place); modify-file integration test exists for the supported overwrite path.
 
 ---
 
@@ -571,7 +571,7 @@ apex/
 - [x] `just run-server` and `just run-server-mock`
 - [x] Integration tests using `test-support::spawn_app`
 - [x] Smoke test: ingest via API → search via API → chat via API (end-to-end, ignored, requires `just up`)
-- [ ] Smoke test: X-Tenant isolation through API
+- [x] Smoke test: X-Tenant isolation through API
 
 **Dependencies:** Phase 6 (all services wired up).
 
@@ -581,7 +581,7 @@ apex/
 
 **Exit criteria:** Server starts, accepts requests, serves the MVP user journey end-to-end via HTTP. Integration tests pass against a real running server.
 
-**Status: COMPLETE** ✓ — Shipped more endpoints than planned. End-to-end API journey smoke test exists; X-Tenant API isolation smoke test not yet written.
+**Status: COMPLETE** ✓ — Shipped more endpoints than planned. End-to-end API journey and X-Tenant API isolation smoke tests exist.
 
 ---
 

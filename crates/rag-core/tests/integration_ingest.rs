@@ -51,6 +51,26 @@ fn write_sidecar(dir: &Path, stem: &str) {
     fs::write(dir.join(format!("{stem}.metadata.json")), json).expect("writing sidecar");
 }
 
+#[allow(clippy::disallowed_methods)]
+fn write_sidecar_with_chunking(dir: &Path, stem: &str, max_tokens: usize) {
+    let json = format!(
+        r#"{{
+            "schema_version": 1,
+            "document": {{ "id": "{stem}", "title": "Test {stem}", "category": "report" }},
+            "source": {{ "url": "https://example.com/{stem}", "domain": "example.com", "publisher": "Test" }},
+            "language": "en",
+            "tags": ["test"],
+            "acl": {{ "allow_roles": ["*"] }},
+            "security": {{ "classification": "public", "requires_evidence_pack": false }},
+            "provenance": {{ "retrieved_at": "2026-03-27T00:00:00Z", "retrieved_by": "test" }},
+            "ingestion": {{
+                "chunking": {{ "max_tokens": {max_tokens} }}
+            }}
+        }}"#
+    );
+    fs::write(dir.join(format!("{stem}.metadata.json")), json).expect("writing sidecar");
+}
+
 #[tokio::test]
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)]
@@ -100,6 +120,70 @@ async fn reingest_unchanged_file_is_skipped() {
     let second = service.ingest_file(make_req()).await.expect("second ingest");
     assert!(second.skipped);
     assert_eq!(second.chunks_created, 0);
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)]
+async fn reingest_modified_file_updates_chunks_in_place() {
+    let (service, stores, dir) = setup().await.expect("setup");
+    let suffix = unique_suffix();
+    let tenant_str = format!("test-modify-{suffix}");
+    let collection = format!("test_modify_{suffix}");
+    let path = dir.path().join("mutable.txt");
+
+    // Force smaller chunks so the initial ingest produces multiple rows.
+    write_sidecar_with_chunking(dir.path(), "mutable", 3);
+    write_fixture(
+        dir.path(),
+        "mutable.txt",
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    );
+
+    let make_req = || IngestFileRequest {
+        path: path.clone(),
+        tenant: TenantId::new(&tenant_str).expect("tenant"),
+        collection_override: Some(collection.clone()),
+        dry_run: false,
+    };
+
+    let first = service.ingest_file(make_req()).await.expect("first ingest");
+    assert!(!first.skipped);
+    assert!(first.chunks_created > 1, "initial ingest should produce multiple chunks");
+
+    let first_chunks = stores
+        .get_chunks_by_document(&tenant_str, "mutable")
+        .await
+        .expect("first chunk fetch");
+    assert_eq!(
+        first_chunks.len(),
+        first.chunks_created,
+        "postgres chunk rows should match the reported chunk count"
+    );
+
+    // Rewrite the file with substantially shorter content so the chunk count shrinks.
+    write_fixture(dir.path(), "mutable.txt", "alpha beta gamma");
+
+    let second = service.ingest_file(make_req()).await.expect("second ingest");
+    assert!(!second.skipped, "modified file should reingest");
+    assert!(
+        second.chunks_created < first.chunks_created,
+        "modified content should produce fewer chunks"
+    );
+
+    let second_chunks = stores
+        .get_chunks_by_document(&tenant_str, "mutable")
+        .await
+        .expect("second chunk fetch");
+    assert_eq!(
+        second_chunks.len(),
+        second.chunks_created,
+        "stale trailing Postgres chunks should be removed on re-ingest"
+    );
+    assert!(
+        second_chunks.iter().all(|chunk| !chunk.text.contains("delta")),
+        "updated chunk set should no longer contain text from the old trailing chunks"
+    );
 }
 
 #[tokio::test]
