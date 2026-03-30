@@ -5,6 +5,12 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     const GREEN: &str = "\x1b[32m";
     const RESET: &str = "\x1b[0m";
     const INNER_WIDTH: usize = 84;
+    const TITLE_LINES: [&str; 4] = [
+        "___   ____  _______  __   _____ ______ ____ _    _______ ____",
+        "/ _ | / __ \\/ __/ _ \\/ /  / ___// __/ // / // / / __/ _ \\/ __/",
+        "/ __ |/ /_/ / _// // / /__/ /__ / _// _  / _  / _\\\\ \\/ , _/\\\\ \\\\",
+        "/_/ |_|\\\\____/___/____/____/\\\\___//___/_//_/_//_/ /___/_/|_/___/",
+    ];
 
     let center_line = |text: &str| -> String {
         let width = text.chars().count();
@@ -17,24 +23,23 @@ pub(crate) fn print_banner(version: &str, license_info: &str, bind_addr: &str) {
     let tagline = center_line(&format!("Apex Accelerator  ·  HTTP RAG API  ·  v{version}"));
     let license = center_line(license_info);
     let bind = center_line(&format!("bind {bind_addr}"));
+    let empty = center_line("");
+    let title = TITLE_LINES.iter().map(|line| center_line(line)).collect::<Vec<_>>().join("\n");
 
     let banner = format!(
         r#"
   ╔════════════════════════════════════════════════════════════════════════════════════╗
-  ║                                                                                    ║
-  ║   █████╗ ██████╗ ███████╗██╗  ██╗   ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗        ║
-  ║  ██╔══██╗██╔══██╗██╔════╝╚██╗██╔╝   ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗       ║
-  ║  ███████║██████╔╝█████╗   ╚███╔╝    ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝       ║
-  ║  ██╔══██║██╔═══╝ ██╔══╝   ██╔██╗    ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗       ║
-  ║  ██║  ██║██║     ███████╗██╔╝ ██╗   ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║       ║
-  ║  ╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝   ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝       ║
-  ║                                                                                    ║
+{empty}
+{title}
+{empty}
 {tagline}
 {license}
 {bind}
-  ║                                                                                    ║
+{empty}
   ╚════════════════════════════════════════════════════════════════════════════════════╝
 "#,
+        empty = empty,
+        title = title,
         tagline = tagline,
         license = license,
         bind = bind,
