@@ -180,17 +180,6 @@ pub async fn insert_api_key(
     Ok(id)
 }
 
-/// Revoke an API key by setting `revoked_at`.
-pub async fn revoke_api_key(pool: &PgPool, key_id: Uuid) -> Result<bool> {
-    let result =
-        sqlx::query("UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL")
-            .bind(key_id)
-            .execute(pool)
-            .await
-            .context("revoking api_key")?;
-    Ok(result.rows_affected() > 0)
-}
-
 /// Revoke an API key, scoped to a specific tenant via service_accounts join.
 pub async fn revoke_api_key_scoped(pool: &PgPool, key_id: Uuid, tenant: &str) -> Result<bool> {
     let result = sqlx::query(

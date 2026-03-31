@@ -90,11 +90,21 @@ pub async fn authenticate(
             let pool_clone = pool.clone();
             let key_id = key_row.id;
             tokio::spawn(async move { api_key::touch_last_used(&pool_clone, key_id).await });
+            // Bind principal to the service account's DB tenant, NOT the
+            // request header tenant. The has_tenant_access check below will
+            // reject cross-tenant key usage.
+            let sa_tenant = TenantId::new(&sa_row.tenant).map_err(|e| {
+                tracing::error!(tenant = %sa_row.tenant, error = %e, "invalid tenant in service_account row");
+                ApiError {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: "authentication error".into(),
+                }
+            })?;
             Principal::from_api_key(
                 key_row.id,
                 key_row.service_account_id,
                 &key_row.key_prefix,
-                ctx.tenant.clone(),
+                sa_tenant,
                 role,
             )
         }
