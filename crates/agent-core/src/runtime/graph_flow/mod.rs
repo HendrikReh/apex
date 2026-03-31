@@ -343,18 +343,23 @@ impl super::AgentRuntime for GraphFlowRuntime {
         run_id: RunId,
         decision: CheckpointDecision,
     ) -> anyhow::Result<AgentRunResult> {
-        // Guard: only paused runs may be resumed.
-        {
-            let meta = self.meta.lock().await;
-            if let Some(run_meta) = meta.get(&run_id) {
-                if run_meta.last_state != AgentState::AwaitingApproval {
-                    anyhow::bail!(
-                        "run {run_id} is {:?}, not AwaitingApproval — cannot resume",
-                        run_meta.last_state
-                    );
-                }
+        // Guard + extract in a single lock scope: check state, atomically
+        // transition to Running (preventing concurrent resumes), and clone
+        // out the data we need for execute_loop.
+        let (mut steps, max_steps) = {
+            let mut meta = self.meta.lock().await;
+            let run_meta = meta
+                .get_mut(&run_id)
+                .ok_or_else(|| anyhow::anyhow!("no metadata for run {run_id}"))?;
+            if run_meta.last_state != AgentState::AwaitingApproval {
+                anyhow::bail!(
+                    "run {run_id} is {:?}, not AwaitingApproval — cannot resume",
+                    run_meta.last_state
+                );
             }
-        }
+            run_meta.last_state = AgentState::Running;
+            (run_meta.steps.clone(), run_meta.max_steps)
+        };
 
         let mut session = self
             .sessions
@@ -370,16 +375,6 @@ impl super::AgentRuntime for GraphFlowRuntime {
         }
 
         let graph = self.build_graph()?;
-
-        // Extract steps and max_steps from RunMeta, then drop the lock so
-        // execute_loop (which is async and potentially long-running) doesn't
-        // block concurrent inspect() calls.
-        let (mut steps, max_steps) = {
-            let meta = self.meta.lock().await;
-            let run_meta =
-                meta.get(&run_id).ok_or_else(|| anyhow::anyhow!("no metadata for run {run_id}"))?;
-            (run_meta.steps.clone(), run_meta.max_steps)
-        };
 
         // Subtract steps already consumed so the total across start + resume(s)
         // never exceeds the original max_steps budget.

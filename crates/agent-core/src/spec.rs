@@ -258,6 +258,22 @@ impl AgentSpec {
                     cp.after_task
                 ));
             }
+
+            // Verify that after_task actually has an edge to an
+            // approval_checkpoint task, otherwise the checkpoint config
+            // will never be matched at runtime.
+            let reaches_checkpoint = self
+                .graph
+                .edges
+                .iter()
+                .any(|e| e.from == cp.after_task && e.to == "approval_checkpoint");
+            if !reaches_checkpoint {
+                return Err(anyhow!(
+                    "checkpoint '{}': after_task '{}' has no edge to 'approval_checkpoint'",
+                    cp.checkpoint_id,
+                    cp.after_task
+                ));
+            }
         }
         Ok(())
     }
@@ -324,10 +340,12 @@ description: minimal checkpoint test
 spec_version: "1.0"
 tasks:
   - a
+  - approval_checkpoint
 graph:
   start_task: a
-  tasks: [a]
-  edges: []
+  tasks: [a, approval_checkpoint]
+  edges:
+    - { from: a, to: approval_checkpoint }
 checkpoints:
   - checkpoint_id: cp1
     after_task: a
@@ -422,6 +440,29 @@ checkpoints:
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("checkpoint 'cp1' references unknown task"));
+    }
+
+    #[test]
+    fn rejects_unreachable_checkpoint() {
+        let yaml = r#"
+agent_id: bad
+description: checkpoint after_task has no edge to approval_checkpoint
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+checkpoints:
+  - checkpoint_id: cp1
+    after_task: a
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("no edge to 'approval_checkpoint'"),
+            "expected unreachable checkpoint error, got: {err}"
+        );
     }
 
     #[test]
