@@ -46,6 +46,9 @@ pub struct AgentSpec {
     /// Optional retrieval profile controlling search behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retrieval: Option<AgentRetrievalProfile>,
+    /// Optional guardrails profile for safety controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardrails: Option<AgentGuardrailsProfile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +76,6 @@ pub struct AgentGraphEdge {
     pub condition_key: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
 // Context profile
 // ---------------------------------------------------------------------------
 
@@ -162,6 +164,35 @@ pub struct AgentToolFilters {
     pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Guardrails profile
+// ---------------------------------------------------------------------------
+
+/// Per-agent safety controls (injection detection, PII filtering, classifiers).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentGuardrailsProfile {
+    /// Whether prompt-injection detection is enabled.
+    pub injection_enabled: bool,
+    /// Action taken when injection is detected.
+    pub injection_action: GuardrailActionMode,
+    /// Whether PII filtering is enabled.
+    pub pii_enabled: bool,
+    /// Whether the policy classifier is enabled.
+    pub policy_classifier_enabled: bool,
+    /// Whether the safety classifier is enabled.
+    pub safety_classifier_enabled: bool,
+}
+
+/// Action taken when a guardrail triggers.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GuardrailActionMode {
+    /// Flag the content but allow it through.
+    Flag,
+    /// Block the content entirely.
+    Block,
 }
 
 // ---------------------------------------------------------------------------
@@ -675,6 +706,78 @@ context:
             let spec = AgentSpec::from_yaml_str(&yaml).expect("should parse");
             assert_eq!(spec.context.expect("context").dedupe_strategy, expected);
         }
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_guardrails_profile() {
+        let yaml = r#"
+agent_id: guard_test
+description: guardrails profile test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+guardrails:
+  injection_enabled: true
+  injection_action: block
+  pii_enabled: true
+  policy_classifier_enabled: false
+  safety_classifier_enabled: true
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let gp = spec.guardrails.expect("guardrails should be present");
+        assert!(gp.injection_enabled);
+        assert_eq!(gp.injection_action, GuardrailActionMode::Block);
+        assert!(gp.pii_enabled);
+        assert!(!gp.policy_classifier_enabled);
+        assert!(gp.safety_classifier_enabled);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn guardrails_profile_is_optional() {
+        let yaml = r#"
+agent_id: no_guard
+description: no guardrails
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.guardrails.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn guardrail_action_mode_flag() {
+        let yaml = r#"
+agent_id: flag_test
+description: flag mode test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+guardrails:
+  injection_enabled: true
+  injection_action: flag
+  pii_enabled: false
+  policy_classifier_enabled: false
+  safety_classifier_enabled: false
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let gp = spec.guardrails.expect("guardrails");
+        assert_eq!(gp.injection_action, GuardrailActionMode::Flag);
     }
 
     #[test]
