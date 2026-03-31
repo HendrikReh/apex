@@ -225,10 +225,10 @@ impl AgentSpec {
                     if gray.contains(next) {
                         return Some(format!("{node} -> {next}"));
                     }
-                    if white.contains(next) {
-                        if let Some(cycle) = dfs(next, adj, white, gray) {
-                            return Some(cycle);
-                        }
+                    if white.contains(next)
+                        && let Some(cycle) = dfs(next, adj, white, gray)
+                    {
+                        return Some(cycle);
                     }
                 }
             }
@@ -319,6 +319,7 @@ checkpoints:
 "#;
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn parse_valid_spec() {
         let spec = AgentSpec::from_yaml_str(VALID_SPEC).expect("should parse");
         assert_eq!(spec.agent_id, "rag_spike");
@@ -333,6 +334,7 @@ checkpoints:
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn defaults_for_checkpoint() {
         let yaml = r#"
 agent_id: minimal
@@ -358,6 +360,7 @@ checkpoints:
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn no_checkpoints_is_valid() {
         let yaml = r#"
 agent_id: simple
@@ -482,6 +485,7 @@ graph:
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn conditional_edge() {
         let yaml = r#"
 agent_id: cond

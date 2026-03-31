@@ -168,15 +168,12 @@ impl Task for ApprovalCheckpointTask {
         }
 
         // If the spec sets approval_type: auto, skip the port entirely.
-        if let Some(ref cfg) = self.config {
-            if cfg.approval_type == crate::spec::ApprovalType::Auto {
-                info!("checkpoint auto-approved via spec config");
-                context.set(keys::CHECKPOINT_APPROVED, &true).await;
-                return Ok(TaskResult::new(
-                    Some("auto-approved".to_string()),
-                    NextAction::Continue,
-                ));
-            }
+        if let Some(ref cfg) = self.config
+            && cfg.approval_type == crate::spec::ApprovalType::Auto
+        {
+            info!("checkpoint auto-approved via spec config");
+            context.set(keys::CHECKPOINT_APPROVED, &true).await;
+            return Ok(TaskResult::new(Some("auto-approved".to_string()), NextAction::Continue));
         }
 
         let summary: Option<String> = context.get(keys::SUMMARY).await;
