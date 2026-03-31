@@ -1,15 +1,43 @@
-# Apex Accelerator
+# Apex
 
 [![CI](https://github.com/HendrikReh/apex/actions/workflows/ci.yml/badge.svg)](https://github.com/HendrikReh/apex/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
 
-A Rust workspace for Retrieval-Augmented Generation (RAG). Ingests documents (PDF, Markdown, plain text), chunks with configurable strategies, generates embeddings (OpenAI or mock), and stores in Postgres (metadata) + Qdrant (vectors) for hybrid retrieval (dense + BM25 sparse).
+Apex is a Rust-first, self-hostable Retrieval-Augmented Generation platform focused on grounded answers, clear system boundaries, and production-grade traceability. It ingests documents, builds hybrid retrieval indexes over Postgres and Qdrant, and exposes the workflow through an HTTP API plus a CLI.
+
+Today, Apex already covers the core RAG path end to end:
+
+- document ingest for PDF, Markdown, and plain text
+- chunking with configurable strategies
+- dense, sparse, and hybrid retrieval
+- chat responses with citations
+- multi-tenant HTTP and CLI workflows
+
+## Note
+
+> Apex is the open-source migration path for Apex Accelerator, my commercial offering. That migration is still in progress.
+>
+> The current open-source release is centered on Phase 1, the core RAG platform. Later phases bring over the observability, provenance, agent, and compliance layers that matter in enterprise deployments.
+
+### Migration roadmap
+
+1. **Phase 1: Open RAG foundation**
+   Ingest, retrieval, chat, API, CLI, and the storage/runtime model needed for a solid self-hosted RAG stack.
+2. **Phase 2: Observability and provenance**
+   OpenTelemetry instrumentation, richer provenance capture, and better auditability for where answers came from and how they were produced.
+3. **Phase 3: Agent workflows**
+   Agent definitions, execution flows, tools, runs, and evidence-oriented orchestration on top of the RAG substrate.
+4. **Phase 4: EU AI Act alignment**
+   Compliance-facing controls, documentation, and governance features aimed at real-world high-assurance deployments.
+
+Some commercial-only pieces remain out of scope for the open-source project or will land in different form, including the license server, binary obfuscation, and certain cloud-native infrastructure for authentication and persistence.
 
 ## Contents
 
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
+- [Why Apex](#why-apex)
 - [Architecture](#architecture)
 - [API](#api)
 - [Configuration](#configuration)
@@ -45,23 +73,36 @@ cargo install --path crates/rag-cli
 rag-cli ingest ./path/to/docs --collection my-docs
 
 # Search
-rag-cli search "how does authentication work?" --collection my-docs
+rag-cli search --query "how does authentication work?" --collection my-docs
 
-# Chat (requires OPENAI_API_KEY in .env for real LLM responses)
-rag-cli chat "summarize the main concepts" --collection my-docs
+# Collection statistics
+rag-cli collection-stats --collection my-docs
 ```
 
-### Using real embeddings
+`just run-server-mock` is useful for local ingestion and retrieval development because it removes the embedding dependency. Chat still needs a configured LLM provider.
 
-For production-quality retrieval, use OpenAI embeddings instead of mock:
+### Using a real LLM and embeddings
+
+For grounded chat responses and production-quality retrieval, add your API key and run the default server profile:
 
 ```bash
 # Add your API key to .env
 echo 'OPENAI_API_KEY=sk-...' >> .env
 
-# Run with OpenAI embeddings
+# Run with OpenAI-compatible LLM + embeddings
 just run-server
+
+# Then ask a question through the CLI
+rag-cli chat --query "Summarize the main concepts" --collection my-docs
 ```
+
+## Why Apex
+
+- **Rust end to end** for the server, client, and core retrieval pipeline.
+- **Self-hostable architecture** with explicit storage boundaries: Postgres for metadata, Qdrant for vectors.
+- **Grounded responses** with retrieval-backed citations instead of opaque chat completions.
+- **Multi-tenant by design** through consistent tenant handling across API and CLI paths.
+- **Built for migration to higher-assurance workflows** such as provenance, observability, agents, and compliance controls.
 
 ## Architecture
 
@@ -78,7 +119,7 @@ rag-cli  -->  rag-client  -->  HTTP  -->  rag-server  -->  rag-core  -->  rag-ch
 | `rag-chunking` | Token-aware text chunking strategies |
 | `rag-server` | Axum HTTP API with multi-tenant middleware |
 | `rag-client` | Typed HTTP client for the server API |
-| `rag-cli` | Command-line interface (ingest, search, chat) |
+| `rag-cli` | Command-line interface for ingest, search, chat, and collection stats |
 
 ## API
 
@@ -103,7 +144,7 @@ Multi-tenancy is built in. Pass `x-tenant` header to isolate data per tenant (de
 | Source | Purpose | Example |
 |--------|---------|---------|
 | `config/app.toml` | Non-secret settings | Chunking params, endpoints, model names |
-| `.env` | Secrets | `OPENAI_API_KEY`, `DATABASE_URL` |
+| `.env` | Secrets and local overrides | `OPENAI_API_KEY`, `DATABASE_URL` |
 | Environment variables | Overrides | Take precedence over both files |
 
 ## Development
