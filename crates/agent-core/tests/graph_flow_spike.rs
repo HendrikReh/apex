@@ -486,6 +486,41 @@ graph:
 
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
+async fn multiple_conditional_edges_from_same_source_returns_error() {
+    let yaml = r#"
+agent_id: multi_cond
+description: "Multiple conditionals from same source"
+spec_version: "1.0"
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - final_answer
+graph:
+  start_task: classify
+  tasks: [classify, hybrid_search, summarize, final_answer]
+  edges:
+    - { from: classify, to: hybrid_search, condition_key: key_a }
+    - { from: classify, to: summarize, condition_key: key_b }
+    - { from: classify, to: final_answer }
+    - { from: hybrid_search, to: final_answer }
+    - { from: summarize, to: final_answer }
+"#;
+    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
+    let runtime = GraphFlowRuntime::from_spec(
+        spec,
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let err = runtime.start(config()).await.expect_err("should reject multiple conditionals");
+    let msg = err.to_string();
+    assert!(msg.contains("conditional edges"), "expected multiple-conditional error, got: {msg}");
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
 async fn conditional_edge_without_fallback_returns_error() {
     // Spec where classify has only a conditional edge and no unconditional fallback.
     let yaml = r#"
