@@ -10,9 +10,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
+
+// ---------------------------------------------------------------------------
+// Embedded JSON schema
+// ---------------------------------------------------------------------------
+
+const AGENT_SPEC_SCHEMA: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../schemas/agent_spec.schema.json"));
 
 // ---------------------------------------------------------------------------
 // Spec version
@@ -120,10 +128,37 @@ fn default_timeout_seconds() -> u64 {
 // ---------------------------------------------------------------------------
 
 impl AgentSpec {
-    /// Parse a spec from a YAML string.
+    /// Parse a spec from a YAML string (serde + custom validation, no schema).
     pub fn from_yaml_str(yaml: &str) -> anyhow::Result<Self> {
         let spec: Self =
             serde_yaml_ng::from_str(yaml).context("failed to parse agent spec YAML")?;
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    /// Parse a spec from YAML with JSON schema validation before deserialization.
+    ///
+    /// This catches structural errors (missing fields, wrong types, unknown
+    /// properties) with clear paths before serde kicks in.
+    pub fn from_yaml_str_validated(yaml: &str) -> anyhow::Result<Self> {
+        // Parse YAML → JSON value for schema validation.
+        let yaml_value: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(yaml).context("failed to parse agent spec YAML")?;
+        let json_value = serde_json::to_value(yaml_value)
+            .context("failed to convert YAML to JSON for schema validation")?;
+
+        let schema = compiled_schema()?;
+        if !schema.is_valid(&json_value) {
+            let messages: Vec<String> = schema
+                .iter_errors(&json_value)
+                .map(|err| format!("{} at {}", err, err.instance_path))
+                .collect();
+            return Err(anyhow!("agent spec failed schema validation: {}", messages.join("; ")));
+        }
+
+        // Deserialize from the already-parsed JSON value.
+        let spec: Self = serde_json::from_value(json_value)
+            .context("failed to deserialize agent spec after schema validation")?;
         spec.validate()?;
         Ok(spec)
     }
@@ -134,6 +169,29 @@ impl AgentSpec {
             .await
             .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
         Self::from_yaml_str(&content)
+    }
+
+    /// Load a spec from a YAML file with JSON schema validation.
+    pub async fn from_yaml_file_validated(path: &Path) -> anyhow::Result<Self> {
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
+        Self::from_yaml_str_validated(&content)
+    }
+}
+
+/// Compile the embedded schema once, reuse across calls.
+fn compiled_schema() -> anyhow::Result<&'static jsonschema::Validator> {
+    static COMPILED: OnceLock<Result<jsonschema::Validator, String>> = OnceLock::new();
+    match COMPILED.get_or_init(|| {
+        let schema_value: serde_json::Value = serde_json::from_str(AGENT_SPEC_SCHEMA)
+            .map_err(|e| format!("failed to parse embedded agent spec schema: {e}"))?;
+        jsonschema::draft202012::options()
+            .build(&schema_value)
+            .map_err(|e| format!("failed to compile agent spec schema: {e}"))
+    }) {
+        Ok(v) => Ok(v),
+        Err(e) => Err(anyhow!(e.clone())),
     }
 }
 
@@ -501,6 +559,56 @@ graph:
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         assert_eq!(spec.graph.edges[1].condition_key.as_deref(), Some("skip_b"));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn schema_validated_parse_valid() {
+        let yaml = r#"
+agent_id: schema_test
+description: schema validation test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str_validated(yaml).expect("should pass schema validation");
+        assert_eq!(spec.agent_id, "schema_test");
+    }
+
+    #[test]
+    fn schema_rejects_missing_required_field() {
+        let yaml = r#"
+description: missing agent_id
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+"#;
+        let err = AgentSpec::from_yaml_str_validated(yaml).unwrap_err();
+        assert!(err.to_string().contains("schema validation"), "expected schema error, got: {err}");
+    }
+
+    #[test]
+    fn schema_rejects_unknown_property() {
+        let yaml = r#"
+agent_id: bad
+description: unknown field
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+bogus_field: true
+"#;
+        let err = AgentSpec::from_yaml_str_validated(yaml).unwrap_err();
+        assert!(err.to_string().contains("schema validation"), "expected schema error, got: {err}");
     }
 
     #[test]
