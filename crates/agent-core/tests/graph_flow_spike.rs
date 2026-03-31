@@ -364,6 +364,196 @@ async fn spec_checkpoint_config_surfaces_in_pending() {
 }
 
 // ---------------------------------------------------------------------------
+// Conditional edge tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn conditional_edge_takes_conditional_path_when_key_is_true() {
+    // Build a minimal graph directly via graph-flow APIs to verify that
+    // a conditional edge routes to the "yes" target when the key is set.
+    use graph_flow::{Context, GraphBuilder, NextAction, Session, Task, TaskResult};
+
+    struct SetFlagTask;
+    #[async_trait::async_trait]
+    impl Task for SetFlagTask {
+        fn id(&self) -> &str {
+            "set_flag"
+        }
+        async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+            ctx.set("take_shortcut", &true).await;
+            Ok(TaskResult::new(Some("flag set".into()), NextAction::Continue))
+        }
+    }
+
+    struct YesTask;
+    #[async_trait::async_trait]
+    impl Task for YesTask {
+        fn id(&self) -> &str {
+            "yes_path"
+        }
+        async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+            ctx.set("which_path", &"yes".to_string()).await;
+            Ok(TaskResult::new(Some("yes".into()), NextAction::End))
+        }
+    }
+
+    struct NoTask;
+    #[async_trait::async_trait]
+    impl Task for NoTask {
+        fn id(&self) -> &str {
+            "no_path"
+        }
+        async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+            ctx.set("which_path", &"no".to_string()).await;
+            Ok(TaskResult::new(Some("no".into()), NextAction::End))
+        }
+    }
+
+    let graph = GraphBuilder::new("cond_true_test")
+        .add_task(Arc::new(SetFlagTask))
+        .add_task(Arc::new(YesTask))
+        .add_task(Arc::new(NoTask))
+        .set_start_task("set_flag")
+        .add_conditional_edge(
+            "set_flag",
+            |ctx: &Context| -> bool { ctx.get_sync::<bool>("take_shortcut").unwrap_or(false) },
+            "yes_path",
+            "no_path",
+        )
+        .build();
+
+    let mut session = Session::new_from_task("test-run".into(), "set_flag");
+
+    // Execute until completion.
+    for _ in 0..10 {
+        let result = graph.execute_session(&mut session).await.expect("execution failed");
+        match result.status {
+            graph_flow::ExecutionStatus::Completed => break,
+            graph_flow::ExecutionStatus::Paused { .. } => continue,
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    let path: String = session.context.get("which_path").await.expect("path not set");
+    assert_eq!(path, "yes", "expected conditional (yes) path when key is true");
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn conditional_edge_takes_unconditional_path_when_key_unset() {
+    // Spec with a conditional edge: classify → summarize (condition: skip_search)
+    // and an unconditional edge: classify → hybrid_search.
+    // Since "skip_search" is never set to true, the unconditional path should be taken.
+    let yaml = r#"
+agent_id: cond_test
+description: "Conditional edge test"
+spec_version: "1.0"
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - final_answer
+graph:
+  start_task: classify
+  tasks: [classify, hybrid_search, summarize, final_answer]
+  edges:
+    - { from: classify, to: hybrid_search }
+    - { from: classify, to: summarize, condition_key: skip_search }
+    - { from: hybrid_search, to: summarize }
+    - { from: summarize, to: final_answer }
+"#;
+    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
+    let runtime = GraphFlowRuntime::from_spec(
+        spec,
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let result = runtime.start(config()).await.expect("start failed");
+
+    // The unconditional path should be taken: classify → hybrid_search → summarize → final_answer
+    // This means search_results should be populated (hybrid_search ran).
+    assert_eq!(result.state, AgentState::Completed);
+    assert!(
+        result.search_results.is_some(),
+        "search results should exist because the unconditional path (through hybrid_search) was taken"
+    );
+    assert_eq!(result.search_results.as_ref().map(|r| r.len()), Some(2));
+    assert!(result.answer.is_some());
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn multiple_conditional_edges_from_same_source_returns_error() {
+    let yaml = r#"
+agent_id: multi_cond
+description: "Multiple conditionals from same source"
+spec_version: "1.0"
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - final_answer
+graph:
+  start_task: classify
+  tasks: [classify, hybrid_search, summarize, final_answer]
+  edges:
+    - { from: classify, to: hybrid_search, condition_key: key_a }
+    - { from: classify, to: summarize, condition_key: key_b }
+    - { from: classify, to: final_answer }
+    - { from: hybrid_search, to: final_answer }
+    - { from: summarize, to: final_answer }
+"#;
+    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
+    let runtime = GraphFlowRuntime::from_spec(
+        spec,
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let err = runtime.start(config()).await.expect_err("should reject multiple conditionals");
+    let msg = err.to_string();
+    assert!(msg.contains("conditional edges"), "expected multiple-conditional error, got: {msg}");
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn conditional_edge_without_fallback_returns_error() {
+    // Spec where classify has only a conditional edge and no unconditional fallback.
+    let yaml = r#"
+agent_id: no_fallback
+description: "Missing fallback test"
+spec_version: "1.0"
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - final_answer
+graph:
+  start_task: classify
+  tasks: [classify, hybrid_search, summarize, final_answer]
+  edges:
+    - { from: classify, to: hybrid_search, condition_key: do_search }
+    - { from: hybrid_search, to: summarize }
+    - { from: summarize, to: final_answer }
+"#;
+    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
+    let runtime = GraphFlowRuntime::from_spec(
+        spec,
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let err = runtime.start(config()).await.expect_err("should fail without fallback");
+    let msg = err.to_string();
+    assert!(msg.contains("no unconditional fallback"), "expected fallback error, got: {msg}");
+}
+
+// ---------------------------------------------------------------------------
 // Failed state tests
 // ---------------------------------------------------------------------------
 

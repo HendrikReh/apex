@@ -408,6 +408,98 @@ impl AgentSpec {
 }
 
 // ---------------------------------------------------------------------------
+// Agent registry
+// ---------------------------------------------------------------------------
+
+use std::path::PathBuf;
+
+/// Loaded agent specs keyed by `agent_id`.
+#[derive(Clone, Debug, Default)]
+pub struct AgentRegistry {
+    agents: HashMap<String, AgentSpec>,
+}
+
+impl AgentRegistry {
+    /// Load all YAML agent specs from a directory.
+    ///
+    /// Each `.yaml` / `.yml` file in the directory is parsed into an
+    /// [`AgentSpec`]. Duplicate `agent_id` values across files are rejected.
+    /// The `placeholders` map is reserved for future placeholder substitution
+    /// integration (currently unused but part of the API contract).
+    pub async fn load_from_dir(
+        dir: &Path,
+        _placeholders: &HashMap<String, String>,
+    ) -> anyhow::Result<Self> {
+        let mut paths = collect_agent_files(dir).await?;
+        paths.sort();
+
+        let mut agents = HashMap::new();
+        for path in paths {
+            let spec = AgentSpec::from_yaml_file(&path)
+                .await
+                .with_context(|| format!("failed to load {}", path.display()))?;
+            if agents.contains_key(&spec.agent_id) {
+                return Err(anyhow!(
+                    "duplicate agent_id '{}' found in {}",
+                    spec.agent_id,
+                    path.display()
+                ));
+            }
+            agents.insert(spec.agent_id.clone(), spec);
+        }
+
+        Ok(Self { agents })
+    }
+
+    /// Look up a spec by its `agent_id`.
+    pub fn get(&self, agent_id: &str) -> Option<&AgentSpec> {
+        self.agents.get(agent_id)
+    }
+
+    /// Return all loaded specs.
+    pub fn list(&self) -> &HashMap<String, AgentSpec> {
+        &self.agents
+    }
+
+    /// Number of loaded specs.
+    pub fn len(&self) -> usize {
+        self.agents.len()
+    }
+
+    /// Whether the registry is empty.
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
+    }
+
+    /// Construct a registry directly from a map (for tests).
+    #[cfg(test)]
+    pub fn from_map(agents: HashMap<String, AgentSpec>) -> Self {
+        Self { agents }
+    }
+}
+
+/// Collect `.yaml` / `.yml` file paths from a directory.
+async fn collect_agent_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut entries = tokio::fs::read_dir(dir)
+        .await
+        .with_context(|| format!("failed to read agent spec directory {}", dir.display()))?;
+    let mut paths = Vec::new();
+    while let Some(entry) = entries.next_entry().await? {
+        // Skip directories and non-regular files.
+        let ft = entry.file_type().await?;
+        if !ft.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
+        if matches!(ext.as_deref(), Some("yaml") | Some("yml")) {
+            paths.push(path);
+        }
+    }
+    Ok(paths)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -778,6 +870,78 @@ guardrails:
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         let gp = spec.guardrails.expect("guardrails");
         assert_eq!(gp.injection_action, GuardrailActionMode::Flag);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn registry_from_map() {
+        let mut map = HashMap::new();
+        let spec1 = AgentSpec::from_yaml_str(VALID_SPEC).unwrap();
+        map.insert(spec1.agent_id.clone(), spec1);
+        let registry = AgentRegistry::from_map(map);
+        assert_eq!(registry.len(), 1);
+        assert!(!registry.is_empty());
+        assert!(registry.get("rag_spike").is_some());
+        assert!(registry.get("nonexistent").is_none());
+        assert_eq!(registry.list().len(), 1);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn registry_load_from_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec_a = r#"
+agent_id: agent_a
+description: agent A
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec_b = r#"
+agent_id: agent_b
+description: agent B
+spec_version: "1.0"
+tasks: [x, y]
+graph:
+  start_task: x
+  tasks: [x, y]
+  edges:
+    - { from: x, to: y }
+"#;
+        tokio::fs::write(dir.path().join("a.yaml"), spec_a).await.unwrap();
+        tokio::fs::write(dir.path().join("b.yml"), spec_b).await.unwrap();
+        // Non-YAML file should be ignored.
+        tokio::fs::write(dir.path().join("readme.txt"), "ignore me").await.unwrap();
+
+        let registry = AgentRegistry::load_from_dir(dir.path(), &HashMap::new()).await.unwrap();
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get("agent_a").is_some());
+        assert!(registry.get("agent_b").is_some());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn registry_rejects_duplicate_agent_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let spec = r#"
+agent_id: dupe
+description: duplicate
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+"#;
+        tokio::fs::write(dir.path().join("first.yaml"), spec).await.unwrap();
+        tokio::fs::write(dir.path().join("second.yaml"), spec).await.unwrap();
+
+        let err = AgentRegistry::load_from_dir(dir.path(), &HashMap::new()).await.unwrap_err();
+        assert!(err.to_string().contains("duplicate agent_id 'dupe'"), "got: {err}");
     }
 
     #[test]

@@ -171,10 +171,70 @@ impl GraphFlowRuntime {
 
         builder = builder.set_start_task(&spec.graph.start_task);
 
+        // Group edges by source task for conditional routing.
+        let mut edges_by_from: std::collections::HashMap<&str, Vec<&crate::spec::AgentGraphEdge>> =
+            std::collections::HashMap::new();
         for edge in &spec.graph.edges {
-            // TODO: plumb edge.condition_key to graph-flow builder once it
-            // supports conditional routing. Currently all edges are unconditional.
-            builder = builder.add_edge(&edge.from, &edge.to);
+            edges_by_from.entry(edge.from.as_str()).or_default().push(edge);
+        }
+
+        for (_from, edges) in &edges_by_from {
+            let unconditional: Vec<&crate::spec::AgentGraphEdge> =
+                edges.iter().copied().filter(|e| e.condition_key.is_none()).collect();
+            let conditional: Vec<&crate::spec::AgentGraphEdge> =
+                edges.iter().copied().filter(|e| e.condition_key.is_some()).collect();
+
+            if conditional.is_empty() {
+                // All edges are unconditional — add them directly.
+                for edge in edges {
+                    builder = builder.add_edge(&edge.from, &edge.to);
+                }
+            } else {
+                // Conditional edges require an unconditional fallback to serve
+                // as the "else" branch. Without one, both true and false paths
+                // would route to the same target, making the condition a no-op.
+                let fallback_to =
+                    unconditional.first().map(|e| e.to.as_str()).ok_or_else(|| {
+                        let from = &conditional[0].from;
+                        anyhow::anyhow!(
+                            "task '{from}' has conditional edge(s) but no unconditional \
+                         fallback edge — add an unconditional edge as the 'else' path"
+                        )
+                    })?;
+
+                // Only one conditional edge per source is supported —
+                // graph-flow's behavior for multiple registrations is undefined.
+                if conditional.len() > 1 {
+                    let from = &conditional[0].from;
+                    anyhow::bail!(
+                        "task '{from}' has {} conditional edges — \
+                         only one conditional edge per source is supported",
+                        conditional.len()
+                    );
+                }
+
+                for cond_edge in &conditional {
+                    // Safe: filter guarantees condition_key is Some.
+                    let key = cond_edge.condition_key.clone().unwrap_or_default();
+                    let yes_target = cond_edge.to.clone();
+                    let no_target = fallback_to.to_string();
+
+                    builder = builder.add_conditional_edge(
+                        &cond_edge.from,
+                        move |ctx: &graph_flow::Context| -> bool {
+                            ctx.get_sync::<bool>(&key).unwrap_or(false)
+                        },
+                        yes_target,
+                        no_target,
+                    );
+                }
+
+                // Unconditional edges beyond the first (used as fallback) are
+                // added as regular edges.
+                for unc_edge in unconditional.iter().skip(1) {
+                    builder = builder.add_edge(&unc_edge.from, &unc_edge.to);
+                }
+            }
         }
 
         Ok(builder.build())
