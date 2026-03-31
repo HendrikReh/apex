@@ -10,25 +10,34 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::api_key;
-use crate::state::{ApiError, AppState, Ctx};
+use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 
 // ---------------------------------------------------------------------------
 // Create service account
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateServiceAccountRequest {
     pub name: String,
     pub role: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct CreateServiceAccountResponse {
     pub id: Uuid,
     pub name: String,
     pub role: String,
 }
 
+#[utoipa::path(post, path = "/auth/service-accounts", tag = "Auth",
+    request_body = CreateServiceAccountRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 201, description = "Service account created", body = CreateServiceAccountResponse),
+        (status = 400, description = "Invalid role", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn create_service_account(
     State(state): State<Arc<AppState>>,
     Ctx(ctx): Ctx,
@@ -63,13 +72,13 @@ pub async fn create_service_account(
 // Generate API key
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct CreateApiKeyRequest {
     pub service_account_id: Uuid,
     pub expires_in_days: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct CreateApiKeyResponse {
     pub id: Uuid,
     /// The full API key — returned exactly once.
@@ -79,6 +88,16 @@ pub struct CreateApiKeyResponse {
     pub expires_at: Option<String>,
 }
 
+#[utoipa::path(post, path = "/auth/api-keys", tag = "Auth",
+    request_body = CreateApiKeyRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 201, description = "API key created (secret returned once)", body = CreateApiKeyResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+        (status = 404, description = "Service account not found", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn create_api_key(
     State(state): State<Arc<AppState>>,
     Ctx(ctx): Ctx,
@@ -143,6 +162,17 @@ pub async fn create_api_key(
 // Revoke API key
 // ---------------------------------------------------------------------------
 
+#[utoipa::path(delete, path = "/auth/api-keys/{id}", tag = "Auth",
+    params(
+        ("id" = Uuid, Path, description = "API key ID to revoke"),
+        ("x-tenant" = String, Header, description = "Tenant identifier"),
+    ),
+    responses(
+        (status = 204, description = "Key revoked"),
+        (status = 404, description = "Key not found or already revoked", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn revoke_api_key(
     State(state): State<Arc<AppState>>,
     Ctx(ctx): Ctx,
@@ -170,7 +200,7 @@ pub async fn revoke_api_key(
 // List API keys
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct ApiKeyListItem {
     pub id: Uuid,
     pub prefix: String,
@@ -181,6 +211,13 @@ pub struct ApiKeyListItem {
     pub last_used_at: Option<String>,
 }
 
+#[utoipa::path(get, path = "/auth/api-keys", tag = "Auth",
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 200, description = "List of API keys", body = Vec<ApiKeyListItem>),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn list_api_keys(
     State(state): State<Arc<AppState>>,
     Ctx(ctx): Ctx,

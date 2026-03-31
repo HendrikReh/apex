@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::state::{ApiError, AppState, Ctx};
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct CollectionStatsResponse {
     pub collection: String,
     pub tenant: String,
@@ -15,6 +15,16 @@ pub struct CollectionStatsResponse {
     pub avgdl: f64,
 }
 
+#[utoipa::path(get, path = "/collections/{collection}/stats", tag = "Collections",
+    params(
+        ("collection" = String, Path, description = "Collection name"),
+        ("x-tenant" = String, Header, description = "Tenant identifier"),
+    ),
+    responses(
+        (status = 200, description = "Collection statistics", body = CollectionStatsResponse),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn collection_stats(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,

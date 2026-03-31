@@ -6,21 +6,21 @@ use axum::http::StatusCode;
 use rag_core::retrieval::HybridOverrides;
 use serde::{Deserialize, Serialize};
 
-use crate::state::{ApiError, AppState, Ctx};
+use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct SearchRequest {
     pub query: String,
     pub collection: String,
     pub top_k: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct SearchResult {
     pub chunk_id: String,
     pub document_id: String,
@@ -45,6 +45,15 @@ fn validate_search(req: &SearchRequest) -> Result<(), ApiError> {
     Ok(())
 }
 
+#[utoipa::path(post, path = "/search/dense", tag = "Search",
+    request_body = SearchRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 200, description = "Dense search results", body = SearchResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn search_dense(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,
@@ -72,6 +81,15 @@ pub async fn search_dense(
     Ok(Json(SearchResponse { results }))
 }
 
+#[utoipa::path(post, path = "/search/sparse", tag = "Search",
+    request_body = SearchRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 200, description = "Sparse BM25 search results", body = SearchResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn search_sparse(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,
@@ -99,7 +117,7 @@ pub async fn search_sparse(
     Ok(Json(SearchResponse { results }))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct HybridSearchRequest {
     pub query: String,
     pub collection: String,
@@ -108,12 +126,12 @@ pub struct HybridSearchRequest {
     pub rrf_k: Option<u32>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct HybridSearchResponse {
     pub results: Vec<HybridSearchResult>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct HybridSearchResult {
     pub chunk_id: String,
     pub document_id: String,
@@ -122,6 +140,15 @@ pub struct HybridSearchResult {
     pub fused_score: f32,
 }
 
+#[utoipa::path(post, path = "/search/hybrid", tag = "Search",
+    request_body = HybridSearchRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 200, description = "Hybrid search results with RRF fusion", body = HybridSearchResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn search_hybrid(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,

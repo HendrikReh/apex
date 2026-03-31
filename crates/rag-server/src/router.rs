@@ -5,12 +5,15 @@ use axum::extract::DefaultBodyLimit;
 use axum::middleware::from_fn;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::middleware::auth::authenticate;
 use crate::middleware::authz::authorize;
 use crate::middleware::rate_limit::rate_limit;
 use crate::middleware::request_id::request_id;
 use crate::middleware::tenant::tenant_extraction;
+use crate::openapi::ApiDoc;
 use crate::routes;
 use crate::state::AppState;
 
@@ -49,7 +52,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .route("/health", get(routes::health::health))
         .route("/readiness", get(routes::health::readiness))
+        .route("/openapi.json", get(|| async { axum::Json(ApiDoc::openapi()) }))
         .with_state(state);
 
-    Router::new().merge(public).merge(protected).layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+    let swagger = Router::<()>::from(
+        SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()),
+    );
+
+    Router::new()
+        .merge(public)
+        .merge(protected)
+        .merge(swagger)
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
 }

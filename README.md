@@ -1,9 +1,10 @@
 # Apex
 
 [![CI](https://github.com/HendrikReh/apex/actions/workflows/ci.yml/badge.svg)](https://github.com/HendrikReh/apex/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-v0.9.1-2ea44f?logo=github)](https://github.com/HendrikReh/apex)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Roadmap](https://img.shields.io/badge/roadmap-Phase%201%20%E2%80%94%20Open%20RAG%20Foundation-0a7ea4)](#migration-roadmap)
+[![Roadmap](https://img.shields.io/badge/roadmap-v0.9.1%20%E2%80%94%20Auth%20%2B%20RBAC-0a7ea4)](#migration-roadmap)
 
 Apex is an API-first, self-hostable Retrieval-Augmented Generation platform focused on grounded answers, clear system boundaries, and production-grade traceability. It ingests documents, builds hybrid retrieval indexes over Postgres and Qdrant, and exposes the workflow through an HTTP API plus a CLI.
 
@@ -13,6 +14,7 @@ Today, Apex already covers the core RAG path end to end:
 - chunking with configurable strategies
 - dense, sparse, and hybrid retrieval
 - chat responses with citations
+- authentication (API key + OIDC), role-based access control, and rate limiting
 - multi-tenant HTTP and CLI workflows
 
 ## Note
@@ -108,35 +110,54 @@ rag-cli chat --query "Summarize the main concepts" --collection my-docs
 ## Architecture
 
 ```
-rag-cli  -->  rag-client  -->  HTTP  -->  rag-server  -->  rag-core  -->  rag-chunking
-                                              |
-                                         Postgres (metadata)
-                                         Qdrant   (vectors)
+rag-cli ──→ rag-client ──→ HTTP ──→ rag-server ──→ rag-core ──→ rag-chunking
+                                         │
+                                    ┌────┴────┐
+                                    │ Middleware│
+                                    │ stack:   │
+                                    │ req-id   │
+                                    │ tenant   │
+                                    │ auth     │
+                                    │ rate-limit│
+                                    │ authz    │
+                                    └────┬────┘
+                                         │
+                                  ┌──────┴──────┐
+                                  │             │
+                              Postgres       Qdrant
+                             (metadata)     (vectors)
 ```
 
 | Crate | Role |
 |-------|------|
-| `rag-core` | Extraction, chunking, embedding, retrieval, context assembly, stores |
-| `rag-chunking` | Token-aware text chunking strategies |
-| `rag-server` | Axum HTTP API with multi-tenant middleware |
+| `rag-core` | Extraction, embedding, retrieval, context assembly, stores, config |
+| `rag-chunking` | 9 token-aware text chunking strategies (pure, no IO) |
+| `rag-server` | Axum HTTP API — auth, RBAC, rate limiting, multi-tenant middleware |
 | `rag-client` | Typed HTTP client for the server API |
-| `rag-cli` | Command-line interface for ingest, search, chat, and collection stats |
+| `rag-cli` | CLI for ingest, search, chat, stats, and API key generation |
+| `test-support` | Ephemeral Axum test servers for integration tests |
 
 ## API
 
-The server exposes a JSON API on `http://localhost:8080` by default. See [`docs/openapi.yaml`](docs/openapi.yaml) for the full specification.
+The server exposes a JSON API on `http://localhost:8080` by default. Interactive documentation is served at `/swagger-ui/` when the server is running.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Liveness probe |
-| `/readiness` | GET | Readiness probe (checks Postgres + Qdrant) |
-| `/ingest` | POST | Ingest documents from filesystem paths |
-| `/ingest/upload` | POST | Upload and ingest a single file (multipart) |
-| `/search/dense` | POST | Dense vector search |
-| `/search/sparse` | POST | BM25 sparse search |
-| `/search/hybrid` | POST | Hybrid search with RRF fusion |
-| `/chat` | POST | RAG chat with citations |
-| `/collections/:name/stats` | GET | Collection statistics |
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/health` | GET | No | Liveness probe |
+| `/readiness` | GET | No | Readiness probe (checks Postgres + Qdrant) |
+| `/openapi.json` | GET | No | OpenAPI 3.1 specification |
+| `/swagger-ui/` | GET | No | Interactive API documentation |
+| `/ingest` | POST | Yes | Ingest documents from filesystem paths |
+| `/ingest/upload` | POST | Yes | Upload and ingest a file (multipart, 50 MB) |
+| `/search/dense` | POST | Yes | Dense vector search |
+| `/search/sparse` | POST | Yes | BM25 sparse search |
+| `/search/hybrid` | POST | Yes | Hybrid search with RRF fusion |
+| `/chat` | POST | Yes | RAG chat with citations |
+| `/collections/:name/stats` | GET | Yes | Collection statistics |
+| `/auth/service-accounts` | POST | Yes | Create service account |
+| `/auth/api-keys` | POST | Yes | Generate API key |
+| `/auth/api-keys` | GET | Yes | List API keys |
+| `/auth/api-keys/:id` | DELETE | Yes | Revoke API key |
 
 Multi-tenancy is built in. Pass `x-tenant` header to isolate data per tenant (defaults to `"default"`).
 

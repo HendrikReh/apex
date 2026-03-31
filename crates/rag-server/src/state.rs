@@ -58,9 +58,9 @@ pub struct ApiError {
     pub message: String,
 }
 
-#[derive(Serialize)]
-struct ErrorBody {
-    error: String,
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ErrorBody {
+    pub error: String,
 }
 
 impl IntoResponse for ApiError {

@@ -8,22 +8,29 @@ use serde::Serialize;
 
 use crate::state::AppState;
 
+#[utoipa::path(get, path = "/health", tag = "Health", responses(
+    (status = 200, description = "Service is alive"),
+))]
 pub async fn health() -> impl IntoResponse {
     (StatusCode::OK, "ok")
 }
 
-#[derive(Serialize)]
-struct ReadinessResponse {
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ReadinessResponse {
     ready: bool,
     checks: ReadinessChecks,
 }
 
-#[derive(Serialize)]
-struct ReadinessChecks {
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct ReadinessChecks {
     postgres: String,
     qdrant: String,
 }
 
+#[utoipa::path(get, path = "/readiness", tag = "Health", responses(
+    (status = 200, description = "All backends reachable", body = ReadinessResponse),
+    (status = 503, description = "One or more backends unreachable", body = ReadinessResponse),
+))]
 pub async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let timeout = Duration::from_secs(5);
 

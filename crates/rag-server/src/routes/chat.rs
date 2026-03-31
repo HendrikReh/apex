@@ -7,9 +7,9 @@ use rag_core::chat::ChatRequest;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::state::{ApiError, AppState, Ctx};
+use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct ChatHttpRequest {
     pub query: String,
     pub collection: Option<String>,
@@ -18,7 +18,7 @@ pub struct ChatHttpRequest {
     pub history_limit: Option<i64>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct ChatHttpResponse {
     pub answer: String,
     pub conversation_id: Uuid,
@@ -27,7 +27,7 @@ pub struct ChatHttpResponse {
     pub model: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct CitationJson {
     pub chunk_id: String,
     pub document_id: String,
@@ -35,12 +35,21 @@ pub struct CitationJson {
     pub sources: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct UsageJson {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
 }
 
+#[utoipa::path(post, path = "/chat", tag = "Chat",
+    request_body = ChatHttpRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 200, description = "Chat response with citations", body = ChatHttpResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn chat(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,

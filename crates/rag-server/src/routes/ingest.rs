@@ -6,9 +6,9 @@ use axum::http::StatusCode;
 use rag_core::ingest::{IngestBatchOutcome, IngestDirectoryRequest, IngestFileRequest};
 use serde::{Deserialize, Serialize};
 
-use crate::state::{ApiError, AppState, Ctx};
+use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct IngestPathsRequest {
     pub paths: Vec<String>,
     pub collection: Option<String>,
@@ -16,7 +16,7 @@ pub struct IngestPathsRequest {
     pub dry_run: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct IngestResponse {
     pub documents: usize,
     pub chunks: usize,
@@ -25,12 +25,21 @@ pub struct IngestResponse {
     pub failures: Vec<FailureEntry>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, utoipa::ToSchema)]
 pub struct FailureEntry {
     pub path: String,
     pub error: String,
 }
 
+#[utoipa::path(post, path = "/ingest", tag = "Ingest",
+    request_body = IngestPathsRequest,
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    responses(
+        (status = 200, description = "Ingest results", body = IngestResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn ingest_paths(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,
@@ -117,6 +126,15 @@ pub async fn ingest_paths(
     }))
 }
 
+#[utoipa::path(post, path = "/ingest/upload", tag = "Ingest",
+    params(("x-tenant" = String, Header, description = "Tenant identifier")),
+    request_body(content_type = "multipart/form-data", content = String, description = "File upload with optional 'collection' field"),
+    responses(
+        (status = 200, description = "Upload ingest results", body = IngestResponse),
+        (status = 400, description = "Invalid request", body = ErrorBody),
+    ),
+    security(("api_key" = []))
+)]
 pub async fn ingest_upload(
     Ctx(ctx): Ctx,
     State(state): State<Arc<AppState>>,
