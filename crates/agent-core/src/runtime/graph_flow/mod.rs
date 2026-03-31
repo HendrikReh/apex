@@ -179,10 +179,10 @@ impl GraphFlowRuntime {
         }
 
         for (_from, edges) in &edges_by_from {
-            let unconditional: Vec<&&crate::spec::AgentGraphEdge> =
-                edges.iter().filter(|e| e.condition_key.is_none()).collect();
-            let conditional: Vec<&&crate::spec::AgentGraphEdge> =
-                edges.iter().filter(|e| e.condition_key.is_some()).collect();
+            let unconditional: Vec<&crate::spec::AgentGraphEdge> =
+                edges.iter().copied().filter(|e| e.condition_key.is_none()).collect();
+            let conditional: Vec<&crate::spec::AgentGraphEdge> =
+                edges.iter().copied().filter(|e| e.condition_key.is_some()).collect();
 
             if conditional.is_empty() {
                 // All edges are unconditional — add them directly.
@@ -203,6 +203,7 @@ impl GraphFlowRuntime {
                     })?;
 
                 for cond_edge in &conditional {
+                    // Safe: filter guarantees condition_key is Some.
                     let key = cond_edge.condition_key.clone().unwrap_or_default();
                     let yes_target = cond_edge.to.clone();
                     let no_target = fallback_to.to_string();
@@ -217,14 +218,9 @@ impl GraphFlowRuntime {
                     );
                 }
 
-                // If there are unconditional edges that aren't the fallback for
-                // any conditional edge, add them too. But if an unconditional edge
-                // was already used as a fallback (the first one), skip it.
-                for (i, unc_edge) in unconditional.iter().enumerate() {
-                    if i == 0 && !conditional.is_empty() {
-                        // Already used as the "else" in conditional edges.
-                        continue;
-                    }
+                // Unconditional edges beyond the first (used as fallback) are
+                // added as regular edges.
+                for unc_edge in unconditional.iter().skip(1) {
                     builder = builder.add_edge(&unc_edge.from, &unc_edge.to);
                 }
             }

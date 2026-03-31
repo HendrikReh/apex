@@ -369,6 +369,78 @@ async fn spec_checkpoint_config_surfaces_in_pending() {
 
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
+async fn conditional_edge_takes_conditional_path_when_key_is_true() {
+    // Build a minimal graph directly via graph-flow APIs to verify that
+    // a conditional edge routes to the "yes" target when the key is set.
+    use graph_flow::{Context, GraphBuilder, NextAction, Session, Task, TaskResult};
+
+    struct SetFlagTask;
+    #[async_trait::async_trait]
+    impl Task for SetFlagTask {
+        fn id(&self) -> &str {
+            "set_flag"
+        }
+        async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+            ctx.set("take_shortcut", &true).await;
+            Ok(TaskResult::new(Some("flag set".into()), NextAction::Continue))
+        }
+    }
+
+    struct YesTask;
+    #[async_trait::async_trait]
+    impl Task for YesTask {
+        fn id(&self) -> &str {
+            "yes_path"
+        }
+        async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+            ctx.set("which_path", &"yes".to_string()).await;
+            Ok(TaskResult::new(Some("yes".into()), NextAction::End))
+        }
+    }
+
+    struct NoTask;
+    #[async_trait::async_trait]
+    impl Task for NoTask {
+        fn id(&self) -> &str {
+            "no_path"
+        }
+        async fn run(&self, ctx: Context) -> graph_flow::Result<TaskResult> {
+            ctx.set("which_path", &"no".to_string()).await;
+            Ok(TaskResult::new(Some("no".into()), NextAction::End))
+        }
+    }
+
+    let graph = GraphBuilder::new("cond_true_test")
+        .add_task(Arc::new(SetFlagTask))
+        .add_task(Arc::new(YesTask))
+        .add_task(Arc::new(NoTask))
+        .set_start_task("set_flag")
+        .add_conditional_edge(
+            "set_flag",
+            |ctx: &Context| -> bool { ctx.get_sync::<bool>("take_shortcut").unwrap_or(false) },
+            "yes_path",
+            "no_path",
+        )
+        .build();
+
+    let mut session = Session::new_from_task("test-run".into(), "set_flag");
+
+    // Execute until completion.
+    for _ in 0..10 {
+        let result = graph.execute_session(&mut session).await.expect("execution failed");
+        match result.status {
+            graph_flow::ExecutionStatus::Completed => break,
+            graph_flow::ExecutionStatus::Paused { .. } => continue,
+            other => panic!("unexpected status: {other:?}"),
+        }
+    }
+
+    let path: String = session.context.get("which_path").await.expect("path not set");
+    assert_eq!(path, "yes", "expected conditional (yes) path when key is true");
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
 async fn conditional_edge_takes_unconditional_path_when_key_unset() {
     // Spec with a conditional edge: classify → summarize (condition: skip_search)
     // and an unconditional edge: classify → hybrid_search.
