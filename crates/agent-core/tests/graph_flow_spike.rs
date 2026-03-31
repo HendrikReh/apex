@@ -362,3 +362,57 @@ async fn spec_checkpoint_config_surfaces_in_pending() {
     assert_eq!(cp.timeout_seconds, Some(3600)); // default from spec
     assert_eq!(cp.on_timeout.as_deref(), Some("reject")); // default from spec
 }
+
+// ---------------------------------------------------------------------------
+// Failed state tests
+// ---------------------------------------------------------------------------
+
+/// Retrieval port that always errors.
+struct FailingRetrieval;
+
+#[async_trait::async_trait]
+impl RetrievalPort for FailingRetrieval {
+    async fn search_hybrid(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn retrieval_error_produces_failed_state() {
+    let runtime = GraphFlowRuntime::new(
+        Arc::new(FailingRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let result = runtime.start(config()).await.expect("start failed");
+    assert_eq!(result.state, AgentState::Failed, "retrieval error should produce Failed state");
+    assert!(result.answer.is_none(), "failed run should have no answer");
+}
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn inspect_reports_failed_state_correctly() {
+    let runtime = GraphFlowRuntime::new(
+        Arc::new(FailingRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let result = runtime.start(config()).await.expect("start failed");
+    assert_eq!(result.state, AgentState::Failed);
+
+    let inspected = runtime.inspect(result.run_id).await.expect("inspect failed");
+    let inspected = inspected.expect("inspect should find the run");
+    assert_eq!(
+        inspected.state,
+        AgentState::Failed,
+        "inspect should report Failed, not AwaitingApproval"
+    );
+}

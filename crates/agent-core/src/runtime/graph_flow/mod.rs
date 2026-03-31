@@ -172,6 +172,8 @@ impl GraphFlowRuntime {
         builder = builder.set_start_task(&spec.graph.start_task);
 
         for edge in &spec.graph.edges {
+            // TODO: plumb edge.condition_key to graph-flow builder once it
+            // supports conditional routing. Currently all edges are unconditional.
             builder = builder.add_edge(&edge.from, &edge.to);
         }
 
@@ -192,10 +194,20 @@ impl GraphFlowRuntime {
             let step_start = Instant::now();
             let started_at = chrono::Utc::now();
 
-            let result = graph
-                .execute_session(session)
-                .await
-                .map_err(|e| anyhow::anyhow!("graph execution error at task {task_id}: {e}"))?;
+            let result = match graph.execute_session(session).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let elapsed_ms = step_start.elapsed().as_millis() as u64;
+                    warn!(error = %e, task = %task_id, "task execution error");
+                    steps.push(StepRecord {
+                        task_id,
+                        started_at,
+                        elapsed_ms,
+                        status: StepStatus::Failed,
+                    });
+                    return Ok(AgentState::Failed);
+                }
+            };
 
             let elapsed_ms = step_start.elapsed().as_millis() as u64;
 
@@ -369,7 +381,10 @@ impl super::AgentRuntime for GraphFlowRuntime {
             (run_meta.steps.clone(), run_meta.max_steps)
         };
 
-        let state = self.execute_loop(&graph, &mut session, &mut steps, max_steps).await?;
+        // Subtract steps already consumed so the total across start + resume(s)
+        // never exceeds the original max_steps budget.
+        let remaining = max_steps.saturating_sub(steps.len());
+        let state = self.execute_loop(&graph, &mut session, &mut steps, remaining).await?;
 
         self.sessions
             .save(session.clone())

@@ -237,6 +237,8 @@ impl Task for FinalAnswerTask {
         // If the checkpoint was rejected, produce a rejection answer.
         let approved: bool = context.get(keys::CHECKPOINT_APPROVED).await.unwrap_or(true);
 
+        // TODO: re-prompt LLM with (query, chunks) → answer instead of
+        // reusing the summarization output verbatim.
         let answer = if approved {
             context
                 .get::<String>(keys::SUMMARY)
