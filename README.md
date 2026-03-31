@@ -4,7 +4,7 @@
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
 
-Apex is a Rust-first, self-hostable Retrieval-Augmented Generation platform focused on grounded answers, clear system boundaries, and production-grade traceability. It ingests documents, builds hybrid retrieval indexes over Postgres and Qdrant, and exposes the workflow through an HTTP API plus a CLI.
+Apex is a API-first, self-hostable Retrieval-Augmented Generation platform focused on grounded answers, clear system boundaries, and production-grade traceability. It ingests documents, builds hybrid retrieval indexes over Postgres and Qdrant, and exposes the workflow through an HTTP API plus a CLI.
 
 Today, Apex already covers the core RAG path end to end:
 
