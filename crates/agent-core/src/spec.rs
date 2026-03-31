@@ -40,6 +40,9 @@ pub struct AgentSpec {
     /// Optional checkpoint configurations.
     #[serde(default)]
     pub checkpoints: Vec<AgentCheckpointConfig>,
+    /// Optional data governance policies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policies: Option<AgentPolicies>,
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +68,22 @@ pub struct AgentGraphEdge {
     /// If set, this edge is only followed when the named context key is truthy.
     #[serde(default)]
     pub condition_key: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Policies
+// ---------------------------------------------------------------------------
+
+/// Data governance constraints for this agent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentPolicies {
+    /// Whether citations are required in the final answer.
+    pub require_citations: bool,
+    /// Whether policy context must be included in the prompt.
+    pub require_policy_context: bool,
+    /// Collections this agent is allowed to access.
+    #[serde(default)]
+    pub allowed_collections: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +520,73 @@ graph:
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         assert_eq!(spec.graph.edges[1].condition_key.as_deref(), Some("skip_b"));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_policies_section() {
+        let yaml = r#"
+agent_id: policy_test
+description: policies section test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  require_citations: true
+  require_policy_context: false
+  allowed_collections:
+    - docs
+    - notes
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let pol = spec.policies.expect("policies should be present");
+        assert!(pol.require_citations);
+        assert!(!pol.require_policy_context);
+        assert_eq!(pol.allowed_collections, vec!["docs", "notes"]);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn policies_is_optional() {
+        let yaml = r#"
+agent_id: no_policies
+description: no policies
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.policies.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn policies_empty_collections() {
+        let yaml = r#"
+agent_id: empty_cols
+description: empty allowed_collections
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  require_citations: false
+  require_policy_context: false
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let pol = spec.policies.expect("policies");
+        assert!(pol.allowed_collections.is_empty());
     }
 
     #[test]
