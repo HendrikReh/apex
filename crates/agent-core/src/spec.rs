@@ -40,6 +40,12 @@ pub struct AgentSpec {
     /// Optional checkpoint configurations.
     #[serde(default)]
     pub checkpoints: Vec<AgentCheckpointConfig>,
+    /// Optional context profile controlling chunk assembly into LLM context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<AgentContextProfile>,
+    /// Optional retrieval profile controlling search behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retrieval: Option<AgentRetrievalProfile>,
     /// Optional guardrails profile for safety controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guardrails: Option<AgentGuardrailsProfile>,
@@ -68,6 +74,96 @@ pub struct AgentGraphEdge {
     /// If set, this edge is only followed when the named context key is truthy.
     #[serde(default)]
     pub condition_key: Option<String>,
+}
+
+// Context profile
+// ---------------------------------------------------------------------------
+
+/// Controls how retrieved chunks are assembled into LLM context.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentContextProfile {
+    /// Template identifier for prompt assembly.
+    pub template_id: String,
+    /// Maximum token budget for the assembled context.
+    pub max_tokens: usize,
+    /// Maximum number of chunks to include.
+    pub max_chunks: usize,
+    /// Strategy for deduplicating overlapping chunks.
+    pub dedupe_strategy: AgentDedupeMode,
+}
+
+/// Chunk deduplication strategy.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDedupeMode {
+    /// Deduplicate by document ID — keep one chunk per document.
+    DocId,
+    /// Deduplicate by chunk ID (exact match).
+    ChunkId,
+    /// Deduplicate by semantic similarity.
+    Semantic,
+    /// No deduplication.
+    None,
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval profile
+// ---------------------------------------------------------------------------
+
+/// How retrieval searches are executed for this agent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentRetrievalProfile {
+    /// Primary retrieval mode.
+    pub mode: AgentRetrievalMode,
+    /// Default number of results to return.
+    pub top_k: u64,
+    /// Optional per-collection result cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_collection_limit: Option<u64>,
+    /// Whether to enable query rewriting before retrieval.
+    pub enable_rewrite: bool,
+    /// Multi-step retrieval plan (e.g. first dense, then sparse).
+    #[serde(default)]
+    pub plan_steps: Vec<AgentRetrievalStep>,
+}
+
+/// Retrieval strategy.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentRetrievalMode {
+    Dense,
+    Sparse,
+    Hybrid,
+    Fts,
+}
+
+/// A single step in a multi-step retrieval plan.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentRetrievalStep {
+    /// Query text or template for this step.
+    pub query: String,
+    /// Retrieval mode for this step.
+    pub mode: AgentRetrievalMode,
+    /// Number of results for this step.
+    pub top_k: u64,
+    /// Collections to search in this step.
+    pub collections: Vec<String>,
+    /// Optional filters for this step.
+    #[serde(default)]
+    pub filters: AgentToolFilters,
+}
+
+/// Filters applied to a retrieval step.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentToolFilters {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doc_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +633,83 @@ graph:
 
     #[test]
     #[allow(clippy::disallowed_methods)]
+    fn parses_context_profile() {
+        let yaml = r#"
+agent_id: ctx_test
+description: context profile test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+context:
+  template_id: quote_assistant
+  max_tokens: 4096
+  max_chunks: 10
+  dedupe_strategy: doc_id
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let cp = spec.context.expect("context profile should be present");
+        assert_eq!(cp.template_id, "quote_assistant");
+        assert_eq!(cp.max_tokens, 4096);
+        assert_eq!(cp.max_chunks, 10);
+        assert_eq!(cp.dedupe_strategy, AgentDedupeMode::DocId);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn context_profile_is_optional() {
+        let yaml = r#"
+agent_id: no_ctx
+description: no context profile
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.context.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn dedupe_mode_variants() {
+        for (yaml_val, expected) in [
+            ("doc_id", AgentDedupeMode::DocId),
+            ("chunk_id", AgentDedupeMode::ChunkId),
+            ("semantic", AgentDedupeMode::Semantic),
+            ("none", AgentDedupeMode::None),
+        ] {
+            let yaml = format!(
+                r#"
+agent_id: dedupe_test
+description: dedupe test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - {{ from: a, to: b }}
+context:
+  template_id: t
+  max_tokens: 1024
+  max_chunks: 5
+  dedupe_strategy: {yaml_val}
+"#
+            );
+            let spec = AgentSpec::from_yaml_str(&yaml).expect("should parse");
+            assert_eq!(spec.context.expect("context").dedupe_strategy, expected);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
     fn parses_guardrails_profile() {
         let yaml = r#"
 agent_id: guard_test
@@ -642,6 +815,107 @@ graph:
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("cycle"), "expected cycle error, got: {err}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_retrieval_profile() {
+        let yaml = r#"
+agent_id: retrieval_test
+description: retrieval profile test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+retrieval:
+  mode: hybrid
+  top_k: 10
+  per_collection_limit: 5
+  enable_rewrite: true
+  plan_steps:
+    - query: "{{user_query}}"
+      mode: dense
+      top_k: 5
+      collections: [docs]
+      filters:
+        tenant: acme
+        tags: [policy]
+    - query: "expanded query"
+      mode: sparse
+      top_k: 3
+      collections: [docs, notes]
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let rp = spec.retrieval.expect("retrieval profile should be present");
+        assert_eq!(rp.mode, AgentRetrievalMode::Hybrid);
+        assert_eq!(rp.top_k, 10);
+        assert_eq!(rp.per_collection_limit, Some(5));
+        assert!(rp.enable_rewrite);
+        assert_eq!(rp.plan_steps.len(), 2);
+
+        let step0 = &rp.plan_steps[0];
+        assert_eq!(step0.mode, AgentRetrievalMode::Dense);
+        assert_eq!(step0.top_k, 5);
+        assert_eq!(step0.collections, vec!["docs"]);
+        assert_eq!(step0.filters.tenant.as_deref(), Some("acme"));
+        assert_eq!(step0.filters.tags, vec!["policy"]);
+
+        let step1 = &rp.plan_steps[1];
+        assert_eq!(step1.mode, AgentRetrievalMode::Sparse);
+        assert_eq!(step1.collections, vec!["docs", "notes"]);
+        assert!(step1.filters.tags.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn retrieval_profile_is_optional() {
+        let yaml = r#"
+agent_id: no_retrieval
+description: no retrieval profile
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.retrieval.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn retrieval_mode_variants() {
+        for (yaml_val, expected) in [
+            ("dense", AgentRetrievalMode::Dense),
+            ("sparse", AgentRetrievalMode::Sparse),
+            ("hybrid", AgentRetrievalMode::Hybrid),
+            ("fts", AgentRetrievalMode::Fts),
+        ] {
+            let yaml = format!(
+                r#"
+agent_id: mode_test
+description: mode test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - {{ from: a, to: b }}
+retrieval:
+  mode: {yaml_val}
+  top_k: 5
+  enable_rewrite: false
+"#
+            );
+            let spec = AgentSpec::from_yaml_str(&yaml).expect("should parse");
+            assert_eq!(spec.retrieval.expect("retrieval").mode, expected);
+        }
     }
 
     #[test]
