@@ -1,0 +1,39 @@
+# Vertical-slice RAG agent: classify → search → summarize → checkpoint → answer.
+#
+# This is the spec-driven equivalent of the hardcoded spike graph in
+# GraphFlowRuntime::build_default_graph(). It demonstrates YAML-based
+# graph topology definition with a human-in-the-loop approval checkpoint.
+
+agent_id: rag_spike
+description: >
+  Vertical-slice RAG agent that classifies a query, performs hybrid search,
+  summarizes results, pauses for human approval, then assembles a final answer.
+spec_version: "1.0"
+
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - approval_checkpoint
+  - final_answer
+
+graph:
+  start_task: classify
+  tasks:
+    - classify
+    - hybrid_search
+    - summarize
+    - approval_checkpoint
+    - final_answer
+  edges:
+    - { from: classify, to: hybrid_search }
+    - { from: hybrid_search, to: summarize }
+    - { from: summarize, to: approval_checkpoint }
+    - { from: approval_checkpoint, to: final_answer }
+
+checkpoints:
+  - checkpoint_id: post_summary
+    after_task: summarize
+    approval_type: human
+    timeout_seconds: 1800
+    on_timeout: reject

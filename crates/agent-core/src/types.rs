@@ -77,6 +77,15 @@ pub struct PendingCheckpoint {
     pub after_task: String,
     /// Summary text available for the approver.
     pub summary: Option<String>,
+    /// Checkpoint identifier from the agent spec (if spec-driven).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint_id: Option<String>,
+    /// How long the caller should wait before applying `on_timeout`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    /// What to do if the checkpoint times out: `"approve"` or `"reject"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_timeout: Option<String>,
 }
 
 /// Decision made on a checkpoint.

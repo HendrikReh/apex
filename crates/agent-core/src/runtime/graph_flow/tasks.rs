@@ -146,10 +146,13 @@ impl Task for SummarizeTask {
 
 /// Pauses execution for human approval via the [`ApprovalPort`].
 ///
-/// If the port returns a decision immediately (e.g. auto-approve), the graph
-/// continues. Otherwise it emits `WaitForInput` so the caller can resume later.
+/// If the spec sets `approval_type: auto`, the checkpoint auto-approves
+/// without querying the port. If the port returns a decision immediately
+/// (e.g. auto-approve), the graph continues. Otherwise it emits
+/// `WaitForInput` so the caller can resume later.
 pub struct ApprovalCheckpointTask {
     pub approval: Arc<dyn ApprovalPort>,
+    pub config: Option<crate::spec::AgentCheckpointConfig>,
 }
 
 #[async_trait::async_trait]
@@ -169,10 +172,37 @@ impl Task for ApprovalCheckpointTask {
             ));
         }
 
+        // If the spec sets approval_type: auto, skip the port entirely.
+        if let Some(ref cfg) = self.config {
+            if cfg.approval_type == crate::spec::ApprovalType::Auto {
+                info!("checkpoint auto-approved via spec config");
+                context.set(keys::CHECKPOINT_APPROVED, &true).await;
+                return Ok(TaskResult::new(
+                    Some("auto-approved".to_string()),
+                    NextAction::Continue,
+                ));
+            }
+        }
+
         let summary: Option<String> = context.get(keys::SUMMARY).await;
 
-        let checkpoint =
-            PendingCheckpoint { after_task: SUMMARIZE_TASK.to_string(), summary: summary.clone() };
+        let checkpoint = PendingCheckpoint {
+            after_task: self
+                .config
+                .as_ref()
+                .map(|c| c.after_task.clone())
+                .unwrap_or_else(|| SUMMARIZE_TASK.to_string()),
+            summary: summary.clone(),
+            checkpoint_id: self.config.as_ref().map(|c| c.checkpoint_id.clone()),
+            timeout_seconds: self.config.as_ref().map(|c| c.timeout_seconds),
+            on_timeout: self.config.as_ref().map(|c| match c.on_timeout {
+                crate::spec::TimeoutAction::Approve => "approve".to_string(),
+                crate::spec::TimeoutAction::Reject => "reject".to_string(),
+            }),
+        };
+
+        // Store checkpoint info in context for extract_results.
+        context.set(keys::PENDING_CHECKPOINT, &checkpoint).await;
 
         let decision = self.approval.request_approval(&checkpoint).await.map_err(|e| {
             graph_flow::GraphError::TaskExecutionFailed(format!("approval failed: {e}"))
@@ -182,6 +212,9 @@ impl Task for ApprovalCheckpointTask {
             Some(d) => {
                 info!(approved = d.approved, "checkpoint decided immediately");
                 context.set(keys::CHECKPOINT_APPROVED, &d.approved).await;
+                if let Some(ref reason) = d.reason {
+                    context.set(keys::CHECKPOINT_REASON, reason).await;
+                }
                 Ok(TaskResult::new(Some(format!("approved={}", d.approved)), NextAction::Continue))
             }
             None => {
@@ -215,7 +248,11 @@ impl Task for FinalAnswerTask {
                 .await
                 .unwrap_or_else(|| "No summary available.".to_string())
         } else {
-            "Run was rejected at approval checkpoint.".to_string()
+            let reason: Option<String> = context.get(keys::CHECKPOINT_REASON).await;
+            match reason {
+                Some(r) => format!("Run was rejected at approval checkpoint. Reason: {r}"),
+                None => "Run was rejected at approval checkpoint.".to_string(),
+            }
         };
 
         context.set(keys::FINAL_ANSWER, &answer).await;

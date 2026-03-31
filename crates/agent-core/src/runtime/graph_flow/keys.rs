@@ -11,3 +11,5 @@ pub const SEARCH_SUCCESS: &str = "search_success";
 pub const SUMMARY: &str = "summary";
 pub const FINAL_ANSWER: &str = "final_answer";
 pub const CHECKPOINT_APPROVED: &str = "checkpoint_approved";
+pub const CHECKPOINT_REASON: &str = "checkpoint_reason";
+pub const PENDING_CHECKPOINT: &str = "pending_checkpoint";

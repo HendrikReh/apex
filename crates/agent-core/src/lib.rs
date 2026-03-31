@@ -15,8 +15,10 @@
 pub mod classify;
 pub mod ports;
 pub mod runtime;
+pub mod spec;
 pub mod types;
 
 pub use ports::{ApprovalPort, ChatPort, RetrievalPort};
 pub use runtime::AgentRuntime;
+pub use spec::AgentSpec;
 pub use types::{AgentRunResult, AgentSession, AgentState, QueryType};
