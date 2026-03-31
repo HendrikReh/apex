@@ -55,9 +55,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/openapi.json", get(|| async { axum::Json(ApiDoc::openapi()) }))
         .with_state(state);
 
-    let swagger = Router::<()>::from(
-        SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()),
-    );
+    let swagger =
+        Router::<()>::from(SwaggerUi::new("/swagger-ui").url("/openapi.json", ApiDoc::openapi()));
 
     Router::new()
         .merge(public)
