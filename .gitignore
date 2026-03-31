@@ -44,3 +44,5 @@ data/demo/*
 .worktrees/
 # bd worktree
 feat/tesseract-ocr-fallback/
+# bd worktree
+feat/pdf-native-metadata/

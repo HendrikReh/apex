@@ -2,12 +2,18 @@ openapi: 3.1.0
 info:
   title: Apex RAG API
   description: |
-    Retrieval-Augmented Generation API. Ingest documents, search with dense/sparse/hybrid
-    retrieval, and chat with LLM-powered answers grounded in your documents.
+    Retrieval-Augmented Generation API. Ingest documents (PDF with heading detection,
+    Markdown, plain text), search with dense/sparse/hybrid retrieval, and chat with
+    LLM-powered answers grounded in your documents.
+
+    Multi-tenancy is built in — pass `X-Tenant` to isolate data per tenant (defaults
+    to `"default"`). All protected endpoints echo an `X-Request-Id` for correlation.
   version: 0.1.0
   license:
     name: AGPL-3.0
     url: https://www.gnu.org/licenses/agpl-3.0.html
+  contact:
+    email: hendrik.reh@blacksmith-consulting.ai
 
 servers:
   - url: http://localhost:8080
@@ -26,7 +32,7 @@ paths:
             text/plain:
               schema:
                 type: string
-                example: ok
+              example: ok
 
   /readiness:
     get:
@@ -72,6 +78,9 @@ paths:
       responses:
         "200":
           description: Ingestion complete (may include partial failures)
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -108,6 +117,9 @@ paths:
       responses:
         "200":
           description: File ingested successfully
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -133,6 +145,9 @@ paths:
       responses:
         "200":
           description: Search results
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -158,6 +173,9 @@ paths:
       responses:
         "200":
           description: Search results
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -185,6 +203,9 @@ paths:
       responses:
         "200":
           description: Fused search results
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -214,6 +235,9 @@ paths:
       responses:
         "200":
           description: Chat response with citations
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -239,6 +263,9 @@ paths:
       responses:
         "200":
           description: Collection statistics
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/X-Request-Id"
           content:
             application/json:
               schema:
@@ -265,6 +292,13 @@ components:
         type: string
         format: uuid
       description: Request correlation ID. Auto-generated if not provided.
+
+  headers:
+    X-Request-Id:
+      description: Request correlation ID (echoed from request or auto-generated)
+      schema:
+        type: string
+        format: uuid
 
   responses:
     BadRequest:
@@ -310,9 +344,11 @@ components:
             type: string
           minItems: 1
           description: Filesystem paths to files or directories
+          example: ["./data/docs", "./report.pdf"]
         collection:
           type: string
           description: Override the default collection name
+          example: my-docs
         dry_run:
           type: boolean
           default: false
@@ -363,7 +399,7 @@ components:
           description: Collection to search in
         top_k:
           type: integer
-          format: int64
+          minimum: 0
           description: Maximum number of results to return
 
     SearchResponse:
@@ -399,21 +435,23 @@ components:
         query:
           type: string
           minLength: 1
+          description: Search query text
         collection:
           type: string
           minLength: 1
+          description: Collection to search in
         dense_top_k:
           type: integer
-          format: int64
-          description: Override dense retrieval limit
+          minimum: 0
+          description: Override dense retrieval limit (default 20)
         sparse_top_k:
           type: integer
-          format: int64
-          description: Override sparse retrieval limit
+          minimum: 0
+          description: Override sparse retrieval limit (default 20)
         rrf_k:
           type: integer
-          format: int32
-          description: Override RRF fusion parameter
+          minimum: 0
+          description: Override RRF fusion parameter (default 60)
 
     HybridSearchResponse:
       type: object
@@ -449,9 +487,11 @@ components:
           type: string
           minLength: 1
           description: The question to ask
+          example: "What are the key findings in the Q4 report?"
         collection:
           type: string
           description: Collection to search for context. Required for the first message in a conversation.
+          example: quarterly-reports
         conversation_id:
           type: string
           format: uuid
@@ -461,7 +501,6 @@ components:
           description: Target language for the response (e.g. "German", "French")
         history_limit:
           type: integer
-          format: int64
           minimum: 1
           description: Maximum number of historical messages to include
 
@@ -509,10 +548,12 @@ components:
       properties:
         prompt_tokens:
           type: integer
-          format: int32
+          minimum: 0
+          description: Tokens consumed by the prompt (including context)
         completion_tokens:
           type: integer
-          format: int32
+          minimum: 0
+          description: Tokens generated by the LLM
 
     CollectionStatsResponse:
       type: object
