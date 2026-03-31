@@ -9,7 +9,7 @@
 //! context templates are added later as those subsystems land.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow};
 use serde::{Deserialize, Serialize};
@@ -282,8 +282,6 @@ impl AgentSpec {
 // ---------------------------------------------------------------------------
 // Agent registry
 // ---------------------------------------------------------------------------
-
-use std::path::PathBuf;
 
 /// Loaded agent specs keyed by `agent_id`.
 #[derive(Clone, Debug, Default)]
@@ -596,6 +594,7 @@ graph:
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn registry_from_map() {
         let mut map = HashMap::new();
         let spec1 = AgentSpec::from_yaml_str(VALID_SPEC).unwrap();
@@ -609,6 +608,7 @@ graph:
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn registry_load_from_dir() {
         let dir = tempfile::tempdir().unwrap();
         let spec_a = r#"
@@ -645,6 +645,7 @@ graph:
     }
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
     async fn registry_rejects_duplicate_agent_id() {
         let dir = tempfile::tempdir().unwrap();
         let spec = r#"
