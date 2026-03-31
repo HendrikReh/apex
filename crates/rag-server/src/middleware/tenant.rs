@@ -7,6 +7,7 @@ use axum::response::Response;
 use rag_core::TenantId;
 use uuid::Uuid;
 
+use crate::auth::Principal;
 use crate::state::{ApiError, AppState, RequestContext};
 
 /// Middleware that extracts and validates the tenant from the configured header.
@@ -29,7 +30,11 @@ pub async fn tenant_extraction(
 
     let request_id = req.extensions().get::<Uuid>().copied().unwrap_or_else(Uuid::new_v4);
 
-    let ctx = RequestContext { request_id, tenant: tenant.clone() };
+    let ctx = RequestContext {
+        request_id,
+        tenant: tenant.clone(),
+        principal: Principal::anonymous(tenant.clone()),
+    };
     req.extensions_mut().insert(ctx);
 
     let mut response = next.run(req).await;

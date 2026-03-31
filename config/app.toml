@@ -70,3 +70,22 @@ prompt_template_path = "prompts/chat_system.hbs"
 # ocr_timeout_secs = 30
 # Default OCR language (Tesseract language code).
 # ocr_default_language = "eng"
+
+[auth]
+# OIDC settings (required when auth_mode = "oidc")
+# oidc_issuer = "https://auth.example.com"
+# oidc_audience = "apex-api"
+# oidc_jwks_url = ""                                    # Override OIDC discovery JWKS URL
+# oidc_groups_claim = "groups"                          # JWT claim for group membership
+# oidc_platform_operator_groups = []                    # Groups that grant platform_operator role
+# bootstrap_platform_api_key = ""                       # Break-glass API key (first deploy/recovery only)
+
+[rate_limit]
+global_rps = 1000                                       # Global requests per second
+global_burst = 200                                      # Global burst allowance
+global_concurrency = 100                                # Max concurrent requests
+tenant_rps = 100                                        # Per-tenant requests per second
+tenant_burst = 50                                       # Per-tenant burst allowance
+search_rps = 50                                         # Search requests per second per tenant
+chat_rps = 20                                           # Chat requests per second per tenant
+ingest_concurrency = 10                                 # Max concurrent ingest operations per tenant

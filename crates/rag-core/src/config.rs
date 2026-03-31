@@ -132,12 +132,36 @@ struct ExtractSection {
 }
 
 #[derive(Deserialize, Default)]
+struct AuthSection {
+    oidc_issuer: Option<String>,
+    oidc_audience: Option<String>,
+    oidc_jwks_url: Option<String>,
+    oidc_groups_claim: Option<String>,
+    oidc_platform_operator_groups: Option<Vec<String>>,
+    bootstrap_platform_api_key: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct RateLimitSection {
+    global_rps: Option<u32>,
+    global_burst: Option<u32>,
+    global_concurrency: Option<u32>,
+    tenant_rps: Option<u32>,
+    tenant_burst: Option<u32>,
+    search_rps: Option<u32>,
+    chat_rps: Option<u32>,
+    ingest_concurrency: Option<u32>,
+}
+
+#[derive(Deserialize, Default)]
 struct AppSettings {
     app: Option<AppSection>,
     retrieval: Option<RetrievalSection>,
     context: Option<ContextSection>,
     llm: Option<LlmSection>,
     extract: Option<ExtractSection>,
+    auth: Option<AuthSection>,
+    rate_limit: Option<RateLimitSection>,
 }
 
 #[derive(Deserialize, Default)]
@@ -238,6 +262,23 @@ pub struct AppConfig {
     pub auth_mode: AuthMode,
     pub tenant_header: String,
     pub request_id_header: String,
+    // OIDC
+    pub oidc_issuer: Option<String>,
+    pub oidc_audience: Option<String>,
+    pub oidc_jwks_url: Option<String>,
+    pub oidc_groups_claim: String,
+    pub oidc_platform_operator_groups: Vec<String>,
+    // Bootstrap
+    pub bootstrap_platform_api_key: Option<String>,
+    // Rate limiting
+    pub rate_limit_global_rps: u32,
+    pub rate_limit_global_burst: u32,
+    pub rate_limit_global_concurrency: u32,
+    pub rate_limit_tenant_rps: u32,
+    pub rate_limit_tenant_burst: u32,
+    pub rate_limit_search_rps: u32,
+    pub rate_limit_chat_rps: u32,
+    pub rate_limit_ingest_concurrency: u32,
     // Retrieval
     pub rrf_k: u32,
     pub dense_top_k: u64,
@@ -285,28 +326,39 @@ impl AppConfig {
         let config_path =
             std::env::var("APP_CONFIG_PATH").unwrap_or_else(|_| "config/app.toml".to_owned());
 
-        let (file_settings, retrieval_settings, context_settings, llm_settings, extract_settings) =
-            if std::path::Path::new(&config_path).exists() {
-                let contents = std::fs::read_to_string(&config_path)
-                    .with_context(|| format!("reading config file {config_path}"))?;
-                let settings: AppSettings = toml::from_str(&contents)
-                    .with_context(|| format!("parsing config file {config_path}"))?;
-                (
-                    settings.app.unwrap_or_default(),
-                    settings.retrieval.unwrap_or_default(),
-                    settings.context.unwrap_or_default(),
-                    settings.llm.unwrap_or_default(),
-                    settings.extract.unwrap_or_default(),
-                )
-            } else {
-                (
-                    AppSection::default(),
-                    RetrievalSection::default(),
-                    ContextSection::default(),
-                    LlmSection::default(),
-                    ExtractSection::default(),
-                )
-            };
+        let (
+            file_settings,
+            retrieval_settings,
+            context_settings,
+            llm_settings,
+            extract_settings,
+            auth_settings,
+            rate_limit_settings,
+        ) = if std::path::Path::new(&config_path).exists() {
+            let contents = std::fs::read_to_string(&config_path)
+                .with_context(|| format!("reading config file {config_path}"))?;
+            let settings: AppSettings = toml::from_str(&contents)
+                .with_context(|| format!("parsing config file {config_path}"))?;
+            (
+                settings.app.unwrap_or_default(),
+                settings.retrieval.unwrap_or_default(),
+                settings.context.unwrap_or_default(),
+                settings.llm.unwrap_or_default(),
+                settings.extract.unwrap_or_default(),
+                settings.auth.unwrap_or_default(),
+                settings.rate_limit.unwrap_or_default(),
+            )
+        } else {
+            (
+                AppSection::default(),
+                RetrievalSection::default(),
+                ContextSection::default(),
+                LlmSection::default(),
+                ExtractSection::default(),
+                AuthSection::default(),
+                RateLimitSection::default(),
+            )
+        };
 
         let f = &file_settings;
 
@@ -548,6 +600,41 @@ impl AppConfig {
             .or_else(|| extract_settings.ocr_default_language.clone())
             .unwrap_or_else(|| "eng".to_owned());
 
+        let auth_cfg = &auth_settings;
+        let rl = &rate_limit_settings;
+
+        // OIDC config
+        let oidc_issuer = env_string("OIDC_ISSUER").or_else(|| auth_cfg.oidc_issuer.clone());
+        let oidc_audience = env_string("OIDC_AUDIENCE").or_else(|| auth_cfg.oidc_audience.clone());
+        let oidc_jwks_url = env_string("OIDC_JWKS_URL").or_else(|| auth_cfg.oidc_jwks_url.clone());
+        let oidc_groups_claim = env_string("OIDC_GROUPS_CLAIM")
+            .or_else(|| auth_cfg.oidc_groups_claim.clone())
+            .unwrap_or_else(|| "groups".to_owned());
+        let oidc_platform_operator_groups: Vec<String> =
+            env_string("OIDC_PLATFORM_OPERATOR_GROUPS")
+                .map(|s| s.split(',').map(|g| g.trim().to_owned()).collect())
+                .or_else(|| auth_cfg.oidc_platform_operator_groups.clone())
+                .unwrap_or_default();
+        let bootstrap_platform_api_key = env_string("BOOTSTRAP_PLATFORM_API_KEY")
+            .or_else(|| auth_cfg.bootstrap_platform_api_key.clone());
+
+        // Rate limit config
+        let rate_limit_global_rps =
+            env_parsed("RATE_LIMIT_GLOBAL_RPS")?.or(rl.global_rps).unwrap_or(1000);
+        let rate_limit_global_burst =
+            env_parsed("RATE_LIMIT_GLOBAL_BURST")?.or(rl.global_burst).unwrap_or(200);
+        let rate_limit_global_concurrency =
+            env_parsed("RATE_LIMIT_GLOBAL_CONCURRENCY")?.or(rl.global_concurrency).unwrap_or(100);
+        let rate_limit_tenant_rps =
+            env_parsed("RATE_LIMIT_TENANT_RPS")?.or(rl.tenant_rps).unwrap_or(100);
+        let rate_limit_tenant_burst =
+            env_parsed("RATE_LIMIT_TENANT_BURST")?.or(rl.tenant_burst).unwrap_or(50);
+        let rate_limit_search_rps =
+            env_parsed("RATE_LIMIT_SEARCH_RPS")?.or(rl.search_rps).unwrap_or(50);
+        let rate_limit_chat_rps = env_parsed("RATE_LIMIT_CHAT_RPS")?.or(rl.chat_rps).unwrap_or(20);
+        let rate_limit_ingest_concurrency =
+            env_parsed("RATE_LIMIT_INGEST_CONCURRENCY")?.or(rl.ingest_concurrency).unwrap_or(10);
+
         Ok(Self {
             qdrant_url,
             qdrant_api_key,
@@ -574,6 +661,20 @@ impl AppConfig {
             auth_mode,
             tenant_header,
             request_id_header,
+            oidc_issuer,
+            oidc_audience,
+            oidc_jwks_url,
+            oidc_groups_claim,
+            oidc_platform_operator_groups,
+            bootstrap_platform_api_key,
+            rate_limit_global_rps,
+            rate_limit_global_burst,
+            rate_limit_global_concurrency,
+            rate_limit_tenant_rps,
+            rate_limit_tenant_burst,
+            rate_limit_search_rps,
+            rate_limit_chat_rps,
+            rate_limit_ingest_concurrency,
             rrf_k,
             dense_top_k,
             sparse_top_k,
@@ -659,6 +760,20 @@ mod tests {
             std::env::remove_var("TESSDATA_PREFIX");
             std::env::remove_var("OCR_TIMEOUT_SECS");
             std::env::remove_var("OCR_DEFAULT_LANGUAGE");
+            std::env::remove_var("OIDC_ISSUER");
+            std::env::remove_var("OIDC_AUDIENCE");
+            std::env::remove_var("OIDC_JWKS_URL");
+            std::env::remove_var("OIDC_GROUPS_CLAIM");
+            std::env::remove_var("OIDC_PLATFORM_OPERATOR_GROUPS");
+            std::env::remove_var("BOOTSTRAP_PLATFORM_API_KEY");
+            std::env::remove_var("RATE_LIMIT_GLOBAL_RPS");
+            std::env::remove_var("RATE_LIMIT_GLOBAL_BURST");
+            std::env::remove_var("RATE_LIMIT_GLOBAL_CONCURRENCY");
+            std::env::remove_var("RATE_LIMIT_TENANT_RPS");
+            std::env::remove_var("RATE_LIMIT_TENANT_BURST");
+            std::env::remove_var("RATE_LIMIT_SEARCH_RPS");
+            std::env::remove_var("RATE_LIMIT_CHAT_RPS");
+            std::env::remove_var("RATE_LIMIT_INGEST_CONCURRENCY");
         }
     }
 
@@ -722,6 +837,21 @@ mod tests {
         assert!(cfg.tessdata_dir.is_none(), "tessdata_dir should default to None");
         assert_eq!(cfg.ocr_timeout_secs, 30);
         assert_eq!(cfg.ocr_default_language, "eng");
+        // Auth and rate-limit defaults
+        assert!(cfg.oidc_issuer.is_none());
+        assert!(cfg.oidc_audience.is_none());
+        assert!(cfg.oidc_jwks_url.is_none());
+        assert_eq!(cfg.oidc_groups_claim, "groups");
+        assert!(cfg.oidc_platform_operator_groups.is_empty());
+        assert!(cfg.bootstrap_platform_api_key.is_none());
+        assert_eq!(cfg.rate_limit_global_rps, 1000);
+        assert_eq!(cfg.rate_limit_global_burst, 200);
+        assert_eq!(cfg.rate_limit_global_concurrency, 100);
+        assert_eq!(cfg.rate_limit_tenant_rps, 100);
+        assert_eq!(cfg.rate_limit_tenant_burst, 50);
+        assert_eq!(cfg.rate_limit_search_rps, 50);
+        assert_eq!(cfg.rate_limit_chat_rps, 20);
+        assert_eq!(cfg.rate_limit_ingest_concurrency, 10);
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };
