@@ -191,6 +191,37 @@ pub async fn revoke_api_key(pool: &PgPool, key_id: Uuid) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
+/// Revoke an API key, scoped to a specific tenant via service_accounts join.
+pub async fn revoke_api_key_scoped(pool: &PgPool, key_id: Uuid, tenant: &str) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE api_keys SET revoked_at = now() \
+         WHERE id = $1 AND revoked_at IS NULL \
+         AND service_account_id IN (SELECT id FROM service_accounts WHERE tenant = $2)",
+    )
+    .bind(key_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("revoking api_key (tenant-scoped)")?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Verify a service account belongs to the given tenant. Returns Some(id) if valid.
+pub async fn verify_service_account_tenant(
+    pool: &PgPool,
+    service_account_id: Uuid,
+    tenant: &str,
+) -> Result<Option<Uuid>> {
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM service_accounts WHERE id = $1 AND tenant = $2")
+            .bind(service_account_id)
+            .bind(tenant)
+            .fetch_optional(pool)
+            .await
+            .context("verifying service_account tenant ownership")?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// Touch `last_used_at` for the given key. Best-effort — errors are logged, not propagated.
 pub async fn touch_last_used(pool: &PgPool, key_id: Uuid) {
     let result = sqlx::query("UPDATE api_keys SET last_used_at = now() WHERE id = $1")
@@ -203,6 +234,10 @@ pub async fn touch_last_used(pool: &PgPool, key_id: Uuid) {
 }
 
 /// Constant-time byte comparison to prevent timing side-channels.
+///
+/// The early-return on length mismatch is acceptable here because both
+/// operands are always SHA-256 hex digests (64 bytes). If this function
+/// is reused for variable-length inputs, replace with `subtle::ConstantTimeEq`.
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;

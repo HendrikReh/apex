@@ -178,30 +178,40 @@ async fn authenticate_oidc(
     })?;
 
     let is_platform = platform_groups.iter().any(|g| claims.groups.contains(g));
-    let role = lookup_oidc_role(&pool, &tenant, &claims.iss, &claims.sub).await;
+    let role = lookup_oidc_role(&pool, &tenant, &claims.iss, &claims.sub).await?;
 
     Ok(Principal::from_oidc(&claims.iss, &claims.sub, tenant, role, is_platform))
 }
 
 /// Look up the OIDC principal's role from the database.
-/// Falls back to `Viewer` if no mapping exists.
+/// Falls back to `Viewer` if no mapping exists (open-read model).
+/// Fails closed on DB errors rather than silently granting access.
 async fn lookup_oidc_role(
     pool: &sqlx::PgPool,
     tenant: &TenantId,
     issuer: &str,
     subject: &str,
-) -> Role {
-    let result: Result<Option<(String,)>, _> = sqlx::query_as(
-        "SELECT role FROM oidc_principals WHERE tenant = $1 AND issuer = $2 AND subject = $3 AND disabled_at IS NULL",
+) -> Result<Role, ApiError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM oidc_principals \
+         WHERE tenant = $1 AND issuer = $2 AND subject = $3 AND disabled_at IS NULL",
     )
     .bind(tenant.as_str())
     .bind(issuer)
     .bind(subject)
     .fetch_optional(pool)
-    .await;
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "OIDC role lookup failed");
+        ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "authentication error".into(),
+        }
+    })?;
 
-    match result {
-        Ok(Some((role_str,))) => role_str.parse().unwrap_or(Role::Viewer),
-        _ => Role::Viewer,
+    match row {
+        Some((role_str,)) => Ok(role_str.parse().unwrap_or(Role::Viewer)),
+        // No mapping — default to Viewer (open-read model)
+        None => Ok(Role::Viewer),
     }
 }

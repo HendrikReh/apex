@@ -86,6 +86,3 @@ global_burst = 200                                      # Global burst allowance
 global_concurrency = 100                                # Max concurrent requests
 tenant_rps = 100                                        # Per-tenant requests per second
 tenant_burst = 50                                       # Per-tenant burst allowance
-search_rps = 50                                         # Search requests per second per tenant
-chat_rps = 20                                           # Chat requests per second per tenant
-ingest_concurrency = 10                                 # Max concurrent ingest operations per tenant

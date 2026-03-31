@@ -34,17 +34,18 @@ pub async fn create_service_account(
     Ctx(ctx): Ctx,
     Json(body): Json<CreateServiceAccountRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Validate role
-    let _role: crate::auth::Role = body.role.parse().map_err(|e| ApiError {
+    // Validate and normalize role
+    let role: crate::auth::Role = body.role.parse().map_err(|e| ApiError {
         status: StatusCode::BAD_REQUEST,
         message: format!("invalid role: {e}"),
     })?;
+    let role_str = role.to_string();
 
     let id = api_key::create_service_account(
         state.stores.pg_pool(),
         ctx.tenant.as_str(),
         &body.name,
-        &body.role,
+        &role_str,
     )
     .await
     .map_err(|e| ApiError {
@@ -54,7 +55,7 @@ pub async fn create_service_account(
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateServiceAccountResponse { id, name: body.name, role: body.role }),
+        Json(CreateServiceAccountResponse { id, name: body.name, role: role_str }),
     ))
 }
 
@@ -80,9 +81,25 @@ pub struct CreateApiKeyResponse {
 
 pub async fn create_api_key(
     State(state): State<Arc<AppState>>,
-    Ctx(_ctx): Ctx,
+    Ctx(ctx): Ctx,
     Json(body): Json<CreateApiKeyRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
+    // Verify the service account belongs to the requesting tenant
+    api_key::verify_service_account_tenant(
+        state.stores.pg_pool(),
+        body.service_account_id,
+        ctx.tenant.as_str(),
+    )
+    .await
+    .map_err(|e| ApiError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: format!("failed to verify service account: {e}"),
+    })?
+    .ok_or_else(|| ApiError {
+        status: StatusCode::NOT_FOUND,
+        message: "service account not found in this tenant".into(),
+    })?;
+
     let (full_key, prefix, hash) = api_key::generate();
 
     let expires_at =
@@ -119,11 +136,13 @@ pub async fn create_api_key(
 
 pub async fn revoke_api_key(
     State(state): State<Arc<AppState>>,
-    Ctx(_ctx): Ctx,
+    Ctx(ctx): Ctx,
     Path(key_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
     let revoked =
-        api_key::revoke_api_key(state.stores.pg_pool(), key_id).await.map_err(|e| ApiError {
+        api_key::revoke_api_key_scoped(state.stores.pg_pool(), key_id, ctx.tenant.as_str())
+            .await
+            .map_err(|e| ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: format!("failed to revoke API key: {e}"),
         })?;

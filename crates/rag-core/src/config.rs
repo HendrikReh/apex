@@ -148,9 +148,6 @@ struct RateLimitSection {
     global_concurrency: Option<u32>,
     tenant_rps: Option<u32>,
     tenant_burst: Option<u32>,
-    search_rps: Option<u32>,
-    chat_rps: Option<u32>,
-    ingest_concurrency: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]
@@ -276,9 +273,6 @@ pub struct AppConfig {
     pub rate_limit_global_concurrency: u32,
     pub rate_limit_tenant_rps: u32,
     pub rate_limit_tenant_burst: u32,
-    pub rate_limit_search_rps: u32,
-    pub rate_limit_chat_rps: u32,
-    pub rate_limit_ingest_concurrency: u32,
     // Retrieval
     pub rrf_k: u32,
     pub dense_top_k: u64,
@@ -629,12 +623,6 @@ impl AppConfig {
             env_parsed("RATE_LIMIT_TENANT_RPS")?.or(rl.tenant_rps).unwrap_or(100);
         let rate_limit_tenant_burst =
             env_parsed("RATE_LIMIT_TENANT_BURST")?.or(rl.tenant_burst).unwrap_or(50);
-        let rate_limit_search_rps =
-            env_parsed("RATE_LIMIT_SEARCH_RPS")?.or(rl.search_rps).unwrap_or(50);
-        let rate_limit_chat_rps = env_parsed("RATE_LIMIT_CHAT_RPS")?.or(rl.chat_rps).unwrap_or(20);
-        let rate_limit_ingest_concurrency =
-            env_parsed("RATE_LIMIT_INGEST_CONCURRENCY")?.or(rl.ingest_concurrency).unwrap_or(10);
-
         Ok(Self {
             qdrant_url,
             qdrant_api_key,
@@ -672,9 +660,6 @@ impl AppConfig {
             rate_limit_global_concurrency,
             rate_limit_tenant_rps,
             rate_limit_tenant_burst,
-            rate_limit_search_rps,
-            rate_limit_chat_rps,
-            rate_limit_ingest_concurrency,
             rrf_k,
             dense_top_k,
             sparse_top_k,
@@ -849,9 +834,6 @@ mod tests {
         assert_eq!(cfg.rate_limit_global_concurrency, 100);
         assert_eq!(cfg.rate_limit_tenant_rps, 100);
         assert_eq!(cfg.rate_limit_tenant_burst, 50);
-        assert_eq!(cfg.rate_limit_search_rps, 50);
-        assert_eq!(cfg.rate_limit_chat_rps, 20);
-        assert_eq!(cfg.rate_limit_ingest_concurrency, 10);
 
         // -- Part 2: env var overrides default --
         unsafe { std::env::set_var("DATABASE_URL", "postgres://custom:pw@db:5432/mydb") };

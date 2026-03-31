@@ -12,6 +12,8 @@ use axum::response::Response;
 use dashmap::DashMap;
 use tokio::sync::Semaphore;
 
+use axum::response::IntoResponse;
+
 use crate::state::{ApiError, AppState, RequestContext};
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,8 @@ pub struct RateLimiterState {
     /// Global RPS token bucket.
     global_bucket: Arc<parking_lot::Mutex<TokenBucket>>,
     /// Per-key token buckets (keyed by `{tenant}:{principal}:{route_class}`).
+    /// NOTE: entries are never evicted — add TTL-based cleanup for long-running
+    /// servers with many distinct tenants/principals.
     tenant_buckets: DashMap<String, parking_lot::Mutex<TokenBucket>>,
     /// Default per-tenant RPS and burst.
     tenant_rps: u32,
@@ -133,6 +137,20 @@ fn route_class(path: &str) -> &'static str {
 // Middleware
 // ---------------------------------------------------------------------------
 
+/// Build a 429 response with a `Retry-After` header.
+fn too_many_requests(message: &str) -> Response {
+    let body = serde_json::json!({ "error": message });
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [
+            (axum::http::header::CONTENT_TYPE, "application/json"),
+            (axum::http::header::RETRY_AFTER, "1"),
+        ],
+        body.to_string(),
+    )
+        .into_response()
+}
+
 /// Rate limiting middleware. Must run after authentication.
 pub async fn rate_limit(
     State(state): State<Arc<AppState>>,
@@ -141,10 +159,7 @@ pub async fn rate_limit(
 ) -> Result<Response, ApiError> {
     // Global rate check
     if !state.auth.rate_limiter.check_global() {
-        return Err(ApiError {
-            status: StatusCode::TOO_MANY_REQUESTS,
-            message: "global rate limit exceeded".into(),
-        });
+        return Ok(too_many_requests("global rate limit exceeded"));
     }
 
     // Per-tenant/principal rate check
@@ -152,10 +167,7 @@ pub async fn rate_limit(
         let class = route_class(req.uri().path());
         let key = format!("{}:{}:{}", ctx.tenant.as_str(), ctx.principal.rate_limit_key, class);
         if !state.auth.rate_limiter.check_tenant(&key) {
-            return Err(ApiError {
-                status: StatusCode::TOO_MANY_REQUESTS,
-                message: "rate limit exceeded".into(),
-            });
+            return Ok(too_many_requests("rate limit exceeded"));
         }
     }
 

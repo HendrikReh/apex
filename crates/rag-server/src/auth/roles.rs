@@ -44,6 +44,7 @@ impl Role {
         let caps: &[Capability] = match self {
             Self::Viewer => &[HealthRead, CollectionsRead, SearchRead, ChatUse],
             Self::Editor => &[HealthRead, CollectionsRead, SearchRead, ChatUse, IngestWrite],
+            // Same as Editor today; will diverge when agent-core adds AgentRun capability.
             Self::AgentOperator => &[HealthRead, CollectionsRead, SearchRead, ChatUse, IngestWrite],
             Self::Admin => {
                 &[HealthRead, CollectionsRead, SearchRead, ChatUse, IngestWrite, AuthKeysManage]
