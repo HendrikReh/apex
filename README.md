@@ -27,10 +27,10 @@ Today, Apex already covers the core RAG path end to end:
 
 1. **Phase 1: Open RAG foundation**
    Ingest, retrieval, chat, API, CLI, and the storage/runtime model needed for a solid self-hosted RAG stack.
-2. **Phase 2: Observability and provenance**
-   OpenTelemetry instrumentation, richer provenance capture, and better auditability for where answers came from and how they were produced.
-3. **Phase 3: Agent workflows**
+2. **Phase 2: Agent workflows**
    Agent definitions, execution flows, tools, runs, and evidence-oriented orchestration on top of the RAG substrate.
+3. **Phase 3: Observability and provenance**
+   OpenTelemetry instrumentation, richer provenance capture, and better auditability for where answers came from and how they were produced.
 4. **Phase 4: EU AI Act alignment**
    Compliance-facing controls, documentation, and governance features aimed at real-world high-assurance deployments.
 
