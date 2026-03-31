@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
+
 use uuid::Uuid;
 
 #[derive(Parser)]
@@ -69,6 +70,18 @@ pub enum Command {
         #[arg(long)]
         collection: String,
     },
+    /// API key management
+    #[command(name = "api-key")]
+    ApiKey {
+        #[command(subcommand)]
+        action: ApiKeyAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ApiKeyAction {
+    /// Generate a new API key locally (does not contact the server)
+    Generate,
 }
 
 #[derive(Clone, ValueEnum)]

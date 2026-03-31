@@ -5,8 +5,10 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
+use rag_server::auth::oidc::JwksCache;
+use rag_server::middleware::rate_limit::RateLimiterState;
 use rag_server::router;
-use rag_server::state::AppState;
+use rag_server::state::{AppState, AuthState};
 
 mod bootstrap;
 
@@ -39,7 +41,22 @@ async fn main() -> Result<()> {
 
     let bind_addr = config.bind_addr.clone();
 
-    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header });
+    let auth = AuthState {
+        jwks_cache: JwksCache::default(),
+        rate_limiter: RateLimiterState::new(
+            config.rate_limit_global_rps,
+            config.rate_limit_global_burst,
+            config.rate_limit_global_concurrency,
+            config.rate_limit_tenant_rps,
+            config.rate_limit_tenant_burst,
+        ),
+    };
+
+    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header, auth });
+
+    if state.config.auth_mode == rag_core::config::AuthMode::None {
+        tracing::warn!("auth_mode=none: running without authentication (development only)");
+    }
 
     let app = router::build_router(state);
 

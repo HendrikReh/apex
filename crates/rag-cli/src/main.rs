@@ -20,31 +20,55 @@ async fn main() {
 }
 
 async fn run(cli: cli::Cli) -> anyhow::Result<()> {
-    let client = rag_client::TenantApiClient::new(&cli.server, &cli.tenant)?;
     let mut stdout = std::io::stdout().lock();
 
     match cli.command {
-        cli::Command::Ingest { paths, collection, dry_run } => {
-            commands::ingest::run(&client, &mut stdout, cli.json, paths, collection, dry_run).await
-        }
-        cli::Command::Search { query, collection, mode, top_k } => {
-            commands::search::run(&client, &mut stdout, cli.json, query, collection, mode, top_k)
-                .await
-        }
-        cli::Command::Chat { query, collection, interactive, conversation_id } => {
-            commands::chat::run(
-                &client,
-                &mut stdout,
-                cli.json,
-                query,
-                collection,
-                interactive,
-                conversation_id,
-            )
-            .await
-        }
-        cli::Command::CollectionStats { collection } => {
-            commands::collections::run(&client, &mut stdout, cli.json, collection).await
+        cli::Command::ApiKey { action } => match action {
+            cli::ApiKeyAction::Generate => commands::api_key::run(&mut stdout, cli.json),
+        },
+        other => {
+            let client = rag_client::TenantApiClient::new(&cli.server, &cli.tenant)?;
+            match other {
+                cli::Command::Ingest { paths, collection, dry_run } => {
+                    commands::ingest::run(
+                        &client,
+                        &mut stdout,
+                        cli.json,
+                        paths,
+                        collection,
+                        dry_run,
+                    )
+                    .await
+                }
+                cli::Command::Search { query, collection, mode, top_k } => {
+                    commands::search::run(
+                        &client,
+                        &mut stdout,
+                        cli.json,
+                        query,
+                        collection,
+                        mode,
+                        top_k,
+                    )
+                    .await
+                }
+                cli::Command::Chat { query, collection, interactive, conversation_id } => {
+                    commands::chat::run(
+                        &client,
+                        &mut stdout,
+                        cli.json,
+                        query,
+                        collection,
+                        interactive,
+                        conversation_id,
+                    )
+                    .await
+                }
+                cli::Command::CollectionStats { collection } => {
+                    commands::collections::run(&client, &mut stdout, cli.json, collection).await
+                }
+                cli::Command::ApiKey { .. } => unreachable!(),
+            }
         }
     }
 }

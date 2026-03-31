@@ -5,8 +5,18 @@ use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use rag_core::TenantId;
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
+
+use crate::auth::Principal;
+use crate::auth::oidc::JwksCache;
+use crate::middleware::rate_limit::RateLimiterState;
 use serde::Serialize;
 use uuid::Uuid;
+
+/// Runtime authentication and rate-limiting state.
+pub struct AuthState {
+    pub jwks_cache: JwksCache,
+    pub rate_limiter: RateLimiterState,
+}
 
 /// Shared application state, wrapped in `Arc` for Axum handlers.
 pub struct AppState {
@@ -16,6 +26,7 @@ pub struct AppState {
     pub stores: Stores,
     pub config: AppConfig,
     pub tenant_header: axum::http::HeaderName,
+    pub auth: AuthState,
 }
 
 /// Per-request context injected by middleware.
@@ -23,6 +34,7 @@ pub struct AppState {
 pub struct RequestContext {
     pub request_id: Uuid,
     pub tenant: TenantId,
+    pub principal: Principal,
 }
 
 /// Typed extractor for `RequestContext`. Returns 500 if middleware did not run.

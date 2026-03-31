@@ -2,11 +2,14 @@ use std::sync::Arc;
 
 use axum::Router;
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
+use rag_server::auth::oidc::JwksCache;
+use rag_server::middleware::rate_limit::RateLimiterState;
 use rag_server::router::build_router;
-use rag_server::state::AppState;
+use rag_server::state::{AppState, AuthState};
 
 /// Build a full AppState with mock embedder and mock LLM, backed by real
 /// Postgres and Qdrant (requires `just up`).
+#[allow(clippy::disallowed_methods)]
 pub async fn full_app() -> (Router, Arc<AppState>) {
     // SAFETY: test-only env manipulation; each integration test runs in its
     // own process so there are no data races with other threads reading env.
@@ -27,7 +30,9 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
     let chat = ChatService::with_mock_llm(stores.clone(), &config, "Mock LLM response.".into())
         .expect("test chat");
     let tenant_header = config.tenant_header.parse().expect("tenant header");
-    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header });
+    let auth =
+        AuthState { jwks_cache: JwksCache::default(), rate_limiter: RateLimiterState::default() };
+    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header, auth });
     let router = build_router(state.clone());
     (router, state)
 }

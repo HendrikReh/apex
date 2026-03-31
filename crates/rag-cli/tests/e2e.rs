@@ -5,8 +5,10 @@ use std::process::{Command, Output};
 use std::sync::Arc;
 
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
+use rag_server::auth::oidc::JwksCache;
+use rag_server::middleware::rate_limit::RateLimiterState;
 use rag_server::router::build_router;
-use rag_server::state::AppState;
+use rag_server::state::{AppState, AuthState};
 use test_support::spawn_app;
 use uuid::Uuid;
 
@@ -42,7 +44,9 @@ async fn full_app() -> axum::Router {
     let chat = ChatService::with_mock_llm(stores.clone(), &config, "Mock LLM response.".into())
         .expect("test chat");
     let tenant_header = config.tenant_header.parse().expect("tenant header");
-    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header });
+    let auth =
+        AuthState { jwks_cache: JwksCache::default(), rate_limiter: RateLimiterState::default() };
+    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header, auth });
 
     build_router(state)
 }
