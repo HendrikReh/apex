@@ -78,8 +78,10 @@ pub struct AgentGraphEdge {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AgentPolicies {
     /// Whether citations are required in the final answer.
+    #[serde(default)]
     pub require_citations: bool,
     /// Whether policy context must be included in the prompt.
+    #[serde(default)]
     pub require_policy_context: bool,
     /// Collections this agent is allowed to access.
     #[serde(default)]
