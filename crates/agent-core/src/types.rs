@@ -39,19 +39,6 @@ pub struct ScoredChunk {
 /// Unique identifier for an agent run.
 pub type RunId = Uuid;
 
-/// External-facing session handle. Does not contain graph-flow internals.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentSession {
-    pub run_id: RunId,
-    pub state: AgentState,
-    /// Query that initiated the run.
-    pub query: String,
-    /// Collection to search within.
-    pub collection: String,
-    /// Tenant scope.
-    pub tenant: String,
-}
-
 /// High-level lifecycle state of an agent run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

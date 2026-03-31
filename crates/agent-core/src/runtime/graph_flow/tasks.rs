@@ -47,10 +47,7 @@ impl Task for ClassifyTask {
 
         context.set(keys::QUERY_TYPE, &query_type).await;
 
-        Ok(TaskResult::new(
-            Some(serde_json::to_string(&query_type).unwrap_or_default()),
-            NextAction::Continue,
-        ))
+        Ok(TaskResult::new(Some(format!("{query_type:?}")), NextAction::Continue))
     }
 }
 
@@ -87,11 +84,9 @@ impl Task for HybridSearchTask {
                 graph_flow::GraphError::TaskExecutionFailed(format!("retrieval failed: {e}"))
             })?;
 
-        let success = !results.is_empty();
         info!(result_count = results.len(), "hybrid search completed");
 
         context.set(keys::SEARCH_RESULTS, &results).await;
-        context.set(keys::SEARCH_SUCCESS, &success).await;
 
         Ok(TaskResult::new(Some(format!("{} results", results.len())), NextAction::Continue))
     }

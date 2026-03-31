@@ -8,7 +8,7 @@
 //! ## Module layout
 //!
 //! - [`ports`] — Adapter traits (`RetrievalPort`, `ChatPort`, `ApprovalPort`)
-//! - [`types`] — Domain value types (`AgentSession`, `AgentState`, query/result structs)
+//! - [`types`] — Domain value types (`AgentState`, query/result structs)
 //! - [`classify`] — Deterministic query classification heuristics
 //! - [`runtime`] — `AgentRuntime` trait and the graph-flow-backed implementation
 
@@ -21,4 +21,4 @@ pub mod types;
 pub use ports::{ApprovalPort, ChatPort, RetrievalPort};
 pub use runtime::AgentRuntime;
 pub use spec::AgentSpec;
-pub use types::{AgentRunResult, AgentSession, AgentState, QueryType};
+pub use types::{AgentRunResult, AgentState, QueryType};

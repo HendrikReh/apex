@@ -331,6 +331,19 @@ impl super::AgentRuntime for GraphFlowRuntime {
         run_id: RunId,
         decision: CheckpointDecision,
     ) -> anyhow::Result<AgentRunResult> {
+        // Guard: only paused runs may be resumed.
+        {
+            let meta = self.meta.lock().await;
+            if let Some(run_meta) = meta.get(&run_id) {
+                if run_meta.last_state != AgentState::AwaitingApproval {
+                    anyhow::bail!(
+                        "run {run_id} is {:?}, not AwaitingApproval — cannot resume",
+                        run_meta.last_state
+                    );
+                }
+            }
+        }
+
         let mut session = self
             .sessions
             .get(&run_id.to_string())
@@ -345,22 +358,34 @@ impl super::AgentRuntime for GraphFlowRuntime {
         }
 
         let graph = self.build_graph()?;
-        let mut meta = self.meta.lock().await;
-        let run_meta =
-            meta.get_mut(&run_id).ok_or_else(|| anyhow::anyhow!("no metadata for run {run_id}"))?;
 
-        let state = self
-            .execute_loop(&graph, &mut session, &mut run_meta.steps, run_meta.max_steps)
-            .await?;
-        run_meta.last_state = state;
+        // Extract steps and max_steps from RunMeta, then drop the lock so
+        // execute_loop (which is async and potentially long-running) doesn't
+        // block concurrent inspect() calls.
+        let (mut steps, max_steps) = {
+            let meta = self.meta.lock().await;
+            let run_meta =
+                meta.get(&run_id).ok_or_else(|| anyhow::anyhow!("no metadata for run {run_id}"))?;
+            (run_meta.steps.clone(), run_meta.max_steps)
+        };
+
+        let state = self.execute_loop(&graph, &mut session, &mut steps, max_steps).await?;
 
         self.sessions
             .save(session.clone())
             .await
             .map_err(|e| anyhow::anyhow!("failed to save session: {e}"))?;
 
-        let result =
-            self.extract_results(&session.context, run_id, state, run_meta.steps.clone()).await;
+        // Re-acquire the lock to merge results back.
+        {
+            let mut meta = self.meta.lock().await;
+            if let Some(run_meta) = meta.get_mut(&run_id) {
+                run_meta.steps = steps.clone();
+                run_meta.last_state = state;
+            }
+        }
+
+        let result = self.extract_results(&session.context, run_id, state, steps).await;
 
         Ok(result)
     }
