@@ -21,7 +21,7 @@ pub mod types;
 pub use ports::{ApprovalPort, ChatPort, RetrievalPort};
 pub use runtime::AgentRuntime;
 pub use spec::{
-    AgentContextProfile, AgentDedupeMode, AgentGuardrailsProfile, AgentRegistry,
+    AgentContextProfile, AgentDedupeMode, AgentGuardrailsProfile, AgentPolicies, AgentRegistry,
     AgentRetrievalMode, AgentRetrievalProfile, AgentRetrievalStep, AgentSpec, AgentToolFilters,
     GuardrailActionMode,
 };

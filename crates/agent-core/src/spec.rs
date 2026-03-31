@@ -49,6 +49,9 @@ pub struct AgentSpec {
     /// Optional guardrails profile for safety controls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guardrails: Option<AgentGuardrailsProfile>,
+    /// Optional data governance policies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policies: Option<AgentPolicies>,
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +199,24 @@ pub enum GuardrailActionMode {
     Flag,
     /// Block the content entirely.
     Block,
+}
+
+// ---------------------------------------------------------------------------
+// Policies
+// ---------------------------------------------------------------------------
+
+/// Data governance constraints for this agent.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentPolicies {
+    /// Whether citations are required in the final answer.
+    #[serde(default)]
+    pub require_citations: bool,
+    /// Whether policy context must be included in the prompt.
+    #[serde(default)]
+    pub require_policy_context: bool,
+    /// Collections this agent is allowed to access.
+    #[serde(default)]
+    pub allowed_collections: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -873,6 +894,97 @@ guardrails:
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         let gp = spec.guardrails.expect("guardrails");
         assert_eq!(gp.injection_action, GuardrailActionMode::Flag);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_policies_section() {
+        let yaml = r#"
+agent_id: policy_test
+description: policies section test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  require_citations: true
+  require_policy_context: false
+  allowed_collections:
+    - docs
+    - notes
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let pol = spec.policies.expect("policies should be present");
+        assert!(pol.require_citations);
+        assert!(!pol.require_policy_context);
+        assert_eq!(pol.allowed_collections, vec!["docs", "notes"]);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn policies_is_optional() {
+        let yaml = r#"
+agent_id: no_policies
+description: no policies
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.policies.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn policies_empty_collections() {
+        let yaml = r#"
+agent_id: empty_cols
+description: empty allowed_collections
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  require_citations: false
+  require_policy_context: false
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let pol = spec.policies.expect("policies");
+        assert!(pol.allowed_collections.is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn policies_partial_block_defaults_booleans() {
+        let yaml = r#"
+agent_id: partial_pol
+description: partial policies block
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  allowed_collections:
+    - docs
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let pol = spec.policies.expect("policies should be present");
+        assert!(!pol.require_citations, "should default to false");
+        assert!(!pol.require_policy_context, "should default to false");
+        assert_eq!(pol.allowed_collections, vec!["docs"]);
     }
 
     #[test]
