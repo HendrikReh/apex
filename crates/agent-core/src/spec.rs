@@ -40,6 +40,9 @@ pub struct AgentSpec {
     /// Optional checkpoint configurations.
     #[serde(default)]
     pub checkpoints: Vec<AgentCheckpointConfig>,
+    /// Optional context profile controlling chunk assembly into LLM context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<AgentContextProfile>,
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +68,37 @@ pub struct AgentGraphEdge {
     /// If set, this edge is only followed when the named context key is truthy.
     #[serde(default)]
     pub condition_key: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Context profile
+// ---------------------------------------------------------------------------
+
+/// Controls how retrieved chunks are assembled into LLM context.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentContextProfile {
+    /// Template identifier for prompt assembly.
+    pub template_id: String,
+    /// Maximum token budget for the assembled context.
+    pub max_tokens: usize,
+    /// Maximum number of chunks to include.
+    pub max_chunks: usize,
+    /// Strategy for deduplicating overlapping chunks.
+    pub dedupe_strategy: AgentDedupeMode,
+}
+
+/// Chunk deduplication strategy.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDedupeMode {
+    /// Deduplicate by document ID — keep one chunk per document.
+    DocId,
+    /// Deduplicate by chunk ID (exact match).
+    ChunkId,
+    /// Deduplicate by semantic similarity.
+    Semantic,
+    /// No deduplication.
+    None,
 }
 
 // ---------------------------------------------------------------------------
@@ -501,6 +535,83 @@ graph:
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         assert_eq!(spec.graph.edges[1].condition_key.as_deref(), Some("skip_b"));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_context_profile() {
+        let yaml = r#"
+agent_id: ctx_test
+description: context profile test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+context:
+  template_id: quote_assistant
+  max_tokens: 4096
+  max_chunks: 10
+  dedupe_strategy: doc_id
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let cp = spec.context.expect("context profile should be present");
+        assert_eq!(cp.template_id, "quote_assistant");
+        assert_eq!(cp.max_tokens, 4096);
+        assert_eq!(cp.max_chunks, 10);
+        assert_eq!(cp.dedupe_strategy, AgentDedupeMode::DocId);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn context_profile_is_optional() {
+        let yaml = r#"
+agent_id: no_ctx
+description: no context profile
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.context.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn dedupe_mode_variants() {
+        for (yaml_val, expected) in [
+            ("doc_id", AgentDedupeMode::DocId),
+            ("chunk_id", AgentDedupeMode::ChunkId),
+            ("semantic", AgentDedupeMode::Semantic),
+            ("none", AgentDedupeMode::None),
+        ] {
+            let yaml = format!(
+                r#"
+agent_id: dedupe_test
+description: dedupe test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - {{ from: a, to: b }}
+context:
+  template_id: t
+  max_tokens: 1024
+  max_chunks: 5
+  dedupe_strategy: {yaml_val}
+"#
+            );
+            let spec = AgentSpec::from_yaml_str(&yaml).expect("should parse");
+            assert_eq!(spec.context.expect("context").dedupe_strategy, expected);
+        }
     }
 
     #[test]
