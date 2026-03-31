@@ -138,6 +138,7 @@ fn route_class(path: &str) -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Build a 429 response with a `Retry-After` header.
+#[allow(clippy::disallowed_methods)] // serde_json::json! internally uses .expect()
 fn too_many_requests(message: &str) -> Response {
     let body = serde_json::json!({ "error": message });
     (

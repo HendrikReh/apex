@@ -128,6 +128,7 @@ impl Principal {
 mod tests {
     use super::*;
 
+    #[allow(clippy::disallowed_methods)]
     fn test_tenant() -> TenantId {
         TenantId::new("test-tenant").expect("valid tenant")
     }
@@ -149,6 +150,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn anonymous_tenant_access() {
         let tenant = test_tenant();
         let p = Principal::anonymous(tenant.clone());
@@ -172,6 +174,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn oidc_platform_principal_accesses_any_tenant() {
         let p = Principal::from_oidc(
             "https://auth.example.com",
@@ -187,6 +190,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn oidc_tenant_scoped_principal() {
         let p = Principal::from_oidc(
             "https://auth.example.com",

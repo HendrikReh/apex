@@ -12,6 +12,7 @@ use reqwest::StatusCode;
 
 #[tokio::test]
 #[ignore] // requires `just up`
+#[allow(clippy::disallowed_methods)]
 async fn none_mode_allows_unauthenticated_request() {
     let (router, _state) = common::full_app().await;
     let server = test_support::spawn_app(router).await.expect("spawn");
@@ -39,6 +40,7 @@ async fn none_mode_allows_unauthenticated_request() {
 
 #[tokio::test]
 #[ignore] // requires `just up`
+#[allow(clippy::disallowed_methods)]
 async fn health_endpoint_needs_no_auth() {
     let (router, _state) = common::full_app().await;
     let server = test_support::spawn_app(router).await.expect("spawn");
@@ -54,6 +56,7 @@ async fn health_endpoint_needs_no_auth() {
 
 #[tokio::test]
 #[ignore] // requires `just up`
+#[allow(clippy::disallowed_methods)]
 async fn readiness_endpoint_needs_no_auth() {
     let (router, _state) = common::full_app().await;
     let server = test_support::spawn_app(router).await.expect("spawn");

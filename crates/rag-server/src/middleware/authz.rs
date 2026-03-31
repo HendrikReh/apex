@@ -17,13 +17,13 @@ pub async fn authorize(req: Request<axum::body::Body>, next: Next) -> Result<Res
         message: "missing request context (authz middleware requires auth middleware)".into(),
     })?;
 
-    if let Some(required) = required_capability(req.method(), req.uri().path()) {
-        if !ctx.principal.has_capability(required) {
-            return Err(ApiError {
-                status: StatusCode::FORBIDDEN,
-                message: format!("insufficient permissions: requires {required:?}",),
-            });
-        }
+    if let Some(required) = required_capability(req.method(), req.uri().path())
+        && !ctx.principal.has_capability(required)
+    {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            message: format!("insufficient permissions: requires {required:?}",),
+        });
     }
 
     Ok(next.run(req).await)

@@ -66,13 +66,13 @@ pub async fn authenticate(
                     message: "API key has been revoked".into(),
                 });
             }
-            if let Some(expires) = key_row.expires_at {
-                if expires < chrono::Utc::now() {
-                    return Err(ApiError {
-                        status: StatusCode::UNAUTHORIZED,
-                        message: "API key has expired".into(),
-                    });
-                }
+            if let Some(expires) = key_row.expires_at
+                && expires < chrono::Utc::now()
+            {
+                return Err(ApiError {
+                    status: StatusCode::UNAUTHORIZED,
+                    message: "API key has expired".into(),
+                });
             }
             if sa_row.disabled_at.is_some() {
                 return Err(ApiError {
@@ -135,18 +135,17 @@ pub async fn authenticate(
 /// Extract a bearer token from Authorization header or X-Api-Key header.
 fn extract_token(req: &Request<axum::body::Body>) -> Option<String> {
     // Try Authorization: Bearer <token>
-    if let Some(auth) = req.headers().get("authorization") {
-        if let Ok(value) = auth.to_str() {
-            if let Some(token) = value.strip_prefix("Bearer ") {
-                return Some(token.trim().to_string());
-            }
-        }
+    if let Some(auth) = req.headers().get("authorization")
+        && let Ok(value) = auth.to_str()
+        && let Some(token) = value.strip_prefix("Bearer ")
+    {
+        return Some(token.trim().to_string());
     }
     // Try X-Api-Key: <token>
-    if let Some(key) = req.headers().get("x-api-key") {
-        if let Ok(value) = key.to_str() {
-            return Some(value.trim().to_string());
-        }
+    if let Some(key) = req.headers().get("x-api-key")
+        && let Ok(value) = key.to_str()
+    {
+        return Some(value.trim().to_string());
     }
     None
 }

@@ -82,7 +82,7 @@ impl JwksCache {
         // subsequent await so the future stays Send.
         let cached = {
             let state = self.inner.read().await;
-            let still_fresh = state.fetched_at.map_or(false, |t| t.elapsed() < self.ttl);
+            let still_fresh = state.fetched_at.is_some_and(|t| t.elapsed() < self.ttl);
             if still_fresh { state.keys.get(kid).cloned() } else { None }
         };
         if let Some(key) = cached {

@@ -136,6 +136,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn role_roundtrip_parsing() {
         for role in
             [Role::Viewer, Role::Editor, Role::AgentOperator, Role::Admin, Role::PlatformOperator]

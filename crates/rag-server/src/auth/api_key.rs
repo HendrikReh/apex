@@ -239,6 +239,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn parse_valid_key() {
         let parsed = parse("apex_AbCdEfGh_c29tZXNlY3JldGRhdGFoZXJl").expect("should parse");
         assert_eq!(parsed.prefix, "AbCdEfGh");
@@ -288,6 +289,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
     fn generate_produces_valid_format() {
         let (full_key, prefix, hash) = generate();
 

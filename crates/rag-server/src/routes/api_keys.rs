@@ -100,13 +100,13 @@ pub async fn create_api_key(
         message: "service account not found in this tenant".into(),
     })?;
 
-    if let Some(days) = body.expires_in_days {
-        if days <= 0 {
-            return Err(ApiError {
-                status: StatusCode::BAD_REQUEST,
-                message: "expires_in_days must be positive".into(),
-            });
-        }
+    if let Some(days) = body.expires_in_days
+        && days <= 0
+    {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            message: "expires_in_days must be positive".into(),
+        });
     }
 
     let (full_key, prefix, hash) = api_key::generate();

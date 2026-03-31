@@ -9,6 +9,7 @@ use rag_server::state::{AppState, AuthState};
 
 /// Build a full AppState with mock embedder and mock LLM, backed by real
 /// Postgres and Qdrant (requires `just up`).
+#[allow(clippy::disallowed_methods)]
 pub async fn full_app() -> (Router, Arc<AppState>) {
     // SAFETY: test-only env manipulation; each integration test runs in its
     // own process so there are no data races with other threads reading env.
