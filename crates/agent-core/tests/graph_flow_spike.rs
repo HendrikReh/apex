@@ -412,6 +412,40 @@ graph:
     assert!(result.answer.is_some());
 }
 
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn conditional_edge_without_fallback_returns_error() {
+    // Spec where classify has only a conditional edge and no unconditional fallback.
+    let yaml = r#"
+agent_id: no_fallback
+description: "Missing fallback test"
+spec_version: "1.0"
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - final_answer
+graph:
+  start_task: classify
+  tasks: [classify, hybrid_search, summarize, final_answer]
+  edges:
+    - { from: classify, to: hybrid_search, condition_key: do_search }
+    - { from: hybrid_search, to: summarize }
+    - { from: summarize, to: final_answer }
+"#;
+    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
+    let runtime = GraphFlowRuntime::from_spec(
+        spec,
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let err = runtime.start(config()).await.expect_err("should fail without fallback");
+    let msg = err.to_string();
+    assert!(msg.contains("no unconditional fallback"), "expected fallback error, got: {msg}");
+}
+
 // ---------------------------------------------------------------------------
 // Failed state tests
 // ---------------------------------------------------------------------------

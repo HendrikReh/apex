@@ -190,16 +190,22 @@ impl GraphFlowRuntime {
                     builder = builder.add_edge(&edge.from, &edge.to);
                 }
             } else {
-                // There are conditional edges. For each conditional edge, use
-                // the first unconditional edge as the "else" fallback. If no
-                // unconditional edge exists, the conditional edge is just a
-                // normal edge (always followed when truthy).
-                let fallback_to = unconditional.first().map(|e| e.to.as_str());
+                // Conditional edges require an unconditional fallback to serve
+                // as the "else" branch. Without one, both true and false paths
+                // would route to the same target, making the condition a no-op.
+                let fallback_to =
+                    unconditional.first().map(|e| e.to.as_str()).ok_or_else(|| {
+                        let from = &conditional[0].from;
+                        anyhow::anyhow!(
+                            "task '{from}' has conditional edge(s) but no unconditional \
+                         fallback edge — add an unconditional edge as the 'else' path"
+                        )
+                    })?;
 
                 for cond_edge in &conditional {
                     let key = cond_edge.condition_key.clone().unwrap_or_default();
                     let yes_target = cond_edge.to.clone();
-                    let no_target = fallback_to.unwrap_or(cond_edge.to.as_str()).to_string();
+                    let no_target = fallback_to.to_string();
 
                     builder = builder.add_conditional_edge(
                         &cond_edge.from,
