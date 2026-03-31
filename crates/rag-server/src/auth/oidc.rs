@@ -100,6 +100,11 @@ impl JwksCache {
     }
 
     /// Fetch JWKS and update the cache.
+    ///
+    /// NOTE: Multiple concurrent callers may race to refresh simultaneously on
+    /// cache expiry. The last writer wins (correct), but this can cause a burst
+    /// of outbound HTTP requests. For MVP this is acceptable; add a
+    /// refresh-in-progress guard if JWKS endpoint rate limiting becomes an issue.
     async fn refresh(&self, issuer: &str, jwks_url_override: Option<&str>) -> Result<()> {
         let jwks_url = if let Some(url) = jwks_url_override {
             url.to_string()

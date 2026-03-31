@@ -188,7 +188,12 @@ async fn authenticate_oidc(
     })?;
 
     let is_platform = platform_groups.iter().any(|g| claims.groups.contains(g));
-    let role = lookup_oidc_role(&pool, &tenant, &claims.iss, &claims.sub).await?;
+    let role = if is_platform {
+        // Platform group membership grants PlatformOperator with full capabilities
+        Role::PlatformOperator
+    } else {
+        lookup_oidc_role(&pool, &tenant, &claims.iss, &claims.sub).await?
+    };
 
     Ok(Principal::from_oidc(&claims.iss, &claims.sub, tenant, role, is_platform))
 }
@@ -220,7 +225,13 @@ async fn lookup_oidc_role(
     })?;
 
     match row {
-        Some((role_str,)) => Ok(role_str.parse().unwrap_or(Role::Viewer)),
+        Some((role_str,)) => role_str.parse().map_err(|e| {
+            tracing::error!(role = %role_str, error = %e, "invalid role in oidc_principals");
+            ApiError {
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+                message: "authentication error".into(),
+            }
+        }),
         // No mapping — default to Viewer (open-read model)
         None => Ok(Role::Viewer),
     }

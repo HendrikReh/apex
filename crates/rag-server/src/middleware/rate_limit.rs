@@ -172,13 +172,9 @@ pub async fn rate_limit(
     }
 
     // Global concurrency check
-    let _permit =
-        state.auth.rate_limiter.global_semaphore.clone().try_acquire_owned().map_err(|_| {
-            ApiError {
-                status: StatusCode::TOO_MANY_REQUESTS,
-                message: "server at maximum concurrency".into(),
-            }
-        })?;
+    let Ok(_permit) = state.auth.rate_limiter.global_semaphore.clone().try_acquire_owned() else {
+        return Ok(too_many_requests("server at maximum concurrency"));
+    };
 
     Ok(next.run(req).await)
 }
