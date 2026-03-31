@@ -278,6 +278,7 @@ To run a specific ignored integration test:
 
 ```bash
 just up
+cargo test -p rag-cli --test e2e ingest_then_chat_via_cli_subprocess -- --ignored --nocapture
 cargo test -p rag-core --test integration_ingest reingest_modified_file_updates_chunks_in_place -- --ignored --nocapture
 cargo test -p rag-server --test e2e tenant_isolation_through_api -- --ignored --nocapture
 ```
@@ -326,6 +327,7 @@ Examples:
 
 Examples:
 
+- `rag-cli/tests/e2e.rs`
 - `rag-core/tests/integration_ingest.rs`
 - `rag-core/tests/integration_retrieval.rs`
 - `rag-server/tests/e2e.rs`
