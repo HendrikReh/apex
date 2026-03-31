@@ -274,6 +274,19 @@ impl AgentSpec {
         self.validate_graph_references()?;
         self.validate_acyclicity()?;
         self.validate_checkpoint_references()?;
+        self.validate_react_config()?;
+        Ok(())
+    }
+
+    fn validate_react_config(&self) -> anyhow::Result<()> {
+        if let Some(ref react) = self.react {
+            let ct = react.stop_conditions.confidence_threshold;
+            if !(0.0..=1.0).contains(&ct) {
+                return Err(anyhow!(
+                    "react.stop_conditions.confidence_threshold must be 0.0–1.0, got {ct}"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -697,6 +710,27 @@ react:
         assert!(rc.trace_reasoning);
         assert_eq!(rc.max_history, 20);
         assert_eq!(rc.action_types.len(), 3);
+    }
+
+    #[test]
+    fn rejects_out_of_range_confidence_threshold() {
+        let yaml = r#"
+agent_id: bad_ct
+description: bad confidence threshold
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  stop_conditions:
+    confidence_threshold: 1.5
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
     }
 
     #[test]
