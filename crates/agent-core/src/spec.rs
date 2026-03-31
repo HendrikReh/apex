@@ -592,6 +592,30 @@ policies:
     }
 
     #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn policies_partial_block_defaults_booleans() {
+        let yaml = r#"
+agent_id: partial_pol
+description: partial policies block
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  allowed_collections:
+    - docs
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let pol = spec.policies.expect("policies should be present");
+        assert!(!pol.require_citations, "should default to false");
+        assert!(!pol.require_policy_context, "should default to false");
+        assert_eq!(pol.allowed_collections, vec!["docs"]);
+    }
+
+    #[test]
     fn rejects_direct_cycle() {
         let yaml = r#"
 agent_id: bad
