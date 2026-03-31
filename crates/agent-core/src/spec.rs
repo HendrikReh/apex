@@ -5,8 +5,8 @@
 //! `config/agents/`) and drive graph construction at runtime.
 //!
 //! The struct layout follows the projectAlpha spec format, scoped to what the
-//! current runtime supports. Fields for retrieval profiles, guardrails, and
-//! context templates are added later as those subsystems land.
+//! current runtime supports. Retrieval profiles, context templates, and
+//! guardrails are parsed from the spec; runtime wiring lands incrementally.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -177,6 +177,9 @@ pub struct AgentGuardrailsProfile {
     pub injection_enabled: bool,
     /// Action taken when injection is detected.
     pub injection_action: GuardrailActionMode,
+    // NOTE: pii, policy, and safety classifiers currently only have on/off
+    // toggles. Per-classifier action modes (flag vs block) will be added when
+    // the runtime wires these guardrails.
     /// Whether PII filtering is enabled.
     pub pii_enabled: bool,
     /// Whether the policy classifier is enabled.
@@ -186,7 +189,7 @@ pub struct AgentGuardrailsProfile {
 }
 
 /// Action taken when a guardrail triggers.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum GuardrailActionMode {
     /// Flag the content but allow it through.
