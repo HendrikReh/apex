@@ -10,8 +10,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, anyhow};
+use regex_lite::Regex;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -134,6 +136,99 @@ impl AgentSpec {
             .await
             .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
         Self::from_yaml_str(&content)
+    }
+
+    /// Parse a spec from YAML with placeholder substitution applied first.
+    ///
+    /// Placeholders like `{{tenant}}` are replaced in all string values before
+    /// deserialization.
+    pub fn from_yaml_str_with_placeholders(
+        yaml: &str,
+        placeholders: &HashMap<String, String>,
+    ) -> anyhow::Result<Self> {
+        let yaml_value: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(yaml).context("failed to parse agent spec YAML")?;
+        let mut json_value = serde_json::to_value(yaml_value)
+            .context("failed to convert YAML to JSON for placeholder substitution")?;
+        substitute_placeholders(&mut json_value, placeholders)?;
+        let spec: Self = serde_json::from_value(json_value)
+            .context("failed to deserialize agent spec after placeholder substitution")?;
+        spec.validate()?;
+        Ok(spec)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Placeholder substitution
+// ---------------------------------------------------------------------------
+
+/// Replace `{{ key }}` placeholders in a JSON value tree.
+///
+/// Walks all string values in the tree and replaces `{{key}}` (with optional
+/// whitespace around the key) using the provided map. Missing keys are left
+/// as-is (following projectAlpha behaviour).
+pub fn substitute_placeholders(
+    value: &mut serde_json::Value,
+    placeholders: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    substitute_in_value(value, placeholders)
+}
+
+fn substitute_in_value(
+    value: &mut serde_json::Value,
+    placeholders: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    match value {
+        serde_json::Value::String(input) => {
+            *input = replace_placeholders(input, placeholders)?;
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                substitute_in_value(item, placeholders)?;
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for v in map.values_mut() {
+                substitute_in_value(v, placeholders)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn replace_placeholders(
+    input: &str,
+    placeholders: &HashMap<String, String>,
+) -> anyhow::Result<String> {
+    let re = placeholder_regex()?;
+    let mut output = String::with_capacity(input.len());
+    let mut last = 0;
+
+    for caps in re.captures_iter(input) {
+        let whole = caps.get(0).ok_or_else(|| anyhow!("placeholder capture missing"))?;
+        let key = caps.get(1).ok_or_else(|| anyhow!("placeholder key missing"))?.as_str();
+        output.push_str(&input[last..whole.start()]);
+        if let Some(replacement) = placeholders.get(key) {
+            output.push_str(replacement);
+        } else {
+            // Leave unresolved placeholders intact.
+            output.push_str(whole.as_str());
+        }
+        last = whole.end();
+    }
+    output.push_str(&input[last..]);
+    Ok(output)
+}
+
+fn placeholder_regex() -> anyhow::Result<&'static Regex> {
+    static PLACEHOLDER_RE: OnceLock<Result<Regex, String>> = OnceLock::new();
+    match PLACEHOLDER_RE.get_or_init(|| {
+        Regex::new(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
+            .map_err(|e| format!("invalid placeholder regex: {e}"))
+    }) {
+        Ok(re) => Ok(re),
+        Err(err) => Err(anyhow!(err.clone())),
     }
 }
 
@@ -501,6 +596,66 @@ graph:
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         assert_eq!(spec.graph.edges[1].condition_key.as_deref(), Some("skip_b"));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn substitutes_placeholders_in_strings() {
+        let mut value = serde_json::json!({
+            "query": "find {{term}} for {{tenant}}",
+            "filters": { "tenant": "{{tenant}}" },
+            "nested": ["{{term}}", "static"]
+        });
+        let placeholders = HashMap::from([
+            ("term".to_string(), "policies".to_string()),
+            ("tenant".to_string(), "acme".to_string()),
+        ]);
+        substitute_placeholders(&mut value, &placeholders).expect("should replace");
+        assert_eq!(value["query"], "find policies for acme");
+        assert_eq!(value["filters"]["tenant"], "acme");
+        assert_eq!(value["nested"][0], "policies");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn leaves_missing_placeholders_intact() {
+        let mut value = serde_json::json!({ "query": "{{missing}}" });
+        let placeholders = HashMap::new();
+        substitute_placeholders(&mut value, &placeholders).expect("should allow missing");
+        assert_eq!(value["query"], "{{missing}}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn from_yaml_with_placeholders() {
+        let yaml = r#"
+agent_id: "{{agent}}"
+description: "Agent for {{tenant}}"
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let placeholders = HashMap::from([
+            ("agent".to_string(), "my_agent".to_string()),
+            ("tenant".to_string(), "acme".to_string()),
+        ]);
+        let spec =
+            AgentSpec::from_yaml_str_with_placeholders(yaml, &placeholders).expect("should parse");
+        assert_eq!(spec.agent_id, "my_agent");
+        assert_eq!(spec.description, "Agent for acme");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn placeholder_with_spaces() {
+        let mut value = serde_json::json!({ "q": "{{ key }}" });
+        let placeholders = HashMap::from([("key".to_string(), "val".to_string())]);
+        substitute_placeholders(&mut value, &placeholders).expect("should replace");
+        assert_eq!(value["q"], "val");
     }
 
     #[test]

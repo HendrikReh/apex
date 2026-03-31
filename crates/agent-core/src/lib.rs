@@ -20,5 +20,5 @@ pub mod types;
 
 pub use ports::{ApprovalPort, ChatPort, RetrievalPort};
 pub use runtime::AgentRuntime;
-pub use spec::AgentSpec;
+pub use spec::{AgentSpec, substitute_placeholders};
 pub use types::{AgentRunResult, AgentState, QueryType};
