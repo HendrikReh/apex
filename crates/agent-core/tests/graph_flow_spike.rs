@@ -364,6 +364,55 @@ async fn spec_checkpoint_config_surfaces_in_pending() {
 }
 
 // ---------------------------------------------------------------------------
+// Conditional edge tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[allow(clippy::disallowed_methods)]
+async fn conditional_edge_takes_unconditional_path_when_key_unset() {
+    // Spec with a conditional edge: classify → summarize (condition: skip_search)
+    // and an unconditional edge: classify → hybrid_search.
+    // Since "skip_search" is never set to true, the unconditional path should be taken.
+    let yaml = r#"
+agent_id: cond_test
+description: "Conditional edge test"
+spec_version: "1.0"
+tasks:
+  - classify
+  - hybrid_search
+  - summarize
+  - final_answer
+graph:
+  start_task: classify
+  tasks: [classify, hybrid_search, summarize, final_answer]
+  edges:
+    - { from: classify, to: hybrid_search }
+    - { from: classify, to: summarize, condition_key: skip_search }
+    - { from: hybrid_search, to: summarize }
+    - { from: summarize, to: final_answer }
+"#;
+    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
+    let runtime = GraphFlowRuntime::from_spec(
+        spec,
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
+
+    let result = runtime.start(config()).await.expect("start failed");
+
+    // The unconditional path should be taken: classify → hybrid_search → summarize → final_answer
+    // This means search_results should be populated (hybrid_search ran).
+    assert_eq!(result.state, AgentState::Completed);
+    assert!(
+        result.search_results.is_some(),
+        "search results should exist because the unconditional path (through hybrid_search) was taken"
+    );
+    assert_eq!(result.search_results.as_ref().map(|r| r.len()), Some(2));
+    assert!(result.answer.is_some());
+}
+
+// ---------------------------------------------------------------------------
 // Failed state tests
 // ---------------------------------------------------------------------------
 

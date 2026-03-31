@@ -171,10 +171,57 @@ impl GraphFlowRuntime {
 
         builder = builder.set_start_task(&spec.graph.start_task);
 
+        // Group edges by source task for conditional routing.
+        let mut edges_by_from: std::collections::HashMap<&str, Vec<&crate::spec::AgentGraphEdge>> =
+            std::collections::HashMap::new();
         for edge in &spec.graph.edges {
-            // TODO: plumb edge.condition_key to graph-flow builder once it
-            // supports conditional routing. Currently all edges are unconditional.
-            builder = builder.add_edge(&edge.from, &edge.to);
+            edges_by_from.entry(edge.from.as_str()).or_default().push(edge);
+        }
+
+        for (_from, edges) in &edges_by_from {
+            let unconditional: Vec<&&crate::spec::AgentGraphEdge> =
+                edges.iter().filter(|e| e.condition_key.is_none()).collect();
+            let conditional: Vec<&&crate::spec::AgentGraphEdge> =
+                edges.iter().filter(|e| e.condition_key.is_some()).collect();
+
+            if conditional.is_empty() {
+                // All edges are unconditional — add them directly.
+                for edge in edges {
+                    builder = builder.add_edge(&edge.from, &edge.to);
+                }
+            } else {
+                // There are conditional edges. For each conditional edge, use
+                // the first unconditional edge as the "else" fallback. If no
+                // unconditional edge exists, the conditional edge is just a
+                // normal edge (always followed when truthy).
+                let fallback_to = unconditional.first().map(|e| e.to.as_str());
+
+                for cond_edge in &conditional {
+                    let key = cond_edge.condition_key.clone().unwrap_or_default();
+                    let yes_target = cond_edge.to.clone();
+                    let no_target = fallback_to.unwrap_or(cond_edge.to.as_str()).to_string();
+
+                    builder = builder.add_conditional_edge(
+                        &cond_edge.from,
+                        move |ctx: &graph_flow::Context| -> bool {
+                            ctx.get_sync::<bool>(&key).unwrap_or(false)
+                        },
+                        yes_target,
+                        no_target,
+                    );
+                }
+
+                // If there are unconditional edges that aren't the fallback for
+                // any conditional edge, add them too. But if an unconditional edge
+                // was already used as a fallback (the first one), skip it.
+                for (i, unc_edge) in unconditional.iter().enumerate() {
+                    if i == 0 && !conditional.is_empty() {
+                        // Already used as the "else" in conditional edges.
+                        continue;
+                    }
+                    builder = builder.add_edge(&unc_edge.from, &unc_edge.to);
+                }
+            }
         }
 
         Ok(builder.build())
