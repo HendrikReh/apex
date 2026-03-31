@@ -151,7 +151,10 @@ impl AgentSpec {
         if !schema.is_valid(&json_value) {
             let messages: Vec<String> = schema
                 .iter_errors(&json_value)
-                .map(|err| format!("{} at {}", err, err.instance_path))
+                .map(|err| {
+                    let path = err.instance_path.to_string();
+                    if path.is_empty() { format!("{err}") } else { format!("{err} at {path}") }
+                })
                 .collect();
             return Err(anyhow!("agent spec failed schema validation: {}", messages.join("; ")));
         }

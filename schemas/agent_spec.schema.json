@@ -69,7 +69,7 @@
           },
           "timeout_seconds": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 1
           },
           "on_timeout": {
             "type": "string",
