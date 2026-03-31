@@ -1,6 +1,6 @@
 [package]
 name = "agent-core"
-description = "Graph-flow agent orchestration (post-MVP)"
+description = "Graph-flow agent orchestration for RAG pipelines"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -8,3 +8,12 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+graph-flow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
