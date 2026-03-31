@@ -115,7 +115,7 @@ pub struct AgentReactStopConditions {
 }
 
 /// Types of actions available in a ReAct loop.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentReactActionType {
     Search,
@@ -127,6 +127,9 @@ pub enum AgentReactActionType {
 const DEFAULT_REACT_MAX_ITERATIONS: usize = 5;
 const DEFAULT_REACT_CONFIDENCE_THRESHOLD: f32 = 0.85;
 const DEFAULT_REACT_MAX_ACTIONS: usize = 10;
+const DEFAULT_REACT_TRACE_REASONING: bool = true;
+const DEFAULT_REACT_EXPLICIT_STOP: bool = true;
+const DEFAULT_REACT_MAX_HISTORY: usize = 20;
 
 fn default_react_max_iterations() -> usize {
     DEFAULT_REACT_MAX_ITERATIONS
@@ -141,7 +144,7 @@ fn default_react_max_actions() -> usize {
 }
 
 fn default_react_explicit_stop() -> bool {
-    true
+    DEFAULT_REACT_EXPLICIT_STOP
 }
 
 fn default_react_reasoning_prompt() -> String {
@@ -162,11 +165,11 @@ fn default_react_action_types() -> Vec<AgentReactActionType> {
 }
 
 fn default_react_trace_reasoning() -> bool {
-    true
+    DEFAULT_REACT_TRACE_REASONING
 }
 
 fn default_react_max_history() -> usize {
-    20
+    DEFAULT_REACT_MAX_HISTORY
 }
 
 impl Default for AgentReactConfig {
@@ -177,8 +180,8 @@ impl Default for AgentReactConfig {
             stop_conditions: AgentReactStopConditions::default(),
             reasoning_prompt: default_react_reasoning_prompt(),
             action_types: default_react_action_types(),
-            trace_reasoning: true,
-            max_history: default_react_max_history(),
+            trace_reasoning: DEFAULT_REACT_TRACE_REASONING,
+            max_history: DEFAULT_REACT_MAX_HISTORY,
         }
     }
 }
@@ -188,7 +191,7 @@ impl Default for AgentReactStopConditions {
         Self {
             confidence_threshold: DEFAULT_REACT_CONFIDENCE_THRESHOLD,
             max_actions: DEFAULT_REACT_MAX_ACTIONS,
-            explicit_stop: true,
+            explicit_stop: DEFAULT_REACT_EXPLICIT_STOP,
         }
     }
 }
@@ -284,6 +287,14 @@ impl AgentSpec {
             if !(0.0..=1.0).contains(&ct) {
                 return Err(anyhow!(
                     "react.stop_conditions.confidence_threshold must be 0.0–1.0, got {ct}"
+                ));
+            }
+            if react.max_iterations == 0 {
+                return Err(anyhow!("react.max_iterations must be > 0"));
+            }
+            if react.action_types.is_empty() {
+                return Err(anyhow!(
+                    "react.action_types must not be empty (loop cannot act without action types)"
                 ));
             }
         }
@@ -731,6 +742,67 @@ react:
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_negative_confidence_threshold() {
+        let yaml = r#"
+agent_id: bad_ct
+description: negative confidence
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  stop_conditions:
+    confidence_threshold: -0.5
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_zero_max_iterations() {
+        let yaml = r#"
+agent_id: bad_iter
+description: zero iterations
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  max_iterations: 0
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("max_iterations must be > 0"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_empty_action_types() {
+        let yaml = r#"
+agent_id: bad_actions
+description: no actions
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  action_types: []
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("action_types must not be empty"), "got: {err}");
     }
 
     #[test]
