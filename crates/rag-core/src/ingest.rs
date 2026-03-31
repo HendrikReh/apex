@@ -625,17 +625,16 @@ fn resolve_title<'a>(
     sidecar: Option<&'a Sidecar>,
     native_metadata: Option<&'a HashMap<String, String>>,
 ) -> &'a str {
-    if let Some(s) = sidecar {
-        if !s.document.title.is_empty() {
-            return &s.document.title;
-        }
+    if let Some(s) = sidecar
+        && !s.document.title.is_empty()
+    {
+        return &s.document.title;
     }
-    if let Some(nm) = native_metadata {
-        if let Some(title) = nm.get("title") {
-            if !title.is_empty() {
-                return title;
-            }
-        }
+    if let Some(nm) = native_metadata
+        && let Some(title) = nm.get("title")
+        && !title.is_empty()
+    {
+        return title;
     }
     ""
 }
