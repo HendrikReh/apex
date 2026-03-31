@@ -1,10 +1,10 @@
 # Apex
 
 [![CI](https://github.com/HendrikReh/apex/actions/workflows/ci.yml/badge.svg)](https://github.com/HendrikReh/apex/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.9.1-2ea44f?logo=github)](https://github.com/HendrikReh/apex)
+[![Version](https://img.shields.io/badge/version-0.10.0-2ea44f?logo=github)](https://github.com/HendrikReh/apex)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
-[![Roadmap](https://img.shields.io/badge/Roadmap-Phase%201%20--%20Open%20RAG%20Foundation-0a7ea4)](#migration-roadmap)
+[![Roadmap](https://img.shields.io/badge/Roadmap-Phase%203%20--%20Agent%20Workflows-0a7ea4)](#migration-roadmap)
 
 Apex is an API-first, self-hostable Retrieval-Augmented Generation platform focused on grounded answers, clear system boundaries, and production-grade traceability. It ingests documents, builds hybrid retrieval indexes over Postgres and Qdrant, and exposes the workflow through an HTTP API plus a CLI.
 
@@ -112,6 +112,8 @@ rag-cli chat --query "Summarize the main concepts" --collection my-docs
 ```
 rag-cli ──→ rag-client ──→ HTTP ──→ rag-server ──→ rag-core ──→ rag-chunking
                                          │
+                                         ├──→ agent-core (graph-flow DAG runner)
+                                         │
                                     ┌────┴────┐
                                     │ Middleware│
                                     │ stack:   │
@@ -132,6 +134,7 @@ rag-cli ──→ rag-client ──→ HTTP ──→ rag-server ──→ rag-c
 |-------|------|
 | `rag-core` | Extraction, embedding, retrieval, context assembly, stores, config |
 | `rag-chunking` | 9 token-aware text chunking strategies (pure, no IO) |
+| `agent-core` | Graph-flow DAG runner for agent orchestration (YAML-driven specs, checkpoints) |
 | `rag-server` | Axum HTTP API — auth, RBAC, rate limiting, multi-tenant middleware |
 | `rag-client` | Typed HTTP client for the server API |
 | `rag-cli` | CLI for ingest, search, chat, stats, and API key generation |
