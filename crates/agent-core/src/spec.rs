@@ -357,6 +357,11 @@ async fn collect_agent_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
         .with_context(|| format!("failed to read agent spec directory {}", dir.display()))?;
     let mut paths = Vec::new();
     while let Some(entry) = entries.next_entry().await? {
+        // Skip directories and non-regular files.
+        let ft = entry.file_type().await?;
+        if !ft.is_file() {
+            continue;
+        }
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase());
         if matches!(ext.as_deref(), Some("yaml") | Some("yml")) {
