@@ -147,7 +147,7 @@ impl AgentSpec {
         let json_value = serde_json::to_value(yaml_value)
             .context("failed to convert YAML to JSON for schema validation")?;
 
-        let schema = compiled_schema()?;
+        let schema = compiled_schema();
         if !schema.is_valid(&json_value) {
             let messages: Vec<String> = schema
                 .iter_errors(&json_value)
@@ -181,18 +181,21 @@ impl AgentSpec {
 }
 
 /// Compile the embedded schema once, reuse across calls.
-fn compiled_schema() -> anyhow::Result<&'static jsonschema::Validator> {
-    static COMPILED: OnceLock<Result<jsonschema::Validator, String>> = OnceLock::new();
-    match COMPILED.get_or_init(|| {
+///
+/// Schema compilation failure means the embedded JSON is invalid — a
+/// programming error caught at first use. Using `expect()` is appropriate
+/// here since the schema is a static asset baked into the binary.
+fn compiled_schema() -> &'static jsonschema::Validator {
+    static COMPILED: OnceLock<jsonschema::Validator> = OnceLock::new();
+    COMPILED.get_or_init(|| {
+        #[allow(clippy::disallowed_methods)] // one-time init of compile-time constant
         let schema_value: serde_json::Value = serde_json::from_str(AGENT_SPEC_SCHEMA)
-            .map_err(|e| format!("failed to parse embedded agent spec schema: {e}"))?;
+            .expect("embedded agent spec schema is not valid JSON");
+        #[allow(clippy::disallowed_methods)] // one-time init of compile-time constant
         jsonschema::draft202012::options()
             .build(&schema_value)
-            .map_err(|e| format!("failed to compile agent spec schema: {e}"))
-    }) {
-        Ok(v) => Ok(v),
-        Err(e) => Err(anyhow!(e.clone())),
-    }
+            .expect("failed to compile embedded agent spec schema")
+    })
 }
 
 // ---------------------------------------------------------------------------
