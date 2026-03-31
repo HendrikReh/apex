@@ -27,6 +27,8 @@ data/demo/*
 .repoprompt
 .gemini/
 .agents/
+docs/plans/
+docs/superpowers/
 
 # ── Claude Code ──────────────────────────────────────────────────────
 /.claude/*
