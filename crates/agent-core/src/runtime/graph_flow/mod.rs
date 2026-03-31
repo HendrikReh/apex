@@ -202,6 +202,17 @@ impl GraphFlowRuntime {
                         )
                     })?;
 
+                // Only one conditional edge per source is supported —
+                // graph-flow's behavior for multiple registrations is undefined.
+                if conditional.len() > 1 {
+                    let from = &conditional[0].from;
+                    anyhow::bail!(
+                        "task '{from}' has {} conditional edges — \
+                         only one conditional edge per source is supported",
+                        conditional.len()
+                    );
+                }
+
                 for cond_edge in &conditional {
                     // Safe: filter guarantees condition_key is Some.
                     let key = cond_edge.condition_key.clone().unwrap_or_default();
