@@ -17,6 +17,10 @@ serde_json.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
 serial_test = "3"
+rag-core = { path = "../rag-core" }
+rag-server = { path = "../rag-server" }
+test-support = { path = "../test-support" }

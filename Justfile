@@ -53,6 +53,7 @@ unit-test:
 # Starts Docker infra first and then runs the repo's non-provider integration suites.
 integration-test: up
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-client --test client_tests -- --nocapture
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-cli --test e2e -- --ignored --nocapture
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --nocapture
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --ignored --nocapture
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health_degraded -- --ignored --nocapture --test-threads=1

@@ -2171,13 +2171,17 @@ name = "rag-cli"
 version = "0.8.0"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "rag-client",
+ "rag-core",
+ "rag-server",
  "reqwest",
  "serde",
  "serde_json",
  "serial_test",
  "tempfile",
+ "test-support",
  "tokio",
  "uuid",
 ]

@@ -89,6 +89,7 @@ just up
 Then it runs the repo's integration targets, including:
 
 - `crates/rag-client/tests/client_tests.rs`
+- `crates/rag-cli/tests/e2e.rs`
 - `crates/rag-server/tests/health.rs`
 - `crates/rag-server/tests/ingest.rs`
 - `crates/rag-server/tests/search.rs`
@@ -101,6 +102,7 @@ Then it runs the repo's integration targets, including:
 These cover behavior such as:
 
 - ingesting real documents into Postgres + Qdrant
+- invoking `rag-cli` as a subprocess against a live app
 - HTTP request/response behavior through Axum
 - end-to-end API journeys
 - tenant isolation through the API
