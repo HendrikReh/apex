@@ -26,6 +26,7 @@ data/demo/*
 # ── AI / tooling outputs ────────────────────────────────────────────
 .repoprompt
 .gemini/
+.agents/
 
 # ── Claude Code ──────────────────────────────────────────────────────
 /.claude/*
@@ -42,7 +43,3 @@ data/demo/*
 .beads/push-state.json
 .beads/backup
 .worktrees/
-# bd worktree
-feat/tesseract-ocr-fallback/
-# bd worktree
-feat/pdf-native-metadata/

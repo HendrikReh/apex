@@ -19,6 +19,16 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "CMD=$(echo \"$TOOL_INPUT\" | jq -r '.command // empty'); if echo \"$CMD\" | grep -qE 'bd worktree create'; then if ! echo \"$CMD\" | grep -qE 'bd worktree create \\.worktrees/'; then echo 'BLOCKED: Worktrees must be created under .worktrees/. Use: bd worktree create .worktrees/<name>'; exit 1; fi; fi",
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -45,6 +45,26 @@ bd close <id>         # Complete work
 - Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
 - Run `bd prime` for detailed command reference and session close protocol
 
+### Worktrees
+
+**All worktrees must be created under `.worktrees/`.** This is enforced by a PreToolUse hook.
+
+Git worktrees get a copy of `.beads/` but NOT the running Dolt server state. Use `bd worktree create` for proper beads redirect:
+
+```bash
+bd worktree create .worktrees/<name>                    # Creates worktree with beads redirect
+bd worktree create .worktrees/<name> --branch <branch>  # With specific branch
+```
+
+If a worktree was created without `bd worktree create` (e.g., via `git worktree add`), fix beads manually:
+
+```bash
+# In the worktree directory:
+rm -rf .beads/dolt .beads/dolt-server.* .beads/interactions.jsonl .beads/last-touched .beads/push-state.json .beads/backup .beads/.local_version
+echo "../../.beads" > .beads/redirect    # Adjust relative path to main repo's .beads/
+bd doctor                                # Verify: should show 0 errors
+```
+
 ## Session Completion
 
 **When ending a work session**, complete these steps:

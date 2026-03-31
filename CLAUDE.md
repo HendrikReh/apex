@@ -138,25 +138,7 @@ Lessons learned from projectAlpha — avoid these in the rebuild:
 
 ## Task Tracking (Beads)
 
-See **Mandatory: Beads Issue Gate** above. Full beads workflow in `AGENTS.md`.
-
-### Beads in Git Worktrees
-
-Git worktrees get a copy of `.beads/` but NOT the running Dolt server state. **Use `bd worktree create`** to create worktrees with proper beads redirect:
-
-```bash
-bd worktree create <name>                    # Creates worktree with beads redirect
-bd worktree create <name> --branch <branch>  # With specific branch
-```
-
-If a worktree was created without `bd worktree create` (e.g., via `git worktree add`), fix beads manually:
-
-```bash
-# In the worktree directory:
-rm -rf .beads/dolt .beads/dolt-server.* .beads/interactions.jsonl .beads/last-touched .beads/push-state.json .beads/backup .beads/.local_version
-echo "../../.beads" > .beads/redirect    # Adjust relative path to main repo's .beads/
-bd doctor                                # Verify: should show 0 errors
-```
+See **Mandatory: Beads Issue Gate** above. Full beads workflow and worktree instructions in `AGENTS.md`.
 
 ## Verification & Testing Policies
 
