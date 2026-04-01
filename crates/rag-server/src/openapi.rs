@@ -2,7 +2,7 @@
 
 use utoipa::OpenApi;
 
-use crate::routes::{api_keys, chat, collections, health, ingest, search};
+use crate::routes::{agents, api_keys, chat, collections, health, ingest, search};
 use crate::state::ErrorBody;
 
 #[derive(OpenApi)]
@@ -16,6 +16,13 @@ use crate::state::ErrorBody;
     paths(
         health::health,
         health::readiness,
+        agents::list_agents,
+        agents::get_agent,
+        agents::execute_agent,
+        agents::list_runs,
+        agents::get_run,
+        agents::approve_run,
+        agents::reject_run,
         search::search_dense,
         search::search_sparse,
         search::search_hybrid,
@@ -45,6 +52,15 @@ use crate::state::ErrorBody;
         collections::CollectionStatsResponse,
         health::ReadinessResponse,
         health::ReadinessChecks,
+        agents::AgentSummaryResponse,
+        agents::AgentDetailResponse,
+        agents::ExecuteAgentRequest,
+        agents::CheckpointDecisionRequest,
+        agents::RunSummaryResponse,
+        agents::AgentRunResponse,
+        agents::PendingCheckpointResponse,
+        agents::StepRecordResponse,
+        agents::ScoredChunkResponse,
         api_keys::CreateServiceAccountRequest,
         api_keys::CreateServiceAccountResponse,
         api_keys::CreateApiKeyRequest,
@@ -55,6 +71,7 @@ use crate::state::ErrorBody;
     modifiers(&SecurityAddon),
     tags(
         (name = "Health", description = "Liveness and readiness probes"),
+        (name = "Agents", description = "Agent specs and run lifecycle"),
         (name = "Search", description = "Dense, sparse, and hybrid retrieval"),
         (name = "Ingest", description = "Document ingestion"),
         (name = "Chat", description = "RAG chat with citations"),

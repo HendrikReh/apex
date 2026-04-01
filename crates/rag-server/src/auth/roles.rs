@@ -29,6 +29,8 @@ pub enum Capability {
     SearchRead,
     #[serde(rename = "chat.use")]
     ChatUse,
+    #[serde(rename = "agents.operate")]
+    AgentsOperate,
     #[serde(rename = "ingest.write")]
     IngestWrite,
     #[serde(rename = "auth.keys.manage")]
@@ -44,16 +46,24 @@ impl Role {
         let caps: &[Capability] = match self {
             Self::Viewer => &[HealthRead, CollectionsRead, SearchRead, ChatUse],
             Self::Editor => &[HealthRead, CollectionsRead, SearchRead, ChatUse, IngestWrite],
-            // Same as Editor today; will diverge when agent-core adds AgentRun capability.
-            Self::AgentOperator => &[HealthRead, CollectionsRead, SearchRead, ChatUse, IngestWrite],
-            Self::Admin => {
-                &[HealthRead, CollectionsRead, SearchRead, ChatUse, IngestWrite, AuthKeysManage]
+            Self::AgentOperator => {
+                &[HealthRead, CollectionsRead, SearchRead, ChatUse, AgentsOperate, IngestWrite]
             }
+            Self::Admin => &[
+                HealthRead,
+                CollectionsRead,
+                SearchRead,
+                ChatUse,
+                AgentsOperate,
+                IngestWrite,
+                AuthKeysManage,
+            ],
             Self::PlatformOperator => &[
                 HealthRead,
                 CollectionsRead,
                 SearchRead,
                 ChatUse,
+                AgentsOperate,
                 IngestWrite,
                 AuthKeysManage,
                 PlatformAdmin,
@@ -101,6 +111,7 @@ mod tests {
         assert!(caps.contains(&Capability::CollectionsRead));
         assert!(caps.contains(&Capability::SearchRead));
         assert!(caps.contains(&Capability::ChatUse));
+        assert!(!caps.contains(&Capability::AgentsOperate));
         assert!(!caps.contains(&Capability::IngestWrite));
         assert!(!caps.contains(&Capability::AuthKeysManage));
         assert!(!caps.contains(&Capability::PlatformAdmin));
@@ -109,6 +120,15 @@ mod tests {
     #[test]
     fn editor_adds_ingest_write() {
         let caps = Role::Editor.capabilities();
+        assert!(caps.contains(&Capability::IngestWrite));
+        assert!(!caps.contains(&Capability::AgentsOperate));
+        assert!(!caps.contains(&Capability::AuthKeysManage));
+    }
+
+    #[test]
+    fn agent_operator_adds_agent_operations() {
+        let caps = Role::AgentOperator.capabilities();
+        assert!(caps.contains(&Capability::AgentsOperate));
         assert!(caps.contains(&Capability::IngestWrite));
         assert!(!caps.contains(&Capability::AuthKeysManage));
     }
@@ -124,7 +144,7 @@ mod tests {
     #[test]
     fn platform_operator_has_all_capabilities() {
         let caps = Role::PlatformOperator.capabilities();
-        assert_eq!(caps.len(), 7, "platform_operator should have all 7 capabilities");
+        assert_eq!(caps.len(), 8, "platform_operator should have all 8 capabilities");
         assert!(caps.contains(&Capability::PlatformAdmin));
     }
 

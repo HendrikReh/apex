@@ -6,10 +6,12 @@ use axum::response::{IntoResponse, Response};
 use rag_core::TenantId;
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
 
+use crate::agents::AgentManager;
 use crate::auth::Principal;
 use crate::auth::oidc::JwksCache;
 use crate::middleware::rate_limit::RateLimiterState;
 use serde::Serialize;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Runtime authentication and rate-limiting state.
@@ -21,8 +23,9 @@ pub struct AuthState {
 /// Shared application state, wrapped in `Arc` for Axum handlers.
 pub struct AppState {
     pub ingest: IngestService,
-    pub retrieval: RetrievalService,
-    pub chat: ChatService,
+    pub retrieval: Arc<RetrievalService>,
+    pub chat: Arc<ChatService>,
+    pub agents: Arc<AgentManager>,
     pub stores: Stores,
     pub config: AppConfig,
     pub tenant_header: axum::http::HeaderName,

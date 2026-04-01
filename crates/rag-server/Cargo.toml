@@ -16,7 +16,9 @@ name = "rag-server"
 path = "src/main.rs"
 
 [dependencies]
+agent-core = { path = "../agent-core" }
 rag-core = { path = "../rag-core" }
+async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
