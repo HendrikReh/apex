@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
+use rag_server::agents::AgentManager;
 use rag_server::auth::oidc::JwksCache;
 use rag_server::middleware::rate_limit::RateLimiterState;
 use rag_server::router::build_router;
@@ -26,13 +27,22 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
     let config = AppConfig::from_env().expect("test config");
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
-    let retrieval = RetrievalService::new(stores.clone(), &config).expect("test retrieval");
-    let chat = ChatService::with_mock_llm(stores.clone(), &config, "Mock LLM response.".into())
-        .expect("test chat");
+    let retrieval =
+        Arc::new(RetrievalService::new(stores.clone(), &config).expect("test retrieval"));
+    let chat = Arc::new(
+        ChatService::with_mock_llm(stores.clone(), &config, "Mock LLM response.".into())
+            .expect("test chat"),
+    );
+    let agents = Arc::new(
+        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
+            .await
+            .expect("agents"),
+    );
     let tenant_header = config.tenant_header.parse().expect("tenant header");
     let auth =
         AuthState { jwks_cache: JwksCache::default(), rate_limiter: RateLimiterState::default() };
-    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header, auth });
+    let state =
+        Arc::new(AppState { ingest, retrieval, chat, agents, stores, config, tenant_header, auth });
     let router = build_router(state.clone());
     (router, state)
 }

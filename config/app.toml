@@ -32,6 +32,9 @@ embed_max_batch_size = 32
 
 # Server settings
 bind_addr = "0.0.0.0:8080"
+# Runtime location of agent specs loaded by the Phase 9 agent API.
+# Relative paths are anchored to this config file's directory.
+agent_specs_dir = "agents"
 # Optional allowlist for path-based ingestion. Requests to `/ingest` must
 # resolve under one of these directories after canonicalization. Symlinks that
 # resolve outside these roots are rejected. Leave empty to disable host-path

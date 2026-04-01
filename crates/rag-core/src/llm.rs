@@ -568,6 +568,7 @@ mod tests {
     use crate::config::AuthMode;
     use backoff::backoff::Backoff;
 
+    #[allow(clippy::disallowed_methods)] // test helper — .expect() is fine
     fn test_config() -> AppConfig {
         AppConfig {
             qdrant_url: "http://127.0.0.1:6334".to_string(),
@@ -596,6 +597,10 @@ mod tests {
             tenant_header: "x-tenant".to_string(),
             request_id_header: "x-request-id".to_string(),
             ingest_allowed_roots: vec![],
+            agent_specs_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../config/agents")
+                .canonicalize()
+                .expect("canonical agent specs dir"),
             oidc_issuer: None,
             oidc_audience: None,
             oidc_jwks_url: None,

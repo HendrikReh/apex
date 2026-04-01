@@ -2531,7 +2531,9 @@ version = "0.10.1"
 name = "rag-server"
 version = "0.10.1"
 dependencies = [
+ "agent-core",
  "anyhow",
+ "async-trait",
  "axum",
  "base64",
  "chrono",

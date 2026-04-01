@@ -58,6 +58,9 @@ struct RouteEntry {
 /// Static route table. Path matching is handled by `route_policy` below.
 /// Keep entries grouped by subsystem.
 const STATIC_ROUTES: &[(&str, RouteEntry)] = &[
+    // Agents
+    ("/agents", RouteEntry { method: &Method::GET, capability: Capability::AgentsOperate }),
+    ("/runs", RouteEntry { method: &Method::GET, capability: Capability::AgentsOperate }),
     // Ingest
     ("/ingest", RouteEntry { method: &Method::POST, capability: Capability::IngestWrite }),
     ("/ingest/upload", RouteEntry { method: &Method::POST, capability: Capability::IngestWrite }),
@@ -82,6 +85,19 @@ const STATIC_ROUTES: &[(&str, RouteEntry)] = &[
 /// Dynamic route patterns that cannot be expressed as static strings.
 fn dynamic_route(method: &Method, path: &str) -> Option<Capability> {
     match (method, path) {
+        (&Method::GET, p) if p.starts_with("/agents/") && !p.ends_with("/execute") => {
+            Some(Capability::AgentsOperate)
+        }
+        (&Method::POST, p) if p.starts_with("/agents/") && p.ends_with("/execute") => {
+            Some(Capability::AgentsOperate)
+        }
+        (&Method::GET, p) if p.starts_with("/runs/") => Some(Capability::AgentsOperate),
+        (&Method::POST, p) if p.starts_with("/runs/") && p.ends_with("/approve") => {
+            Some(Capability::AgentsOperate)
+        }
+        (&Method::POST, p) if p.starts_with("/runs/") && p.ends_with("/reject") => {
+            Some(Capability::AgentsOperate)
+        }
         (&Method::GET, p) if p.starts_with("/collections/") && p.ends_with("/stats") => {
             Some(Capability::CollectionsRead)
         }
@@ -93,24 +109,28 @@ fn dynamic_route(method: &Method, path: &str) -> Option<Capability> {
 }
 
 fn is_dynamic_path(path: &str) -> bool {
-    (path.starts_with("/collections/") && path.ends_with("/stats"))
+    (path.starts_with("/agents/"))
+        || (path.starts_with("/runs/"))
+        || (path.starts_with("/collections/") && path.ends_with("/stats"))
         || path.starts_with("/auth/api-keys/")
 }
 
 fn route_policy(method: &Method, path: &str) -> RoutePolicy {
+    let effective_method = if *method == Method::HEAD { &Method::GET } else { method };
+
     // Check static routes first.
     let mut path_known = false;
     for (route_path, entry) in STATIC_ROUTES {
         if *route_path == path {
             path_known = true;
-            if entry.method == method {
+            if entry.method == effective_method {
                 return RoutePolicy::Authorized(entry.capability);
             }
         }
     }
 
     // Check dynamic patterns.
-    if let Some(cap) = dynamic_route(method, path) {
+    if let Some(cap) = dynamic_route(effective_method, path) {
         return RoutePolicy::Authorized(cap);
     }
     if is_dynamic_path(path) {
@@ -133,6 +153,50 @@ mod tests {
         assert_eq!(
             route_policy(&Method::POST, "/ingest/upload"),
             RoutePolicy::Authorized(Capability::IngestWrite),
+        );
+    }
+
+    #[test]
+    fn agents_require_agents_operate() {
+        assert_eq!(
+            route_policy(&Method::GET, "/agents"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/agents"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::GET, "/agents/rag_spike"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/agents/rag_spike"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::POST, "/agents/rag_spike/execute"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::GET, "/runs"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/runs"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::GET, "/runs/00000000-0000-0000-0000-000000000000"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/runs/00000000-0000-0000-0000-000000000000"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::POST, "/runs/00000000-0000-0000-0000-000000000000/approve"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
         );
     }
 

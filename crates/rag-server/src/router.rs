@@ -24,6 +24,13 @@ use crate::state::AppState;
 ///   request-ID → tenant → auth → rate-limit → authz → handler
 pub fn build_router(state: Arc<AppState>) -> Router {
     let protected = Router::new()
+        .route("/agents", get(routes::agents::list_agents))
+        .route("/agents/:id", get(routes::agents::get_agent))
+        .route("/agents/:id/execute", post(routes::agents::execute_agent))
+        .route("/runs", get(routes::agents::list_runs))
+        .route("/runs/:id", get(routes::agents::get_run))
+        .route("/runs/:id/approve", post(routes::agents::approve_run))
+        .route("/runs/:id/reject", post(routes::agents::reject_run))
         .route("/ingest", post(routes::ingest::ingest_paths))
         .route(
             "/ingest/upload",

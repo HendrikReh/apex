@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::config::AppConfig;
 use crate::context::{Citation, ContextBuilder, ContextConfig, DedupeStrategy};
+use crate::fusion::FusedChunk;
 use crate::llm::{ChatBackend, ChatMessage, ChatRole, CompletionRequest, TokenUsage};
 use crate::prompt::{PromptContext, PromptRenderer, render_context_chunks};
 use crate::retrieval::RetrievalService;
@@ -211,6 +212,46 @@ impl ChatService {
             usage: llm_response.usage,
             model: llm_response.model,
         })
+    }
+
+    /// Summarize a set of already-retrieved chunks for agent orchestration.
+    ///
+    /// This avoids re-running retrieval and reuses the configured LLM backend,
+    /// including the mock backend used by integration tests.
+    pub async fn summarize_chunks(&self, query: &str, chunks: Vec<FusedChunk>) -> Result<String> {
+        let context = self.context_builder.build(
+            chunks,
+            &ContextConfig {
+                max_tokens: self.defaults.context_max_tokens,
+                max_chunks: self.defaults.context_max_chunks,
+                dedupe_strategy: DedupeStrategy::ByDocId,
+                include_citations: false,
+            },
+        );
+        let context_text = render_context_chunks(&context.chunks);
+        let system_prompt = format!(
+            "You are an analyst summarizing retrieved context for an agent workflow.\n\
+             Summarize only what is supported by the provided context.\n\
+             If the context is empty, say so plainly.\n\n\
+             Context:\n{context_text}"
+        );
+        let messages = [ChatMessage { role: ChatRole::User, content: query.to_string() }];
+        let response = self
+            .backend
+            .complete(
+                &CompletionRequest {
+                    system: &system_prompt,
+                    messages: &messages,
+                    temperature: self.defaults.temperature,
+                    max_tokens: self.defaults.max_tokens,
+                    stop: vec![],
+                },
+                self.defaults.max_retries,
+                self.defaults.retry_backoff_ms,
+            )
+            .await
+            .context("agent chunk summarization")?;
+        Ok(response.text)
     }
 
     /// Resolve or create conversation, returning (conversation_id, collection).

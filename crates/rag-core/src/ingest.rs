@@ -1066,6 +1066,7 @@ mod tests {
     }
 
     /// Helper: canonicalize a path to match what `AppConfig::from_env` produces.
+    #[allow(clippy::disallowed_methods)]
     fn canonical_root(path: &std::path::Path) -> PathBuf {
         path.canonicalize().expect("canonical root")
     }

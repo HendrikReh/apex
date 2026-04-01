@@ -5,6 +5,7 @@ use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
 use rag_core::{AppConfig, ChatService, IngestService, RetrievalService, Stores};
+use rag_server::agents::AgentManager;
 use rag_server::auth::oidc::JwksCache;
 use rag_server::middleware::rate_limit::RateLimiterState;
 use rag_server::router;
@@ -33,9 +34,16 @@ async fn main() -> Result<()> {
     let stores = Stores::new(&config).await.context("connecting stores")?;
 
     let ingest = IngestService::new(stores.clone(), &config).context("building ingest service")?;
-    let retrieval =
-        RetrievalService::new(stores.clone(), &config).context("building retrieval service")?;
-    let chat = ChatService::new(stores.clone(), &config).context("building chat service")?;
+    let retrieval = Arc::new(
+        RetrievalService::new(stores.clone(), &config).context("building retrieval service")?,
+    );
+    let chat =
+        Arc::new(ChatService::new(stores.clone(), &config).context("building chat service")?);
+    let agents = Arc::new(
+        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
+            .await
+            .context("loading agent manager")?,
+    );
 
     let tenant_header = config.tenant_header.parse().context("parsing tenant header name")?;
 
@@ -52,7 +60,8 @@ async fn main() -> Result<()> {
         ),
     };
 
-    let state = Arc::new(AppState { ingest, retrieval, chat, stores, config, tenant_header, auth });
+    let state =
+        Arc::new(AppState { ingest, retrieval, chat, agents, stores, config, tenant_header, auth });
 
     if state.config.auth_mode == rag_core::config::AuthMode::None {
         tracing::warn!("auth_mode=none: running without authentication (development only)");

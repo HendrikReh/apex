@@ -215,6 +215,7 @@ struct AppSection {
     tenant_header: Option<String>,
     request_id_header: Option<String>,
     ingest_allowed_roots: Option<Vec<String>>,
+    agent_specs_dir: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +262,7 @@ pub struct AppConfig {
     pub tenant_header: String,
     pub request_id_header: String,
     pub ingest_allowed_roots: Vec<std::path::PathBuf>,
+    pub agent_specs_dir: std::path::PathBuf,
     // OIDC
     pub oidc_issuer: Option<String>,
     pub oidc_audience: Option<String>,
@@ -337,6 +339,7 @@ impl fmt::Debug for AppConfig {
             .field("tenant_header", &self.tenant_header)
             .field("request_id_header", &self.request_id_header)
             .field("ingest_allowed_roots", &self.ingest_allowed_roots)
+            .field("agent_specs_dir", &self.agent_specs_dir)
             .field("oidc_issuer", &self.oidc_issuer)
             .field("oidc_audience", &self.oidc_audience)
             .field("oidc_jwks_url", &self.oidc_jwks_url)
@@ -576,6 +579,25 @@ impl AppConfig {
             }
             canonical
         };
+        let agent_specs_dir = {
+            let raw = env_string("AGENT_SPECS_DIR")
+                .or_else(|| f.agent_specs_dir.clone())
+                .unwrap_or_else(|| "config/agents".to_owned());
+            let path = std::path::Path::new(&raw);
+            let candidate = if path.is_absolute() {
+                path.to_path_buf()
+            } else if let Some(parent) = std::path::Path::new(&config_path).parent() {
+                parent.join(path)
+            } else {
+                path.to_path_buf()
+            };
+            candidate.canonicalize().with_context(|| {
+                format!(
+                    "agent_specs_dir does not exist or is inaccessible: {}",
+                    candidate.display()
+                )
+            })?
+        };
 
         let r = &retrieval_settings;
         let ctx = &context_settings;
@@ -759,6 +781,7 @@ impl AppConfig {
             tenant_header,
             request_id_header,
             ingest_allowed_roots,
+            agent_specs_dir,
             oidc_issuer,
             oidc_audience,
             oidc_jwks_url,
@@ -835,6 +858,7 @@ mod tests {
             std::env::remove_var("TENANT_HEADER");
             std::env::remove_var("REQUEST_ID_HEADER");
             std::env::remove_var("INGEST_ALLOWED_ROOTS");
+            std::env::remove_var("AGENT_SPECS_DIR");
             std::env::remove_var("CHUNKING_MAX_TOKENS");
             std::env::remove_var("CHUNKING_OVERLAP_RATIO");
             std::env::remove_var("RRF_K");
@@ -882,6 +906,14 @@ mod tests {
     fn from_env_defaults_and_override() {
         // SAFETY: test-only env manipulation; single logical test avoids races.
         unsafe { clear_config_env() };
+        let workspace_agent_specs = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .join("config/agents")
+            .canonicalize()
+            .expect("canonical agent specs dir");
+        unsafe { std::env::set_var("AGENT_SPECS_DIR", &workspace_agent_specs) };
 
         // -- Part 1: verify all defaults --
         let cfg = match AppConfig::from_current_env() {
@@ -915,6 +947,7 @@ mod tests {
         assert_eq!(cfg.tenant_header, "x-tenant");
         assert_eq!(cfg.request_id_header, "x-request-id");
         assert!(cfg.ingest_allowed_roots.is_empty());
+        assert_eq!(cfg.agent_specs_dir, workspace_agent_specs);
         assert_eq!(cfg.rrf_k, 60);
         assert_eq!(cfg.dense_top_k, 20);
         assert_eq!(cfg.sparse_top_k, 20);
@@ -1019,7 +1052,18 @@ mod tests {
         assert_eq!(cfg.ingest_allowed_roots[1], root_b.path().canonicalize().expect("canonical b"),);
         unsafe { std::env::remove_var("INGEST_ALLOWED_ROOTS") };
 
-        // -- Part 7: secret env vars load as redacted types --
+        // -- Part 7: agent specs dir env override --
+        let agent_specs_dir = tempfile::tempdir().expect("tempdir agent specs");
+        unsafe { std::env::set_var("AGENT_SPECS_DIR", agent_specs_dir.path()) };
+        let cfg = AppConfig::from_current_env().expect("from_env with AGENT_SPECS_DIR");
+        assert_eq!(
+            cfg.agent_specs_dir,
+            agent_specs_dir.path().canonicalize().expect("canonical agent specs env"),
+        );
+        unsafe { std::env::remove_var("AGENT_SPECS_DIR") };
+        unsafe { std::env::set_var("AGENT_SPECS_DIR", &workspace_agent_specs) };
+
+        // -- Part 8: secret env vars load as redacted types --
         unsafe {
             std::env::set_var("QDRANT_API_KEY", "qdrant-secret");
             std::env::set_var("BOOTSTRAP_PLATFORM_API_KEY", "bootstrap-secret");
@@ -1054,7 +1098,7 @@ mod tests {
             std::env::remove_var("LLM_API_KEY");
         }
 
-        // -- Part 8: zero ocr_timeout_secs rejected --
+        // -- Part 9: zero ocr_timeout_secs rejected --
         unsafe { std::env::set_var("OCR_TIMEOUT_SECS", "0") };
         let err = AppConfig::from_current_env()
             .expect_err("zero ocr_timeout_secs should be rejected")
@@ -1063,7 +1107,10 @@ mod tests {
             err.contains("ocr_timeout_secs"),
             "error should mention ocr_timeout_secs, got: {err}"
         );
-        unsafe { std::env::remove_var("OCR_TIMEOUT_SECS") };
+        unsafe {
+            std::env::remove_var("OCR_TIMEOUT_SECS");
+            std::env::remove_var("AGENT_SPECS_DIR");
+        };
     }
 
     #[test]
