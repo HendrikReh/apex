@@ -24,6 +24,6 @@ pub use spec::{
     AgentContextProfile, AgentDedupeMode, AgentGuardrailsProfile, AgentPolicies,
     AgentReactActionType, AgentReactConfig, AgentReactStopConditions, AgentRegistry,
     AgentRetrievalMode, AgentRetrievalProfile, AgentRetrievalStep, AgentSpec, AgentToolFilters,
-    DefaultToolRegistry, GuardrailActionMode, ToolRegistry,
+    DefaultToolRegistry, GuardrailActionMode, ToolRegistry, substitute_placeholders,
 };
 pub use types::{AgentRunResult, AgentState, QueryType};
