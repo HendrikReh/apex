@@ -55,6 +55,9 @@ pub struct AgentSpec {
     /// Optional ReAct loop configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub react: Option<AgentReactConfig>,
+    /// Tools this agent requires to operate (validated at load time).
+    #[serde(default)]
+    pub required_tools: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +400,40 @@ fn default_timeout_seconds() -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// Tool registry
+// ---------------------------------------------------------------------------
+
+/// Registry of known tool names for validating `required_tools`.
+///
+/// Implementations can enumerate all tools available in the system so that
+/// spec loading can catch unknown tool references early.
+pub trait ToolRegistry {
+    /// Return the set of known tool names.
+    fn known_tools(&self) -> HashSet<String>;
+}
+
+/// Default tool registry with the built-in tool names from the RAG pipeline.
+pub struct DefaultToolRegistry;
+
+impl DefaultToolRegistry {
+    /// Built-in tool names shipped with the agent runtime.
+    const BUILT_IN: &[&str] = &[
+        "retrieval.search",
+        "retrieval.dense",
+        "retrieval.sparse",
+        "retrieval.fts",
+        "sql_allowlist",
+        "hybrid_search",
+    ];
+}
+
+impl ToolRegistry for DefaultToolRegistry {
+    fn known_tools(&self) -> HashSet<String> {
+        Self::BUILT_IN.iter().map(|s| (*s).to_string()).collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
 
@@ -449,6 +486,33 @@ impl AgentSpec {
                     "react.action_types must not be empty (loop cannot act without action types)"
                 ));
             }
+        }
+        Ok(())
+    }
+
+    /// Validate that all `required_tools` are present in the given registry.
+    ///
+    /// This is intentionally separate from `validate()` because it requires
+    /// an external registry — callers invoke it after loading when a registry
+    /// is available.
+    pub fn validate_required_tools(&self, registry: &dyn ToolRegistry) -> anyhow::Result<()> {
+        if self.required_tools.is_empty() {
+            return Ok(());
+        }
+        let known = registry.known_tools();
+        let mut unknown: Vec<&str> = self
+            .required_tools
+            .iter()
+            .filter(|tool| !known.contains(tool.as_str()))
+            .map(|s| s.as_str())
+            .collect();
+        if !unknown.is_empty() {
+            unknown.sort();
+            return Err(anyhow!(
+                "agent '{}' requires unknown tools: {}",
+                self.agent_id,
+                unknown.join(", ")
+            ));
         }
         Ok(())
     }
@@ -940,6 +1004,91 @@ graph:
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         assert!(spec.context.is_none());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_required_tools() {
+        let yaml = r#"
+agent_id: tools_test
+description: required tools test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+required_tools:
+  - retrieval.search
+  - hybrid_search
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert_eq!(spec.required_tools, vec!["retrieval.search", "hybrid_search"]);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn validates_required_tools_pass() {
+        let yaml = r#"
+agent_id: tools_ok
+description: known tools
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+required_tools:
+  - retrieval.search
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let registry = DefaultToolRegistry;
+        assert!(spec.validate_required_tools(&registry).is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn validates_required_tools_unknown() {
+        let yaml = r#"
+agent_id: tools_bad
+description: unknown tool
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+required_tools:
+  - retrieval.search
+  - magic_wand
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let registry = DefaultToolRegistry;
+        let err = spec.validate_required_tools(&registry).unwrap_err();
+        assert!(err.to_string().contains("magic_wand"), "got: {err}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn empty_required_tools_is_valid() {
+        let yaml = r#"
+agent_id: no_tools
+description: no required tools
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.required_tools.is_empty());
+        let registry = DefaultToolRegistry;
+        assert!(spec.validate_required_tools(&registry).is_ok());
     }
 
     #[test]
