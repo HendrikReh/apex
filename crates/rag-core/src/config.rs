@@ -587,19 +587,16 @@ impl AppConfig {
             let candidate = if path.is_absolute() {
                 path.to_path_buf()
             } else if let Some(parent) = std::path::Path::new(&config_path).parent() {
-                let anchored = parent.join(path);
-                if anchored.exists() { anchored } else { path.to_path_buf() }
+                parent.join(path)
             } else {
                 path.to_path_buf()
             };
-            candidate
-                .canonicalize()
-                .with_context(|| {
-                    format!(
-                        "agent_specs_dir does not exist or is inaccessible: {}",
-                        candidate.display()
-                    )
-                })?
+            candidate.canonicalize().with_context(|| {
+                format!(
+                    "agent_specs_dir does not exist or is inaccessible: {}",
+                    candidate.display()
+                )
+            })?
         };
 
         let r = &retrieval_settings;

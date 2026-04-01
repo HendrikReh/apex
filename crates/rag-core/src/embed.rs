@@ -481,7 +481,8 @@ mod tests {
             tenant_header: "x-tenant".to_string(),
             request_id_header: "x-request-id".to_string(),
             ingest_allowed_roots: vec![],
-            agent_specs_dir: std::path::Path::new("config/agents")
+            agent_specs_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../config/agents")
                 .canonicalize()
                 .expect("canonical agent specs dir"),
             oidc_issuer: None,
