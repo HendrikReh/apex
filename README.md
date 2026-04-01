@@ -1,7 +1,7 @@
 # Apex
 
 [![CI](https://github.com/HendrikReh/apex/actions/workflows/ci.yml/badge.svg)](https://github.com/HendrikReh/apex/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.10.0-2ea44f?logo=github)](https://github.com/HendrikReh/apex)
+[![Version](https://img.shields.io/badge/version-0.10.1-2ea44f?logo=github)](https://github.com/HendrikReh/apex)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.94%2B-orange)](https://www.rust-lang.org/)
 [![Roadmap](https://img.shields.io/badge/Roadmap-Phase%202%20--%20Agent%20Workflows-0a7ea4)](#migration-roadmap)
