@@ -28,6 +28,7 @@ data/demo/*
 .gemini/
 .agents/
 docs/plans/
+docs/reviews/
 docs/superpowers/
 
 # ── Claude Code ──────────────────────────────────────────────────────
