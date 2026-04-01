@@ -65,7 +65,10 @@ pub struct AgentSpec {
     /// Optional ReAct loop configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub react: Option<AgentReactConfig>,
-    /// Tools this agent requires to operate (validated at load time).
+    /// Tools this agent requires to operate.
+    ///
+    /// Use the registry-backed load/parse helpers to reject unknown tools
+    /// during spec loading.
     #[serde(default)]
     pub required_tools: Vec<String>,
 }
@@ -502,12 +505,33 @@ impl AgentSpec {
         Ok(spec)
     }
 
+    /// Parse a spec from a YAML string and validate required tools.
+    pub fn from_yaml_str_with_registry(
+        yaml: &str,
+        registry: &dyn ToolRegistry,
+    ) -> anyhow::Result<Self> {
+        let spec = Self::from_yaml_str(yaml)?;
+        spec.validate_required_tools(registry)?;
+        Ok(spec)
+    }
+
     /// Load a spec from a YAML file with JSON schema validation.
     pub async fn from_yaml_file(path: &Path) -> anyhow::Result<Self> {
         let content = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
         Self::from_yaml_str(&content)
+    }
+
+    /// Load a spec from a YAML file and validate required tools.
+    pub async fn from_yaml_file_with_registry(
+        path: &Path,
+        registry: &dyn ToolRegistry,
+    ) -> anyhow::Result<Self> {
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
+        Self::from_yaml_str_with_registry(&content, registry)
     }
 
     /// Load a spec from a YAML file **without** JSON schema validation.
@@ -547,6 +571,18 @@ impl AgentSpec {
         let spec: Self = serde_json::from_value(json_value)
             .context("failed to deserialize agent spec after placeholder substitution")?;
         spec.validate()?;
+        Ok(spec)
+    }
+
+    /// Parse a spec from YAML with placeholder substitution and validate
+    /// required tools.
+    pub fn from_yaml_str_with_placeholders_and_registry(
+        yaml: &str,
+        placeholders: &HashMap<String, String>,
+        registry: &dyn ToolRegistry,
+    ) -> anyhow::Result<Self> {
+        let spec = Self::from_yaml_str_with_placeholders(yaml, placeholders)?;
+        spec.validate_required_tools(registry)?;
         Ok(spec)
     }
 }
@@ -654,7 +690,7 @@ impl AgentSpec {
         self.validate_graph_references()?;
         self.validate_conditional_edges()?;
         self.validate_acyclicity()?;
-        self.validate_checkpoint_references()?;
+        self.validate_checkpoints()?;
         self.validate_react_config()?;
         self.validate_policies()?;
         Ok(())
@@ -875,10 +911,21 @@ impl AgentSpec {
         Ok(())
     }
 
-    fn validate_checkpoint_references(&self) -> anyhow::Result<()> {
+    fn validate_checkpoints(&self) -> anyhow::Result<()> {
         let task_set: HashSet<&str> = self.graph.tasks.iter().map(|t| t.as_str()).collect();
+        let mut checkpoint_ids = HashSet::new();
+        let mut checkpoint_after_tasks = HashSet::new();
 
         for cp in &self.checkpoints {
+            if !checkpoint_ids.insert(cp.checkpoint_id.as_str()) {
+                return Err(anyhow!("duplicate checkpoint_id '{}'", cp.checkpoint_id));
+            }
+            if !checkpoint_after_tasks.insert(cp.after_task.as_str()) {
+                return Err(anyhow!(
+                    "multiple checkpoints configured after task '{}'",
+                    cp.after_task
+                ));
+            }
             if !task_set.contains(cp.after_task.as_str()) {
                 return Err(anyhow!(
                     "checkpoint '{}' references unknown task '{}'",
@@ -911,6 +958,7 @@ impl AgentRegistry {
     pub async fn load_from_dir(
         dir: &Path,
         placeholders: &HashMap<String, String>,
+        registry: &dyn ToolRegistry,
     ) -> anyhow::Result<Self> {
         let mut paths = collect_agent_files(dir).await?;
         paths.sort();
@@ -921,9 +969,13 @@ impl AgentRegistry {
                 .await
                 .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
             let spec = if placeholders.is_empty() {
-                AgentSpec::from_yaml_str(&content)
+                AgentSpec::from_yaml_str_with_registry(&content, registry)
             } else {
-                AgentSpec::from_yaml_str_with_placeholders(&content, placeholders)
+                AgentSpec::from_yaml_str_with_placeholders_and_registry(
+                    &content,
+                    placeholders,
+                    registry,
+                )
             }
             .with_context(|| format!("failed to load {}", path.display()))?;
             if agents.contains_key(&spec.agent_id) {
@@ -1151,6 +1203,53 @@ checkpoints:
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("checkpoint 'cp1' references unknown task"));
+    }
+
+    #[test]
+    fn rejects_duplicate_checkpoint_id() {
+        let yaml = r#"
+agent_id: bad
+description: duplicate checkpoint ids
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+checkpoints:
+  - checkpoint_id: cp1
+    after_task: a
+  - checkpoint_id: cp1
+    after_task: b
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("duplicate checkpoint_id 'cp1'"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_multiple_checkpoints_after_same_task() {
+        let yaml = r#"
+agent_id: bad
+description: duplicate checkpoint task mapping
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+checkpoints:
+  - checkpoint_id: cp1
+    after_task: a
+  - checkpoint_id: cp2
+    after_task: a
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("multiple checkpoints configured after task 'a'"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1824,6 +1923,7 @@ bogus_field: true
     #[allow(clippy::disallowed_methods)]
     async fn registry_load_from_dir() {
         let dir = tempfile::tempdir().unwrap();
+        let tool_registry = DefaultToolRegistry;
         let spec_a = r#"
 agent_id: agent_a
 description: agent A
@@ -1851,7 +1951,8 @@ graph:
         // Non-YAML file should be ignored.
         tokio::fs::write(dir.path().join("readme.txt"), "ignore me").await.unwrap();
 
-        let registry = AgentRegistry::load_from_dir(dir.path(), &HashMap::new()).await.unwrap();
+        let registry =
+            AgentRegistry::load_from_dir(dir.path(), &HashMap::new(), &tool_registry).await.unwrap();
         assert_eq!(registry.len(), 2);
         assert!(registry.get("agent_a").is_some());
         assert!(registry.get("agent_b").is_some());
@@ -1861,6 +1962,7 @@ graph:
     #[allow(clippy::disallowed_methods)]
     async fn registry_rejects_duplicate_agent_id() {
         let dir = tempfile::tempdir().unwrap();
+        let tool_registry = DefaultToolRegistry;
         let spec = r#"
 agent_id: dupe
 description: duplicate
@@ -1874,8 +1976,35 @@ graph:
         tokio::fs::write(dir.path().join("first.yaml"), spec).await.unwrap();
         tokio::fs::write(dir.path().join("second.yaml"), spec).await.unwrap();
 
-        let err = AgentRegistry::load_from_dir(dir.path(), &HashMap::new()).await.unwrap_err();
+        let err = AgentRegistry::load_from_dir(dir.path(), &HashMap::new(), &tool_registry)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("duplicate agent_id 'dupe'"), "got: {err}");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn registry_rejects_unknown_required_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool_registry = DefaultToolRegistry;
+        let spec = r#"
+agent_id: bad_tools
+description: unknown required tool
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+required_tools:
+  - magic_wand
+"#;
+        tokio::fs::write(dir.path().join("bad.yaml"), spec).await.unwrap();
+
+        let err = AgentRegistry::load_from_dir(dir.path(), &HashMap::new(), &tool_registry)
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("magic_wand"), "got: {err:#}");
     }
 
     #[test]
