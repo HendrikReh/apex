@@ -506,15 +506,7 @@ graph:
     - { from: hybrid_search, to: final_answer }
     - { from: summarize, to: final_answer }
 "#;
-    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
-        spec,
-        Arc::new(MockRetrieval),
-        Arc::new(MockChat),
-        Arc::new(AutoApprove),
-    );
-
-    let err = runtime.start(config()).await.expect_err("should reject multiple conditionals");
+    let err = AgentSpec::from_yaml_str(yaml).expect_err("should reject multiple conditionals");
     let msg = err.to_string();
     assert!(msg.contains("conditional edges"), "expected multiple-conditional error, got: {msg}");
 }
@@ -540,15 +532,7 @@ graph:
     - { from: hybrid_search, to: summarize }
     - { from: summarize, to: final_answer }
 "#;
-    let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
-        spec,
-        Arc::new(MockRetrieval),
-        Arc::new(MockChat),
-        Arc::new(AutoApprove),
-    );
-
-    let err = runtime.start(config()).await.expect_err("should fail without fallback");
+    let err = AgentSpec::from_yaml_str(yaml).expect_err("should fail without fallback");
     let msg = err.to_string();
     assert!(msg.contains("no unconditional fallback"), "expected fallback error, got: {msg}");
 }

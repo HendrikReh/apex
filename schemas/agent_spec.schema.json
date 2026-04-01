@@ -77,6 +77,139 @@
           }
         }
       }
+    },
+    "context": {
+      "type": "object",
+      "required": ["template_id", "max_tokens", "max_chunks", "dedupe_strategy"],
+      "additionalProperties": false,
+      "properties": {
+        "template_id": { "type": "string", "minLength": 1 },
+        "max_tokens": { "type": "integer", "minimum": 1 },
+        "max_chunks": { "type": "integer", "minimum": 1 },
+        "dedupe_strategy": {
+          "type": "string",
+          "enum": ["doc_id", "chunk_id", "semantic", "none"]
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "required": ["mode", "top_k", "enable_rewrite"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["dense", "sparse", "hybrid", "fts"]
+        },
+        "top_k": { "type": "integer", "minimum": 1 },
+        "per_collection_limit": { "type": "integer", "minimum": 1 },
+        "enable_rewrite": { "type": "boolean" },
+        "plan_steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["query", "mode", "top_k", "collections"],
+            "additionalProperties": false,
+            "properties": {
+              "query": { "type": "string" },
+              "mode": {
+                "type": "string",
+                "enum": ["dense", "sparse", "hybrid", "fts"]
+              },
+              "top_k": { "type": "integer", "minimum": 1 },
+              "collections": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 },
+                "minItems": 1
+              },
+              "filters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "tenant": { "type": "string" },
+                  "doc_ids": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "language": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "guardrails": {
+      "type": "object",
+      "required": [
+        "injection_enabled",
+        "injection_action",
+        "pii_enabled",
+        "policy_classifier_enabled",
+        "safety_classifier_enabled"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "injection_enabled": { "type": "boolean" },
+        "injection_action": {
+          "type": "string",
+          "enum": ["flag", "block"]
+        },
+        "pii_enabled": { "type": "boolean" },
+        "policy_classifier_enabled": { "type": "boolean" },
+        "safety_classifier_enabled": { "type": "boolean" }
+      }
+    },
+    "policies": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_citations": { "type": "boolean", "default": false },
+        "require_policy_context": { "type": "boolean", "default": false },
+        "allowed_collections": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "react": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "max_iterations": { "type": "integer", "minimum": 1 },
+        "stop_conditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "confidence_threshold": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+            "max_actions": { "type": "integer", "minimum": 1 },
+            "explicit_stop": { "type": "boolean" }
+          }
+        },
+        "reasoning_prompt": { "type": "string" },
+        "action_types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["search", "refine_query", "request_detail", "conclude"]
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "trace_reasoning": { "type": "boolean" },
+        "max_history": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "required_tools": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
     }
   }
 }

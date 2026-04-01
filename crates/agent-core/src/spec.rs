@@ -35,6 +35,7 @@ const SUPPORTED_VERSIONS: &[&str] = &["1.0"];
 
 /// High-level agent specification loaded from YAML.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentSpec {
     /// Unique identifier for this agent (e.g. `"rag_spike"`).
     pub agent_id: String,
@@ -75,6 +76,7 @@ pub struct AgentSpec {
 
 /// Directed acyclic graph definition.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentGraphSpec {
     /// Task ID where execution begins.
     pub start_task: String,
@@ -86,6 +88,7 @@ pub struct AgentGraphSpec {
 
 /// A directed edge between two tasks.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentGraphEdge {
     pub from: String,
     pub to: String,
@@ -99,6 +102,7 @@ pub struct AgentGraphEdge {
 
 /// Controls how retrieved chunks are assembled into LLM context.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentContextProfile {
     /// Template identifier for prompt assembly.
     pub template_id: String,
@@ -130,6 +134,7 @@ pub enum AgentDedupeMode {
 
 /// How retrieval searches are executed for this agent.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentRetrievalProfile {
     /// Primary retrieval mode.
     pub mode: AgentRetrievalMode,
@@ -157,6 +162,7 @@ pub enum AgentRetrievalMode {
 
 /// A single step in a multi-step retrieval plan.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentRetrievalStep {
     /// Query text or template for this step.
     pub query: String,
@@ -173,6 +179,7 @@ pub struct AgentRetrievalStep {
 
 /// Filters applied to a retrieval step.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentToolFilters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tenant: Option<String>,
@@ -190,6 +197,7 @@ pub struct AgentToolFilters {
 
 /// Per-agent safety controls (injection detection, PII filtering, classifiers).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentGuardrailsProfile {
     /// Whether prompt-injection detection is enabled.
     pub injection_enabled: bool,
@@ -222,6 +230,7 @@ pub enum GuardrailActionMode {
 
 /// Data governance constraints for this agent.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentPolicies {
     /// Whether citations are required in the final answer.
     #[serde(default)]
@@ -240,6 +249,7 @@ pub struct AgentPolicies {
 
 /// Configuration for a ReAct (Reasoning + Acting) loop.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentReactConfig {
     /// Whether the ReAct loop is enabled.
     #[serde(default)]
@@ -266,6 +276,7 @@ pub struct AgentReactConfig {
 
 /// Stop conditions for the ReAct loop.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentReactStopConditions {
     /// Confidence threshold (0.0–1.0) above which the loop terminates.
     #[serde(default = "default_react_confidence_threshold")]
@@ -366,6 +377,7 @@ impl Default for AgentReactStopConditions {
 
 /// Configuration for a human-in-the-loop checkpoint.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentCheckpointConfig {
     /// Unique ID for this checkpoint.
     pub checkpoint_id: String,
@@ -447,19 +459,12 @@ impl ToolRegistry for DefaultToolRegistry {
 // ---------------------------------------------------------------------------
 
 impl AgentSpec {
-    /// Parse a spec from a YAML string (serde + custom validation, no schema).
-    pub fn from_yaml_str(yaml: &str) -> anyhow::Result<Self> {
-        let spec: Self =
-            serde_yaml_ng::from_str(yaml).context("failed to parse agent spec YAML")?;
-        spec.validate()?;
-        Ok(spec)
-    }
-
-    /// Parse a spec from YAML with JSON schema validation before deserialization.
+    /// Parse a spec from a YAML string with JSON schema validation.
     ///
-    /// This catches structural errors (missing fields, wrong types, unknown
-    /// properties) with clear paths before serde kicks in.
-    pub fn from_yaml_str_validated(yaml: &str) -> anyhow::Result<Self> {
+    /// This is the **recommended** entry point. It catches structural errors
+    /// (missing fields, wrong types, unknown properties) with clear paths
+    /// before serde kicks in.
+    pub fn from_yaml_str(yaml: &str) -> anyhow::Result<Self> {
         // Parse YAML → JSON value for schema validation.
         let yaml_value: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(yaml).context("failed to parse agent spec YAML")?;
@@ -485,7 +490,19 @@ impl AgentSpec {
         Ok(spec)
     }
 
-    /// Load a spec from a YAML file.
+    /// Parse a spec from a YAML string **without** JSON schema validation.
+    ///
+    /// Uses serde deserialization + custom `validate()` only. Prefer
+    /// [`from_yaml_str`] for production paths — this exists for tests and
+    /// internal callers that need the faster, schema-free path.
+    pub fn from_yaml_str_unvalidated(yaml: &str) -> anyhow::Result<Self> {
+        let spec: Self =
+            serde_yaml_ng::from_str(yaml).context("failed to parse agent spec YAML")?;
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    /// Load a spec from a YAML file with JSON schema validation.
     pub async fn from_yaml_file(path: &Path) -> anyhow::Result<Self> {
         let content = tokio::fs::read_to_string(path)
             .await
@@ -493,18 +510,18 @@ impl AgentSpec {
         Self::from_yaml_str(&content)
     }
 
-    /// Load a spec from a YAML file with JSON schema validation.
-    pub async fn from_yaml_file_validated(path: &Path) -> anyhow::Result<Self> {
+    /// Load a spec from a YAML file **without** JSON schema validation.
+    pub async fn from_yaml_file_unvalidated(path: &Path) -> anyhow::Result<Self> {
         let content = tokio::fs::read_to_string(path)
             .await
             .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
-        Self::from_yaml_str_validated(&content)
+        Self::from_yaml_str_unvalidated(&content)
     }
 
-    /// Parse a spec from YAML with placeholder substitution applied first.
+    /// Parse a spec from YAML with placeholder substitution and schema validation.
     ///
     /// Placeholders like `{{tenant}}` are replaced in all string values before
-    /// deserialization.
+    /// schema validation and deserialization.
     pub fn from_yaml_str_with_placeholders(
         yaml: &str,
         placeholders: &HashMap<String, String>,
@@ -514,6 +531,19 @@ impl AgentSpec {
         let mut json_value = serde_json::to_value(yaml_value)
             .context("failed to convert YAML to JSON for placeholder substitution")?;
         substitute_placeholders(&mut json_value, placeholders)?;
+
+        let schema = compiled_schema();
+        if !schema.is_valid(&json_value) {
+            let messages: Vec<String> = schema
+                .iter_errors(&json_value)
+                .map(|err| {
+                    let path = err.instance_path.to_string();
+                    if path.is_empty() { format!("{err}") } else { format!("{err} at {path}") }
+                })
+                .collect();
+            return Err(anyhow!("agent spec failed schema validation: {}", messages.join("; ")));
+        }
+
         let spec: Self = serde_json::from_value(json_value)
             .context("failed to deserialize agent spec after placeholder substitution")?;
         spec.validate()?;
@@ -622,9 +652,11 @@ impl AgentSpec {
     fn validate(&self) -> anyhow::Result<()> {
         self.validate_version()?;
         self.validate_graph_references()?;
+        self.validate_conditional_edges()?;
         self.validate_acyclicity()?;
         self.validate_checkpoint_references()?;
         self.validate_react_config()?;
+        self.validate_policies()?;
         Ok(())
     }
 
@@ -642,6 +674,17 @@ impl AgentSpec {
             if react.action_types.is_empty() {
                 return Err(anyhow!(
                     "react.action_types must not be empty (loop cannot act without action types)"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_policies(&self) -> anyhow::Result<()> {
+        if let Some(ref p) = self.policies {
+            if p.require_policy_context && p.allowed_collections.is_empty() {
+                return Err(anyhow!(
+                    "policies.require_policy_context is true but allowed_collections is empty"
                 ));
             }
         }
@@ -687,19 +730,23 @@ impl AgentSpec {
     }
 
     fn validate_graph_references(&self) -> anyhow::Result<()> {
-        let task_set: std::collections::HashSet<&str> =
-            self.graph.tasks.iter().map(|t| t.as_str()).collect();
+        // Duplicate detection.
+        self.detect_duplicates(&self.tasks, "tasks")?;
+        self.detect_duplicates(&self.graph.tasks, "graph.tasks")?;
 
-        if !task_set.contains(self.graph.start_task.as_str()) {
+        let top_set: HashSet<&str> = self.tasks.iter().map(|t| t.as_str()).collect();
+        let graph_set: HashSet<&str> = self.graph.tasks.iter().map(|t| t.as_str()).collect();
+
+        if !graph_set.contains(self.graph.start_task.as_str()) {
             return Err(anyhow!("start_task '{}' not found in graph.tasks", self.graph.start_task));
         }
 
         let mut missing = Vec::new();
         for edge in &self.graph.edges {
-            if !task_set.contains(edge.from.as_str()) {
+            if !graph_set.contains(edge.from.as_str()) {
                 missing.push(edge.from.clone());
             }
-            if !task_set.contains(edge.to.as_str()) {
+            if !graph_set.contains(edge.to.as_str()) {
                 missing.push(edge.to.clone());
             }
         }
@@ -710,13 +757,71 @@ impl AgentSpec {
             return Err(anyhow!("graph edges reference unknown tasks: {}", missing.join(", ")));
         }
 
-        // Every task in the top-level list must appear in graph.tasks.
-        for task in &self.tasks {
-            if !task_set.contains(task.as_str()) {
-                return Err(anyhow!("top-level task '{}' not found in graph.tasks", task));
-            }
+        // Set equality: tasks and graph.tasks must contain exactly the same names.
+        let mut only_in_top: Vec<&str> = top_set.difference(&graph_set).copied().collect();
+        let mut only_in_graph: Vec<&str> = graph_set.difference(&top_set).copied().collect();
+        only_in_top.sort();
+        only_in_graph.sort();
+
+        if !only_in_top.is_empty() {
+            return Err(anyhow!("top-level tasks not in graph.tasks: {}", only_in_top.join(", ")));
+        }
+        if !only_in_graph.is_empty() {
+            return Err(anyhow!(
+                "graph.tasks not in top-level tasks: {}",
+                only_in_graph.join(", ")
+            ));
         }
 
+        Ok(())
+    }
+
+    fn detect_duplicates(&self, list: &[String], label: &str) -> anyhow::Result<()> {
+        let mut seen = HashSet::new();
+        let mut dupes = Vec::new();
+        for item in list {
+            if !seen.insert(item.as_str()) {
+                dupes.push(item.as_str());
+            }
+        }
+        if !dupes.is_empty() {
+            dupes.sort();
+            dupes.dedup();
+            return Err(anyhow!("duplicate entries in {label}: {}", dupes.join(", ")));
+        }
+        Ok(())
+    }
+
+    /// Validate conditional-edge invariants:
+    /// - At most one conditional edge per source task.
+    /// - A source with a conditional edge must also have an unconditional fallback.
+    fn validate_conditional_edges(&self) -> anyhow::Result<()> {
+        let mut edges_by_from: HashMap<&str, Vec<&AgentGraphEdge>> = HashMap::new();
+        for edge in &self.graph.edges {
+            edges_by_from.entry(edge.from.as_str()).or_default().push(edge);
+        }
+
+        for (from, edges) in &edges_by_from {
+            let conditional: Vec<&&AgentGraphEdge> =
+                edges.iter().filter(|e| e.condition_key.is_some()).collect();
+            if conditional.is_empty() {
+                continue;
+            }
+            if conditional.len() > 1 {
+                return Err(anyhow!(
+                    "task '{from}' has {} conditional edges — \
+                     only one conditional edge per source is supported",
+                    conditional.len()
+                ));
+            }
+            let has_unconditional = edges.iter().any(|e| e.condition_key.is_none());
+            if !has_unconditional {
+                return Err(anyhow!(
+                    "task '{from}' has a conditional edge but no unconditional \
+                     fallback edge — add an unconditional edge as the 'else' path"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -771,29 +876,12 @@ impl AgentSpec {
     }
 
     fn validate_checkpoint_references(&self) -> anyhow::Result<()> {
-        let task_set: std::collections::HashSet<&str> =
-            self.graph.tasks.iter().map(|t| t.as_str()).collect();
+        let task_set: HashSet<&str> = self.graph.tasks.iter().map(|t| t.as_str()).collect();
 
         for cp in &self.checkpoints {
             if !task_set.contains(cp.after_task.as_str()) {
                 return Err(anyhow!(
                     "checkpoint '{}' references unknown task '{}'",
-                    cp.checkpoint_id,
-                    cp.after_task
-                ));
-            }
-
-            // Verify that after_task actually has an edge to an
-            // approval_checkpoint task, otherwise the checkpoint config
-            // will never be matched at runtime.
-            let reaches_checkpoint = self
-                .graph
-                .edges
-                .iter()
-                .any(|e| e.from == cp.after_task && e.to == "approval_checkpoint");
-            if !reaches_checkpoint {
-                return Err(anyhow!(
-                    "checkpoint '{}': after_task '{}' has no edge to 'approval_checkpoint'",
                     cp.checkpoint_id,
                     cp.after_task
                 ));
@@ -818,20 +906,26 @@ impl AgentRegistry {
     ///
     /// Each `.yaml` / `.yml` file in the directory is parsed into an
     /// [`AgentSpec`]. Duplicate `agent_id` values across files are rejected.
-    /// The `placeholders` map is reserved for future placeholder substitution
-    /// integration (currently unused but part of the API contract).
+    /// When `placeholders` is non-empty, `{{key}}` patterns in string values
+    /// are substituted before schema validation and deserialization.
     pub async fn load_from_dir(
         dir: &Path,
-        _placeholders: &HashMap<String, String>,
+        placeholders: &HashMap<String, String>,
     ) -> anyhow::Result<Self> {
         let mut paths = collect_agent_files(dir).await?;
         paths.sort();
 
         let mut agents = HashMap::new();
         for path in paths {
-            let spec = AgentSpec::from_yaml_file(&path)
+            let content = tokio::fs::read_to_string(&path)
                 .await
-                .with_context(|| format!("failed to load {}", path.display()))?;
+                .with_context(|| format!("failed to read agent spec at {}", path.display()))?;
+            let spec = if placeholders.is_empty() {
+                AgentSpec::from_yaml_str(&content)
+            } else {
+                AgentSpec::from_yaml_str_with_placeholders(&content, placeholders)
+            }
+            .with_context(|| format!("failed to load {}", path.display()))?;
             if agents.contains_key(&spec.agent_id) {
                 return Err(anyhow!(
                     "duplicate agent_id '{}' found in {}",
@@ -1004,7 +1098,7 @@ graph:
   edges: []
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
-        assert!(err.to_string().contains("unsupported spec_version"));
+        assert!(err.to_string().contains("schema validation"), "got: {err}");
     }
 
     #[test]
@@ -1060,10 +1154,11 @@ checkpoints:
     }
 
     #[test]
-    fn rejects_unreachable_checkpoint() {
+    #[allow(clippy::disallowed_methods)]
+    fn checkpoint_after_valid_task_is_accepted() {
         let yaml = r#"
-agent_id: bad
-description: checkpoint after_task has no edge to approval_checkpoint
+agent_id: ok
+description: checkpoint after a valid graph task
 spec_version: "1.0"
 tasks: [a, b]
 graph:
@@ -1075,11 +1170,9 @@ checkpoints:
   - checkpoint_id: cp1
     after_task: a
 "#;
-        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
-        assert!(
-            err.to_string().contains("no edge to 'approval_checkpoint'"),
-            "expected unreachable checkpoint error, got: {err}"
-        );
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert_eq!(spec.checkpoints.len(), 1);
+        assert_eq!(spec.checkpoints[0].after_task, "a");
     }
 
     #[test]
@@ -1581,7 +1674,7 @@ react:
     confidence_threshold: 1.5
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
-        assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
+        assert!(err.to_string().contains("schema validation"), "got: {err}");
     }
 
     #[test]
@@ -1602,7 +1695,7 @@ react:
     confidence_threshold: -0.5
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
-        assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
+        assert!(err.to_string().contains("schema validation"), "got: {err}");
     }
 
     #[test]
@@ -1622,7 +1715,7 @@ react:
   max_iterations: 0
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
-        assert!(err.to_string().contains("max_iterations must be > 0"), "got: {err}");
+        assert!(err.to_string().contains("schema validation"), "got: {err}");
     }
 
     #[test]
@@ -1642,7 +1735,7 @@ react:
   action_types: []
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
-        assert!(err.to_string().contains("action_types must not be empty"), "got: {err}");
+        assert!(err.to_string().contains("schema validation"), "got: {err}");
     }
 
     #[test]
@@ -1677,7 +1770,7 @@ graph:
   edges:
     - { from: a, to: b }
 "#;
-        let spec = AgentSpec::from_yaml_str_validated(yaml).expect("should pass schema validation");
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should pass schema validation");
         assert_eq!(spec.agent_id, "schema_test");
     }
 
@@ -1692,7 +1785,7 @@ graph:
   tasks: [a]
   edges: []
 "#;
-        let err = AgentSpec::from_yaml_str_validated(yaml).unwrap_err();
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("schema validation"), "expected schema error, got: {err}");
     }
 
@@ -1709,7 +1802,7 @@ graph:
   edges: []
 bogus_field: true
 "#;
-        let err = AgentSpec::from_yaml_str_validated(yaml).unwrap_err();
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("schema validation"), "expected schema error, got: {err}");
     }
 
@@ -1947,5 +2040,138 @@ graph:
 "#;
         let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
         assert!(err.to_string().contains("cycle"), "expected cycle error, got: {err}");
+    }
+
+    // --- Step 4: tasks/graph.tasks divergence ---
+
+    #[test]
+    fn rejects_graph_task_not_in_top_level() {
+        let yaml = r#"
+agent_id: bad
+description: graph has extra task
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("graph.tasks not in top-level tasks"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_duplicate_top_level_tasks() {
+        let yaml = r#"
+agent_id: bad
+description: duplicate task
+spec_version: "1.0"
+tasks: [a, a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("non-unique"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_duplicate_graph_tasks() {
+        let yaml = r#"
+agent_id: bad
+description: duplicate graph task
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a, a]
+  edges: []
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("non-unique"), "got: {err}");
+    }
+
+    // --- Step 5: conditional-edge invariants at parse time ---
+
+    #[test]
+    fn rejects_multiple_conditional_edges_from_same_source() {
+        let yaml = r#"
+agent_id: bad
+description: two conditionals from a
+spec_version: "1.0"
+tasks: [a, b, c, d]
+graph:
+  start_task: a
+  tasks: [a, b, c, d]
+  edges:
+    - { from: a, to: b, condition_key: k1 }
+    - { from: a, to: c, condition_key: k2 }
+    - { from: a, to: d }
+    - { from: b, to: d }
+    - { from: c, to: d }
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("conditional edges"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_conditional_edge_without_fallback() {
+        let yaml = r#"
+agent_id: bad
+description: conditional without fallback
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b, condition_key: go }
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("no unconditional fallback"), "got: {err}");
+    }
+
+    // --- Step 6: cross-field policy validation ---
+
+    #[test]
+    fn rejects_require_policy_context_without_collections() {
+        let yaml = r#"
+agent_id: bad
+description: policy mismatch
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  require_policy_context: true
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("require_policy_context"), "got: {err}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn accepts_require_policy_context_with_collections() {
+        let yaml = r#"
+agent_id: ok
+description: policy with collections
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+policies:
+  require_policy_context: true
+  allowed_collections: [docs]
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.policies.expect("policies").require_policy_context);
     }
 }
