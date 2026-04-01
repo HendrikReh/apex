@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_core::ports::{ApprovalPort, ChatPort, RetrievalPort};
@@ -46,15 +45,21 @@ pub struct RunWithMetadata {
 
 impl AgentManager {
     pub async fn load_default(
+        agent_specs_dir: &std::path::Path,
         retrieval: Arc<RetrievalService>,
         chat: Arc<ChatService>,
     ) -> Result<Self> {
         let tool_registry = DefaultToolRegistry;
-        let dir = default_agent_dir();
         let registry =
-            agent_core::AgentRegistry::load_from_dir(&dir, &HashMap::new(), &tool_registry)
+            agent_core::AgentRegistry::load_from_dir(
+                agent_specs_dir,
+                &HashMap::new(),
+                &tool_registry,
+            )
                 .await
-                .with_context(|| format!("loading agent specs from {}", dir.display()))?;
+                .with_context(|| {
+                    format!("loading agent specs from {}", agent_specs_dir.display())
+                })?;
 
         let mut runtimes: HashMap<String, Arc<dyn AgentRuntime>> = HashMap::new();
         for (agent_id, spec) in registry.list() {
@@ -203,10 +208,6 @@ fn describe_agent(spec: &AgentSpec) -> AgentDescriptor {
         tasks: spec.graph.tasks.clone(),
         checkpoint_count: spec.checkpoints.len(),
     }
-}
-
-fn default_agent_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../config/agents")
 }
 
 struct ServerRetrievalPort {

@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let chat =
         Arc::new(ChatService::new(stores.clone(), &config).context("building chat service")?);
     let agents = Arc::new(
-        AgentManager::load_default(retrieval.clone(), chat.clone())
+        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
             .await
             .context("loading agent manager")?,
     );
