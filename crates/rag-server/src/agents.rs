@@ -50,16 +50,13 @@ impl AgentManager {
         chat: Arc<ChatService>,
     ) -> Result<Self> {
         let tool_registry = DefaultToolRegistry;
-        let registry =
-            agent_core::AgentRegistry::load_from_dir(
-                agent_specs_dir,
-                &HashMap::new(),
-                &tool_registry,
-            )
-                .await
-                .with_context(|| {
-                    format!("loading agent specs from {}", agent_specs_dir.display())
-                })?;
+        let registry = agent_core::AgentRegistry::load_from_dir(
+            agent_specs_dir,
+            &HashMap::new(),
+            &tool_registry,
+        )
+        .await
+        .with_context(|| format!("loading agent specs from {}", agent_specs_dir.display()))?;
 
         let mut runtimes: HashMap<String, Arc<dyn AgentRuntime>> = HashMap::new();
         for (agent_id, spec) in registry.list() {
