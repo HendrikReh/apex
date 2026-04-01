@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://blacksmith-consulting.ai/schemas/agent_spec.schema.json",
+  "title": "AgentSpec",
+  "type": "object",
+  "required": ["agent_id", "description", "spec_version", "tasks", "graph"],
+  "additionalProperties": false,
+  "patternProperties": {
+    "^x_": {}
+  },
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spec_version": {
+      "type": "string",
+      "enum": ["1.0"]
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "graph": {
+      "type": "object",
+      "required": ["start_task", "tasks", "edges"],
+      "additionalProperties": false,
+      "properties": {
+        "start_task": { "type": "string", "minLength": 1 },
+        "tasks": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["from", "to"],
+            "additionalProperties": false,
+            "properties": {
+              "from": { "type": "string", "minLength": 1 },
+              "to": { "type": "string", "minLength": 1 },
+              "condition_key": { "type": ["string", "null"], "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["checkpoint_id", "after_task"],
+        "additionalProperties": false,
+        "properties": {
+          "checkpoint_id": { "type": "string", "minLength": 1 },
+          "after_task": { "type": "string", "minLength": 1 },
+          "approval_type": {
+            "type": "string",
+            "enum": ["human", "auto"]
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "on_timeout": {
+            "type": "string",
+            "enum": ["approve", "reject"]
+          }
+        }
+      }
+    }
+  }
+}
