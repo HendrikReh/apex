@@ -8,7 +8,7 @@
 
 Apex is an API-first, self-hostable Retrieval-Augmented Generation platform focused on grounded answers, clear system boundaries, and production-grade traceability. It ingests documents, builds hybrid retrieval indexes over Postgres and Qdrant, and exposes the workflow through an HTTP API plus a CLI.
 
-Today, Apex already covers the core RAG path end to end:
+Today, the open-source project covers the core RAG path end to end:
 
 - document ingest for PDF, Markdown, and plain text
 - chunking with configurable strategies
@@ -17,7 +17,16 @@ Today, Apex already covers the core RAG path end to end:
 - authentication (API key + OIDC), role-based access control, and rate limiting
 - multi-tenant HTTP and CLI workflows
 
-## Note
+The current Phase 1 platform is also hardened in the areas that matter operationally:
+
+- protected routes now fail closed by default
+- `/ingest` rejects invalid or out-of-bounds filesystem paths as `400` requests
+- search keeps client-actionable collection errors visible while sanitizing real backend faults
+- secrets in `rag-core` config are redacted from debug output
+- `agent-core` validates tool references and rejects ambiguous checkpoint configs at load time
+- the workspace is aligned on Rust 2024 formatting and denies `unsafe` in the core library crates
+
+## Project Status
 
 > Apex is the open-source migration path for Apex Accelerator, my commercial offering. That migration is still in progress.
 >
@@ -40,6 +49,7 @@ Some commercial-only pieces remain out of scope for the open-source project or w
 
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
+- [Running Modes](#running-modes)
 - [Why Apex](#why-apex)
 - [Architecture](#architecture)
 - [API](#api)
@@ -66,7 +76,7 @@ just up
 # 3. Create a .env with your database URL (matches docker-compose defaults)
 echo 'DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres' > .env
 
-# 4. Run the server with mock embeddings (no API key needed)
+# 4. Run the server with mock embeddings for local development
 just run-server-mock
 
 # 5. In another terminal, install the CLI and try it out
@@ -84,7 +94,13 @@ rag-cli collection-stats --collection my-docs
 
 `just run-server-mock` is useful for local ingestion and retrieval development because it removes the embedding dependency. Chat still needs a configured LLM provider.
 
-### Using a real LLM and embeddings
+## Running Modes
+
+### Local development mode
+
+Use `just run-server-mock` when you want a fast local loop for ingest and retrieval work without configuring embeddings. This is the easiest way to validate API, chunking, ingest, and search behavior on a fresh checkout.
+
+### Real provider mode
 
 For grounded chat responses and production-quality retrieval, add your API key and run the default server profile:
 
@@ -98,6 +114,8 @@ just run-server
 # Then ask a question through the CLI
 rag-cli chat --query "Summarize the main concepts" --collection my-docs
 ```
+
+In real deployments, prefer provider-backed embeddings plus explicit filesystem boundaries for server-side ingestion.
 
 ## Why Apex
 
@@ -171,6 +189,23 @@ Multi-tenancy is built in. Pass `x-tenant` header to isolate data per tenant (de
 | `config/app.toml` | Non-secret settings | Chunking params, endpoints, model names |
 | `.env` | Secrets and local overrides | `OPENAI_API_KEY`, `DATABASE_URL` |
 | Environment variables | Overrides | Take precedence over both files |
+
+Two configuration boundaries are worth calling out explicitly:
+
+- `ingest_allowed_roots` in `config/app.toml` controls which server-visible filesystem paths `/ingest` may access. Requests outside those roots are rejected with `400`.
+- `/ingest/upload` is the safer choice when the client should send file content directly instead of referencing a path on the server host.
+
+In practice:
+
+```toml
+# config/app.toml
+ingest_allowed_roots = [
+  "/srv/apex/import",
+  "/var/lib/apex/dropbox",
+]
+```
+
+Keep secrets such as `OPENAI_API_KEY` and `DATABASE_URL` in `.env` or environment variables rather than in `config/app.toml`.
 
 ## Development
 
