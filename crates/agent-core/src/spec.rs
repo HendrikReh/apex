@@ -9,7 +9,7 @@
 //! guardrails are parsed from the spec; runtime wiring lands incrementally.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Context, anyhow};
@@ -806,8 +806,6 @@ impl AgentSpec {
 // ---------------------------------------------------------------------------
 // Agent registry
 // ---------------------------------------------------------------------------
-
-use std::path::PathBuf;
 
 /// Loaded agent specs keyed by `agent_id`.
 #[derive(Clone, Debug, Default)]
