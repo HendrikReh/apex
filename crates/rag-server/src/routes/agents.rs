@@ -186,7 +186,7 @@ pub async fn execute_agent(
             &agent_id,
             payload.query,
             payload.collection,
-            ctx.tenant.as_str().to_string(),
+            ctx.tenant.to_string(),
             payload.max_steps.unwrap_or(20),
         )
         .await
@@ -202,19 +202,19 @@ pub async fn execute_agent(
 )]
 pub async fn list_runs(
     State(state): State<Arc<AppState>>,
-    _ctx: Ctx,
+    Ctx(ctx): Ctx,
     Query(query): Query<RunListQuery>,
 ) -> Result<Json<Vec<RunSummaryResponse>>, ApiError> {
     let runs = state
         .agents
-        .list_runs(query.agent_id.as_deref())
+        .list_runs(ctx.tenant.as_str(), query.agent_id.as_deref())
         .await
         .map_err(ApiError::from)?
         .into_iter()
         .map(|run| RunSummaryResponse {
             run_id: run.record.run_id,
             agent_id: run.record.agent_id,
-            state: run.result.state.to_string(),
+            state: map_agent_state(run.result.state),
             query: run.record.query,
             collection: run.record.collection,
             tenant: run.record.tenant,
@@ -234,12 +234,18 @@ pub async fn list_runs(
 )]
 pub async fn get_run(
     State(state): State<Arc<AppState>>,
-    _ctx: Ctx,
+    Ctx(ctx): Ctx,
     Path(run_id): Path<Uuid>,
 ) -> Result<Json<AgentRunResponse>, ApiError> {
-    let run = state.agents.inspect(run_id).await.map_err(ApiError::from)?.ok_or_else(|| {
-        ApiError { status: StatusCode::NOT_FOUND, message: format!("run '{run_id}' not found") }
-    })?;
+    let run = state
+        .agents
+        .inspect_for_tenant(run_id, ctx.tenant.as_str())
+        .await
+        .map_err(ApiError::from)?
+        .ok_or_else(|| ApiError {
+            status: StatusCode::NOT_FOUND,
+            message: format!("run '{run_id}' not found"),
+        })?;
     Ok(Json(map_run_response(run.result)))
 }
 
@@ -254,12 +260,15 @@ pub async fn get_run(
 )]
 pub async fn approve_run(
     State(state): State<Arc<AppState>>,
-    _ctx: Ctx,
+    Ctx(ctx): Ctx,
     Path(run_id): Path<Uuid>,
     Json(payload): Json<CheckpointDecisionRequest>,
 ) -> Result<Json<AgentRunResponse>, ApiError> {
-    let result =
-        state.agents.decide(run_id, true, payload.reason).await.map_err(classify_run_error)?;
+    let result = state
+        .agents
+        .decide(run_id, ctx.tenant.as_str(), true, payload.reason)
+        .await
+        .map_err(classify_run_error)?;
     Ok(Json(map_run_response(result)))
 }
 
@@ -274,12 +283,15 @@ pub async fn approve_run(
 )]
 pub async fn reject_run(
     State(state): State<Arc<AppState>>,
-    _ctx: Ctx,
+    Ctx(ctx): Ctx,
     Path(run_id): Path<Uuid>,
     Json(payload): Json<CheckpointDecisionRequest>,
 ) -> Result<Json<AgentRunResponse>, ApiError> {
-    let result =
-        state.agents.decide(run_id, false, payload.reason).await.map_err(classify_run_error)?;
+    let result = state
+        .agents
+        .decide(run_id, ctx.tenant.as_str(), false, payload.reason)
+        .await
+        .map_err(classify_run_error)?;
     Ok(Json(map_run_response(result)))
 }
 
@@ -306,7 +318,7 @@ fn classify_run_error(error: anyhow::Error) -> ApiError {
 fn map_run_response(result: AgentRunResult) -> AgentRunResponse {
     AgentRunResponse {
         run_id: result.run_id,
-        state: result.state.to_string(),
+        state: map_agent_state(result.state),
         answer: result.answer,
         summary: result.summary,
         query_type: result.query_type.map(map_query_type),
@@ -341,7 +353,7 @@ fn map_step_record(step: StepRecord) -> StepRecordResponse {
         task_id: step.task_id,
         started_at: step.started_at.to_rfc3339(),
         elapsed_ms: step.elapsed_ms,
-        status: format!("{:?}", step.status).to_ascii_lowercase(),
+        status: map_step_status(step.status),
     }
 }
 
@@ -355,17 +367,19 @@ fn map_scored_chunk(chunk: ScoredChunk) -> ScoredChunkResponse {
     }
 }
 
-trait AgentStateString {
-    fn to_string(self) -> String;
+fn map_agent_state(state: agent_core::types::AgentState) -> String {
+    match state {
+        agent_core::types::AgentState::Running => "running".into(),
+        agent_core::types::AgentState::AwaitingApproval => "awaiting_approval".into(),
+        agent_core::types::AgentState::Completed => "completed".into(),
+        agent_core::types::AgentState::Failed => "failed".into(),
+    }
 }
 
-impl AgentStateString for agent_core::types::AgentState {
-    fn to_string(self) -> String {
-        match self {
-            agent_core::types::AgentState::Running => "running".into(),
-            agent_core::types::AgentState::AwaitingApproval => "awaiting_approval".into(),
-            agent_core::types::AgentState::Completed => "completed".into(),
-            agent_core::types::AgentState::Failed => "failed".into(),
-        }
+fn map_step_status(status: agent_core::types::StepStatus) -> String {
+    match status {
+        agent_core::types::StepStatus::Completed => "completed".into(),
+        agent_core::types::StepStatus::Paused => "paused".into(),
+        agent_core::types::StepStatus::Failed => "failed".into(),
     }
 }

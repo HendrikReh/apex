@@ -129,13 +129,31 @@ impl AgentManager {
         Ok(result.map(|result| RunWithMetadata { record, result }))
     }
 
-    pub async fn list_runs(&self, agent_id: Option<&str>) -> Result<Vec<RunWithMetadata>> {
+    pub async fn inspect_for_tenant(
+        &self,
+        run_id: RunId,
+        tenant: &str,
+    ) -> Result<Option<RunWithMetadata>> {
+        match self.inspect(run_id).await? {
+            Some(run) if run.record.tenant == tenant => Ok(Some(run)),
+            Some(_) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn list_runs(
+        &self,
+        tenant: &str,
+        agent_id: Option<&str>,
+    ) -> Result<Vec<RunWithMetadata>> {
         let records: Vec<RunRecord> = self
             .runs
             .iter()
             .filter_map(|entry| {
                 let record = entry.value().clone();
-                if agent_id.is_none_or(|filter| filter == record.agent_id) {
+                if record.tenant == tenant
+                    && agent_id.is_none_or(|filter| filter == record.agent_id)
+                {
                     Some(record)
                 } else {
                     None
@@ -156,6 +174,7 @@ impl AgentManager {
     pub async fn decide(
         &self,
         run_id: RunId,
+        tenant: &str,
         approved: bool,
         reason: Option<String>,
     ) -> Result<AgentRunResult> {
@@ -164,6 +183,9 @@ impl AgentManager {
             .get(&run_id)
             .map(|entry| entry.clone())
             .ok_or_else(|| anyhow!("unknown run '{run_id}'"))?;
+        if record.tenant != tenant {
+            return Err(anyhow!("run '{run_id}' not found"));
+        }
         let runtime = self
             .runtimes
             .get(&record.agent_id)
@@ -225,6 +247,9 @@ impl ChatPort for ServerChatPort {
         chunks: &[ScoredChunk],
         _tenant: &str,
     ) -> Result<String> {
+        // Summarization operates only on already-retrieved in-memory chunks.
+        // Tenant isolation is enforced at retrieval time before these chunks
+        // are passed into agent-core.
         let fused_chunks = chunks
             .iter()
             .map(|chunk| FusedChunk {
