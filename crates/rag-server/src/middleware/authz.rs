@@ -10,6 +10,13 @@ use axum::response::Response;
 use crate::auth::roles::Capability;
 use crate::state::{ApiError, RequestContext};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoutePolicy {
+    Authorized(Capability),
+    MethodNotAllowed,
+    Unmapped,
+}
+
 /// Authorization middleware. Must run after authentication.
 pub async fn authorize(req: Request<axum::body::Body>, next: Next) -> Result<Response, ApiError> {
     let ctx = req.extensions().get::<RequestContext>().ok_or_else(|| ApiError {
@@ -17,45 +24,100 @@ pub async fn authorize(req: Request<axum::body::Body>, next: Next) -> Result<Res
         message: "missing request context (authz middleware requires auth middleware)".into(),
     })?;
 
-    if let Some(required) = required_capability(req.method(), req.uri().path())
-        && !ctx.principal.has_capability(required)
-    {
-        return Err(ApiError {
-            status: StatusCode::FORBIDDEN,
-            message: format!("insufficient permissions: requires {required:?}",),
-        });
+    match route_policy(req.method(), req.uri().path()) {
+        RoutePolicy::Authorized(required) => {
+            if !ctx.principal.has_capability(required) {
+                return Err(ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    message: format!("insufficient permissions: requires {required:?}",),
+                });
+            }
+        }
+        RoutePolicy::MethodNotAllowed => {}
+        RoutePolicy::Unmapped => {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                message: "route is not authorized until an authz policy is added".into(),
+            });
+        }
     }
 
     Ok(next.run(req).await)
 }
 
-/// Map a request method+path to the required capability.
+/// Single source of truth for protected-route policies.
 ///
-/// This is the single source of truth for the current route policy.
-/// Add new entries here when new protected routes are added.
-fn required_capability(method: &Method, path: &str) -> Option<Capability> {
+/// Each entry maps a (method, path-pattern) to a capability. The path matching
+/// is done in `route_policy`, which also handles the method-not-allowed and
+/// unmapped cases. When adding a new protected route, add ONE entry here.
+struct RouteEntry {
+    method: &'static Method,
+    capability: Capability,
+}
+
+/// Static route table. Path matching is handled by `route_policy` below.
+/// Keep entries grouped by subsystem.
+const STATIC_ROUTES: &[(&str, RouteEntry)] = &[
+    // Ingest
+    ("/ingest", RouteEntry { method: &Method::POST, capability: Capability::IngestWrite }),
+    ("/ingest/upload", RouteEntry { method: &Method::POST, capability: Capability::IngestWrite }),
+    // Search
+    ("/search/dense", RouteEntry { method: &Method::POST, capability: Capability::SearchRead }),
+    ("/search/sparse", RouteEntry { method: &Method::POST, capability: Capability::SearchRead }),
+    ("/search/hybrid", RouteEntry { method: &Method::POST, capability: Capability::SearchRead }),
+    // Chat
+    ("/chat", RouteEntry { method: &Method::POST, capability: Capability::ChatUse }),
+    // API key management
+    (
+        "/auth/service-accounts",
+        RouteEntry { method: &Method::POST, capability: Capability::AuthKeysManage },
+    ),
+    (
+        "/auth/api-keys",
+        RouteEntry { method: &Method::POST, capability: Capability::AuthKeysManage },
+    ),
+    ("/auth/api-keys", RouteEntry { method: &Method::GET, capability: Capability::AuthKeysManage }),
+];
+
+/// Dynamic route patterns that cannot be expressed as static strings.
+fn dynamic_route(method: &Method, path: &str) -> Option<Capability> {
     match (method, path) {
-        // Ingest
-        (&Method::POST, "/ingest" | "/ingest/upload") => Some(Capability::IngestWrite),
-        // Search
-        (&Method::POST, "/search/dense" | "/search/sparse" | "/search/hybrid") => {
-            Some(Capability::SearchRead)
-        }
-        // Chat
-        (&Method::POST, "/chat") => Some(Capability::ChatUse),
-        // Collections
         (&Method::GET, p) if p.starts_with("/collections/") && p.ends_with("/stats") => {
             Some(Capability::CollectionsRead)
         }
-        // API key management
-        (&Method::POST, "/auth/service-accounts") => Some(Capability::AuthKeysManage),
-        (&Method::POST, "/auth/api-keys") => Some(Capability::AuthKeysManage),
         (&Method::DELETE, p) if p.starts_with("/auth/api-keys/") => {
             Some(Capability::AuthKeysManage)
         }
-        (&Method::GET, "/auth/api-keys") => Some(Capability::AuthKeysManage),
         _ => None,
     }
+}
+
+fn is_dynamic_path(path: &str) -> bool {
+    (path.starts_with("/collections/") && path.ends_with("/stats"))
+        || path.starts_with("/auth/api-keys/")
+}
+
+fn route_policy(method: &Method, path: &str) -> RoutePolicy {
+    // Check static routes first.
+    let mut path_known = false;
+    for (route_path, entry) in STATIC_ROUTES {
+        if *route_path == path {
+            path_known = true;
+            if entry.method == method {
+                return RoutePolicy::Authorized(entry.capability);
+            }
+        }
+    }
+
+    // Check dynamic patterns.
+    if let Some(cap) = dynamic_route(method, path) {
+        return RoutePolicy::Authorized(cap);
+    }
+    if is_dynamic_path(path) {
+        path_known = true;
+    }
+
+    if path_known { RoutePolicy::MethodNotAllowed } else { RoutePolicy::Unmapped }
 }
 
 #[cfg(test)]
@@ -64,61 +126,79 @@ mod tests {
 
     #[test]
     fn ingest_requires_ingest_write() {
-        assert_eq!(required_capability(&Method::POST, "/ingest"), Some(Capability::IngestWrite),);
         assert_eq!(
-            required_capability(&Method::POST, "/ingest/upload"),
-            Some(Capability::IngestWrite),
+            route_policy(&Method::POST, "/ingest"),
+            RoutePolicy::Authorized(Capability::IngestWrite),
+        );
+        assert_eq!(
+            route_policy(&Method::POST, "/ingest/upload"),
+            RoutePolicy::Authorized(Capability::IngestWrite),
         );
     }
 
     #[test]
     fn search_requires_search_read() {
         assert_eq!(
-            required_capability(&Method::POST, "/search/dense"),
-            Some(Capability::SearchRead),
+            route_policy(&Method::POST, "/search/dense"),
+            RoutePolicy::Authorized(Capability::SearchRead),
         );
         assert_eq!(
-            required_capability(&Method::POST, "/search/sparse"),
-            Some(Capability::SearchRead),
+            route_policy(&Method::POST, "/search/sparse"),
+            RoutePolicy::Authorized(Capability::SearchRead),
         );
         assert_eq!(
-            required_capability(&Method::POST, "/search/hybrid"),
-            Some(Capability::SearchRead),
+            route_policy(&Method::POST, "/search/hybrid"),
+            RoutePolicy::Authorized(Capability::SearchRead),
         );
     }
 
     #[test]
     fn chat_requires_chat_use() {
-        assert_eq!(required_capability(&Method::POST, "/chat"), Some(Capability::ChatUse),);
+        assert_eq!(
+            route_policy(&Method::POST, "/chat"),
+            RoutePolicy::Authorized(Capability::ChatUse),
+        );
     }
 
     #[test]
     fn collection_stats_requires_collections_read() {
         assert_eq!(
-            required_capability(&Method::GET, "/collections/my-collection/stats"),
-            Some(Capability::CollectionsRead),
+            route_policy(&Method::GET, "/collections/my-collection/stats"),
+            RoutePolicy::Authorized(Capability::CollectionsRead),
         );
     }
 
     #[test]
     fn api_key_management_requires_auth_keys_manage() {
         assert_eq!(
-            required_capability(&Method::POST, "/auth/api-keys"),
-            Some(Capability::AuthKeysManage),
+            route_policy(&Method::POST, "/auth/api-keys"),
+            RoutePolicy::Authorized(Capability::AuthKeysManage),
         );
         assert_eq!(
-            required_capability(&Method::DELETE, "/auth/api-keys/some-id"),
-            Some(Capability::AuthKeysManage),
+            route_policy(&Method::DELETE, "/auth/api-keys/some-id"),
+            RoutePolicy::Authorized(Capability::AuthKeysManage),
+        );
+        assert_eq!(
+            route_policy(&Method::GET, "/auth/api-keys"),
+            RoutePolicy::Authorized(Capability::AuthKeysManage),
         );
     }
 
     #[test]
-    fn unknown_route_returns_none() {
-        assert_eq!(required_capability(&Method::GET, "/unknown"), None);
+    fn unknown_route_is_unmapped() {
+        assert_eq!(route_policy(&Method::GET, "/unknown"), RoutePolicy::Unmapped);
     }
 
     #[test]
-    fn wrong_method_returns_none() {
-        assert_eq!(required_capability(&Method::GET, "/ingest"), None);
+    fn wrong_method_on_static_route_is_method_not_allowed() {
+        assert_eq!(route_policy(&Method::GET, "/ingest"), RoutePolicy::MethodNotAllowed);
+    }
+
+    #[test]
+    fn wrong_method_on_dynamic_route_is_method_not_allowed() {
+        assert_eq!(
+            route_policy(&Method::POST, "/collections/test/stats"),
+            RoutePolicy::MethodNotAllowed,
+        );
     }
 }

@@ -68,7 +68,11 @@ impl TenantApiClient {
         let url = response.url().to_string();
 
         if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.map_err(|source| ClientError::HttpStatusBodyRead {
+                status: status.as_u16(),
+                url: url.clone(),
+                source,
+            })?;
             return Err(ClientError::HttpStatus { status: status.as_u16(), url, body });
         }
 
@@ -87,7 +91,11 @@ impl TenantApiClient {
         let status = response.status();
         if !status.is_success() {
             let url = response.url().to_string();
-            let body = response.text().await.unwrap_or_default();
+            let body = response.text().await.map_err(|source| ClientError::HttpStatusBodyRead {
+                status: status.as_u16(),
+                url: url.clone(),
+                source,
+            })?;
             return Err(ClientError::HttpStatus { status: status.as_u16(), url, body });
         }
         Ok(response)

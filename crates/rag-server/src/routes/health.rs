@@ -35,38 +35,20 @@ pub async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     let timeout = Duration::from_secs(5);
 
     let pg_check = tokio::time::timeout(timeout, async {
-        sqlx::query_scalar::<_, i32>("SELECT 1")
-            .fetch_one(state.stores.pg_pool())
-            .await
-            .map(|_| "ok".to_string())
-            .map_err(|e| format!("{e}"))
+        sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(state.stores.pg_pool()).await.map(|_| ())
     });
 
     let qdrant_check = tokio::time::timeout(timeout, async {
-        state
-            .stores
-            .qdrant_client()
-            .health_check()
-            .await
-            .map(|_| "ok".to_string())
-            .map_err(|e| format!("{e}"))
+        state.stores.qdrant_client().health_check().await.map(|_| ())
     });
 
     // tokio::join! macro internally uses .expect() — false positive for ADR-001.
     #[allow(clippy::disallowed_methods)]
     let (pg_result, qdrant_result) = tokio::join!(pg_check, qdrant_check);
 
-    let pg_status = match pg_result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => e,
-        Err(_) => "timeout after 5s".to_string(),
-    };
+    let pg_status = backend_status("postgres", pg_result);
 
-    let qdrant_status = match qdrant_result {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => e,
-        Err(_) => "timeout after 5s".to_string(),
-    };
+    let qdrant_status = backend_status("qdrant", qdrant_result);
 
     let ready = pg_status == "ok" && qdrant_status == "ok";
     let status = if ready { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
@@ -77,4 +59,32 @@ pub async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse 
     };
 
     (status, axum::Json(body))
+}
+
+fn backend_status<E>(
+    backend: &'static str,
+    result: Result<Result<(), E>, tokio::time::error::Elapsed>,
+) -> String
+where
+    E: std::fmt::Display,
+{
+    match result {
+        Ok(Ok(())) => "ok".to_string(),
+        Ok(Err(error)) => {
+            tracing::warn!(backend = backend, error = %error, "readiness check failed");
+            format!("{backend} unavailable")
+        }
+        Err(_) => "timeout after 5s".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_failures_are_sanitized() {
+        let status = backend_status("postgres", Ok(Err("password authentication failed")));
+        assert_eq!(status, "postgres unavailable");
+    }
 }

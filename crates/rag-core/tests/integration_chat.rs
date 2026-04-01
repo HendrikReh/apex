@@ -42,8 +42,9 @@ fn write_sidecar(dir: &Path, stem: &str) {
     fs::write(dir.join(format!("{stem}.metadata.json")), json).expect("writing sidecar");
 }
 
-async fn setup() -> Result<(IngestService, ChatService, Stores)> {
-    let config = AppConfig::from_env()?;
+async fn setup(ingest_root: &Path) -> Result<(IngestService, ChatService, Stores)> {
+    let mut config = AppConfig::from_env()?;
+    config.ingest_allowed_roots = vec![ingest_root.to_path_buf()];
     if config.llm_api_key.is_none() {
         anyhow::bail!("LLM_API_KEY required for chat integration tests");
     }
@@ -92,14 +93,14 @@ async fn ingest_fixtures(
 #[ignore] // requires Postgres + Qdrant + LLM_API_KEY
 #[allow(clippy::disallowed_methods)] // write_fixture/write_sidecar helpers use .expect()
 async fn chat_returns_answer_with_citations() -> Result<()> {
-    let (ingest, chat, _stores) = match setup().await {
+    let dir = TempDir::new()?;
+    let (ingest, chat, _stores) = match setup(dir.path()).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("SKIP: {e}");
             return Ok(());
         }
     };
-    let dir = TempDir::new()?;
     let suffix = unique_id();
     let tenant: TenantId = format!("test-chat-{suffix}").parse()?;
     let collection = format!("test_chat_{suffix}");
@@ -128,14 +129,14 @@ async fn chat_returns_answer_with_citations() -> Result<()> {
 #[ignore] // requires Postgres + Qdrant + LLM_API_KEY
 #[allow(clippy::disallowed_methods)] // write_fixture/write_sidecar helpers use .expect()
 async fn multi_turn_conversation_loads_history() -> Result<()> {
-    let (ingest, chat, stores) = match setup().await {
+    let dir = TempDir::new()?;
+    let (ingest, chat, stores) = match setup(dir.path()).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("SKIP: {e}");
             return Ok(());
         }
     };
-    let dir = TempDir::new()?;
     let suffix = unique_id();
     let tenant: TenantId = format!("test-multi-{suffix}").parse()?;
     let collection = format!("test_multi_{suffix}");
@@ -183,7 +184,8 @@ async fn multi_turn_conversation_loads_history() -> Result<()> {
 #[ignore] // requires Postgres + Qdrant + LLM_API_KEY
 #[allow(clippy::disallowed_methods)] // expect_err() used in test assertion
 async fn collection_mismatch_rejected() -> Result<()> {
-    let (_ingest, chat, stores) = match setup().await {
+    let dir = TempDir::new()?;
+    let (_ingest, chat, stores) = match setup(dir.path()).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("SKIP: {e}");

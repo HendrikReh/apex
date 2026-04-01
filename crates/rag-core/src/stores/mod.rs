@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use qdrant_client::Qdrant;
+use secrecy::ExposeSecret;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
@@ -68,7 +69,7 @@ impl Stores {
             .connect_timeout(Duration::from_secs(cfg.qdrant_connect_timeout_secs));
 
         if let Some(ref key) = cfg.qdrant_api_key {
-            builder = builder.api_key(key.clone());
+            builder = builder.api_key(key.expose_secret().to_owned());
         }
 
         let qdrant = Arc::new(builder.build().context("building Qdrant client")?);

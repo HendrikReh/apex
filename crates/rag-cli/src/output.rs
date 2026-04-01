@@ -38,6 +38,11 @@ pub fn render_error(err: &anyhow::Error) -> String {
             rag_client::ClientError::HttpStatus { status, body, .. } => {
                 format!("Error: server returned {status} — {body}")
             }
+            rag_client::ClientError::HttpStatusBodyRead { status, source, .. } => {
+                format!(
+                    "Error: server returned {status} and the error body could not be read — {source}"
+                )
+            }
             rag_client::ClientError::Decode(e) => {
                 format!("Error: unexpected server response — {e}")
             }

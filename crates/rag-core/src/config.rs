@@ -214,6 +214,7 @@ struct AppSection {
     auth_mode: Option<String>,
     tenant_header: Option<String>,
     request_id_header: Option<String>,
+    ingest_allowed_roots: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -224,11 +225,11 @@ struct AppSection {
 ///
 /// Constructed via [`AppConfig::from_env`], which merges values from a TOML
 /// file (`config/app.toml` by default) with environment variable overrides.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AppConfig {
     // Qdrant
     pub qdrant_url: String,
-    pub qdrant_api_key: Option<String>,
+    pub qdrant_api_key: Option<SecretString>,
     pub qdrant_timeout_secs: u64,
     pub qdrant_connect_timeout_secs: u64,
     // Postgres
@@ -259,6 +260,7 @@ pub struct AppConfig {
     pub auth_mode: AuthMode,
     pub tenant_header: String,
     pub request_id_header: String,
+    pub ingest_allowed_roots: Vec<std::path::PathBuf>,
     // OIDC
     pub oidc_issuer: Option<String>,
     pub oidc_audience: Option<String>,
@@ -266,7 +268,7 @@ pub struct AppConfig {
     pub oidc_groups_claim: String,
     pub oidc_platform_operator_groups: Vec<String>,
     // Bootstrap
-    pub bootstrap_platform_api_key: Option<String>,
+    pub bootstrap_platform_api_key: Option<SecretString>,
     // Rate limiting
     pub rate_limit_global_rps: u32,
     pub rate_limit_global_burst: u32,
@@ -297,6 +299,76 @@ pub struct AppConfig {
     pub tessdata_dir: Option<std::path::PathBuf>,
     pub ocr_timeout_secs: u64,
     pub ocr_default_language: String,
+}
+
+// NOTE: keep fields in sync with the struct definition above. New fields
+// added to `AppConfig` must also appear here; secrets must use
+// `secret_present` to avoid leaking values in debug output.
+impl fmt::Debug for AppConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fn secret_present(secret: &Option<SecretString>) -> &'static str {
+            if secret.is_some() { "<redacted>" } else { "<none>" }
+        }
+
+        f.debug_struct("AppConfig")
+            .field("qdrant_url", &self.qdrant_url)
+            .field("qdrant_api_key", &secret_present(&self.qdrant_api_key))
+            .field("qdrant_timeout_secs", &self.qdrant_timeout_secs)
+            .field("qdrant_connect_timeout_secs", &self.qdrant_connect_timeout_secs)
+            .field("postgres_url", &"<redacted>")
+            .field("postgres_max_connections", &self.postgres_max_connections)
+            .field("postgres_connect_timeout_secs", &self.postgres_connect_timeout_secs)
+            .field("bm25_avgdl", &self.bm25_avgdl)
+            .field("bm25_k1", &self.bm25_k1)
+            .field("bm25_b", &self.bm25_b)
+            .field("bm25_query_b", &self.bm25_query_b)
+            .field("default_collection", &self.default_collection)
+            .field("chunking_max_tokens", &self.chunking_max_tokens)
+            .field("chunking_overlap_ratio", &self.chunking_overlap_ratio)
+            .field("embedding_model", &self.embedding_model)
+            .field("embedder", &self.embedder)
+            .field("embed_timeout_secs", &self.embed_timeout_secs)
+            .field("embed_max_retries", &self.embed_max_retries)
+            .field("embed_retry_backoff_ms", &self.embed_retry_backoff_ms)
+            .field("embed_max_batch_tokens", &self.embed_max_batch_tokens)
+            .field("embed_max_batch_size", &self.embed_max_batch_size)
+            .field("bind_addr", &self.bind_addr)
+            .field("auth_mode", &self.auth_mode)
+            .field("tenant_header", &self.tenant_header)
+            .field("request_id_header", &self.request_id_header)
+            .field("ingest_allowed_roots", &self.ingest_allowed_roots)
+            .field("oidc_issuer", &self.oidc_issuer)
+            .field("oidc_audience", &self.oidc_audience)
+            .field("oidc_jwks_url", &self.oidc_jwks_url)
+            .field("oidc_groups_claim", &self.oidc_groups_claim)
+            .field("oidc_platform_operator_groups", &self.oidc_platform_operator_groups)
+            .field("bootstrap_platform_api_key", &secret_present(&self.bootstrap_platform_api_key))
+            .field("rate_limit_global_rps", &self.rate_limit_global_rps)
+            .field("rate_limit_global_burst", &self.rate_limit_global_burst)
+            .field("rate_limit_global_concurrency", &self.rate_limit_global_concurrency)
+            .field("rate_limit_tenant_rps", &self.rate_limit_tenant_rps)
+            .field("rate_limit_tenant_burst", &self.rate_limit_tenant_burst)
+            .field("rrf_k", &self.rrf_k)
+            .field("dense_top_k", &self.dense_top_k)
+            .field("sparse_top_k", &self.sparse_top_k)
+            .field("context_max_tokens", &self.context_max_tokens)
+            .field("context_max_chunks", &self.context_max_chunks)
+            .field("llm_provider", &self.llm_provider)
+            .field("llm_api_key", &secret_present(&self.llm_api_key))
+            .field("llm_model", &self.llm_model)
+            .field("llm_base_url", &self.llm_base_url)
+            .field("llm_temperature", &self.llm_temperature)
+            .field("llm_max_tokens", &self.llm_max_tokens)
+            .field("llm_timeout_secs", &self.llm_timeout_secs)
+            .field("llm_max_retries", &self.llm_max_retries)
+            .field("llm_retry_backoff_ms", &self.llm_retry_backoff_ms)
+            .field("llm_prompt_template_path", &self.llm_prompt_template_path)
+            .field("pdfium_library_path", &self.pdfium_library_path)
+            .field("tessdata_dir", &self.tessdata_dir)
+            .field("ocr_timeout_secs", &self.ocr_timeout_secs)
+            .field("ocr_default_language", &self.ocr_default_language)
+            .finish()
+    }
 }
 
 impl AppConfig {
@@ -381,7 +453,9 @@ impl AppConfig {
             .or_else(|| f.qdrant_url.clone())
             .unwrap_or_else(|| "http://127.0.0.1:6334".to_owned());
 
-        let qdrant_api_key = env_string("QDRANT_API_KEY").or_else(|| f.qdrant_api_key.clone());
+        let qdrant_api_key = env_string("QDRANT_API_KEY")
+            .or_else(|| f.qdrant_api_key.clone())
+            .map(SecretString::from);
 
         let qdrant_timeout_secs =
             env_parsed("QDRANT_TIMEOUT_SECS")?.or(f.qdrant_timeout_secs).unwrap_or(30);
@@ -468,6 +542,40 @@ impl AppConfig {
         let request_id_header = env_string("REQUEST_ID_HEADER")
             .or_else(|| f.request_id_header.clone())
             .unwrap_or_else(|| "x-request-id".to_owned());
+        let ingest_allowed_roots: Vec<std::path::PathBuf> = {
+            let raw_roots: Vec<std::path::PathBuf> = env_string("INGEST_ALLOWED_ROOTS")
+                .map(|raw| {
+                    raw.split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(std::path::PathBuf::from)
+                        .collect()
+                })
+                .or_else(|| {
+                    f.ingest_allowed_roots.as_ref().map(|roots| {
+                        roots
+                            .iter()
+                            .map(String::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(std::path::PathBuf::from)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default();
+            // Canonicalize roots once at startup so validate_ingest_path
+            // does not repeat filesystem IO per ingested file.
+            let mut canonical = Vec::with_capacity(raw_roots.len());
+            for root in &raw_roots {
+                canonical.push(root.canonicalize().with_context(|| {
+                    format!(
+                        "configured ingest root does not exist or is inaccessible: {}",
+                        root.display()
+                    )
+                })?);
+            }
+            canonical
+        };
 
         let r = &retrieval_settings;
         let ctx = &context_settings;
@@ -610,7 +718,8 @@ impl AppConfig {
                 .or_else(|| auth_cfg.oidc_platform_operator_groups.clone())
                 .unwrap_or_default();
         let bootstrap_platform_api_key = env_string("BOOTSTRAP_PLATFORM_API_KEY")
-            .or_else(|| auth_cfg.bootstrap_platform_api_key.clone());
+            .or_else(|| auth_cfg.bootstrap_platform_api_key.clone())
+            .map(SecretString::from);
 
         // Rate limit config
         let rate_limit_global_rps =
@@ -649,6 +758,7 @@ impl AppConfig {
             auth_mode,
             tenant_header,
             request_id_header,
+            ingest_allowed_roots,
             oidc_issuer,
             oidc_audience,
             oidc_jwks_url,
@@ -688,6 +798,7 @@ impl AppConfig {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(unsafe_code)]
 mod tests {
     use super::*;
 
@@ -723,6 +834,7 @@ mod tests {
             std::env::remove_var("AUTH_MODE");
             std::env::remove_var("TENANT_HEADER");
             std::env::remove_var("REQUEST_ID_HEADER");
+            std::env::remove_var("INGEST_ALLOWED_ROOTS");
             std::env::remove_var("CHUNKING_MAX_TOKENS");
             std::env::remove_var("CHUNKING_OVERLAP_RATIO");
             std::env::remove_var("RRF_K");
@@ -802,6 +914,7 @@ mod tests {
         assert_eq!(cfg.auth_mode, AuthMode::None);
         assert_eq!(cfg.tenant_header, "x-tenant");
         assert_eq!(cfg.request_id_header, "x-request-id");
+        assert!(cfg.ingest_allowed_roots.is_empty());
         assert_eq!(cfg.rrf_k, 60);
         assert_eq!(cfg.dense_top_k, 20);
         assert_eq!(cfg.sparse_top_k, 20);
@@ -894,7 +1007,54 @@ mod tests {
         );
         unsafe { std::env::remove_var("TESSDATA_PREFIX") };
 
-        // -- Part 6: zero ocr_timeout_secs rejected --
+        // -- Part 6: ingest roots env override --
+        let root_a = tempfile::tempdir().expect("tempdir a");
+        let root_b = tempfile::tempdir().expect("tempdir b");
+        let roots_csv = format!("{},{}", root_a.path().display(), root_b.path().display());
+        unsafe { std::env::set_var("INGEST_ALLOWED_ROOTS", &roots_csv) };
+        let cfg = AppConfig::from_current_env().expect("from_env with INGEST_ALLOWED_ROOTS");
+        assert_eq!(cfg.ingest_allowed_roots.len(), 2);
+        // Roots are canonicalized at startup — compare canonical forms.
+        assert_eq!(cfg.ingest_allowed_roots[0], root_a.path().canonicalize().expect("canonical a"),);
+        assert_eq!(cfg.ingest_allowed_roots[1], root_b.path().canonicalize().expect("canonical b"),);
+        unsafe { std::env::remove_var("INGEST_ALLOWED_ROOTS") };
+
+        // -- Part 7: secret env vars load as redacted types --
+        unsafe {
+            std::env::set_var("QDRANT_API_KEY", "qdrant-secret");
+            std::env::set_var("BOOTSTRAP_PLATFORM_API_KEY", "bootstrap-secret");
+            std::env::set_var("LLM_API_KEY", "llm-secret");
+        }
+        let cfg = AppConfig::from_current_env().expect("from_env with secret env vars");
+        assert_eq!(
+            cfg.qdrant_api_key.as_ref().map(secrecy::ExposeSecret::expose_secret),
+            Some("qdrant-secret")
+        );
+        assert_eq!(
+            cfg.bootstrap_platform_api_key.as_ref().map(secrecy::ExposeSecret::expose_secret),
+            Some("bootstrap-secret")
+        );
+        assert_eq!(
+            cfg.llm_api_key.as_ref().map(secrecy::ExposeSecret::expose_secret),
+            Some("llm-secret")
+        );
+
+        let debug_output = format!("{cfg:?}");
+        assert!(!debug_output.contains("qdrant-secret"));
+        assert!(!debug_output.contains("bootstrap-secret"));
+        assert!(!debug_output.contains("llm-secret"));
+        assert!(debug_output.contains("qdrant_api_key: \"<redacted>\""));
+        assert!(debug_output.contains("bootstrap_platform_api_key: \"<redacted>\""));
+        assert!(debug_output.contains("llm_api_key: \"<redacted>\""));
+        assert!(debug_output.contains("postgres_url: \"<redacted>\""));
+
+        unsafe {
+            std::env::remove_var("QDRANT_API_KEY");
+            std::env::remove_var("BOOTSTRAP_PLATFORM_API_KEY");
+            std::env::remove_var("LLM_API_KEY");
+        }
+
+        // -- Part 8: zero ocr_timeout_secs rejected --
         unsafe { std::env::set_var("OCR_TIMEOUT_SECS", "0") };
         let err = AppConfig::from_current_env()
             .expect_err("zero ocr_timeout_secs should be rejected")

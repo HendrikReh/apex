@@ -19,6 +19,16 @@ pub enum ClientError {
     #[error("server returned {status}: {body}")]
     HttpStatus { status: u16, url: String, body: String },
 
+    /// The server returned a non-2xx status code, but the response body could
+    /// not be read.
+    #[error("server returned {status} and the error body could not be read from {url}: {source}")]
+    HttpStatusBodyRead {
+        status: u16,
+        url: String,
+        #[source]
+        source: reqwest::Error,
+    },
+
     /// The response body could not be decoded (invalid JSON, etc.).
     #[error("failed to decode response: {0}")]
     Decode(reqwest::Error),

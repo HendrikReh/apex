@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 
+fn sanitize_ingest_error(path: &std::path::Path, error: anyhow::Error) -> String {
+    tracing::error!(path = %path.display(), error = format!("{error:#}"), "document ingestion failed");
+    "ingestion failed".to_string()
+}
+
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct IngestPathsRequest {
     pub paths: Vec<String>,
@@ -51,21 +56,13 @@ pub async fn ingest_paths(
             message: "paths must not be empty".into(),
         });
     }
-    // Canonicalize paths (resolves relative paths, symlinks, and verifies existence)
-    let mut resolved_paths = Vec::with_capacity(payload.paths.len());
-    for p in &payload.paths {
-        let path = std::path::PathBuf::from(p);
-        let canonical = path.canonicalize().map_err(|e| ApiError {
-            status: StatusCode::BAD_REQUEST,
-            message: format!("path does not exist or is inaccessible: {p} — {e}"),
-        })?;
-        resolved_paths.push(canonical);
-    }
+    let paths: Vec<std::path::PathBuf> =
+        payload.paths.iter().map(std::path::PathBuf::from).collect();
 
     let mut total =
         IngestBatchOutcome { documents: 0, chunks: 0, skipped: 0, failures: Vec::new() };
 
-    for path in &resolved_paths {
+    for path in &paths {
         if path.is_dir() {
             let req = IngestDirectoryRequest {
                 path: path.clone(),
@@ -83,7 +80,7 @@ pub async fn ingest_paths(
                 Err(e) => {
                     total.failures.push(rag_core::ingest::DocumentFailure {
                         path: path.clone(),
-                        error: format!("{e:#}"),
+                        error: sanitize_ingest_error(path, e),
                     });
                 }
             }
@@ -105,7 +102,7 @@ pub async fn ingest_paths(
                 Err(e) => {
                     total.failures.push(rag_core::ingest::DocumentFailure {
                         path: path.clone(),
-                        error: format!("{e:#}"),
+                        error: sanitize_ingest_error(path, e),
                     });
                 }
             }
@@ -177,16 +174,12 @@ pub async fn ingest_upload(
     let extension =
         std::path::Path::new(&filename).extension().and_then(|e| e.to_str()).unwrap_or("bin");
 
-    let tmp =
-        tempfile::NamedTempFile::with_suffix(format!(".{extension}")).map_err(|e| ApiError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("failed to create temp file: {e}"),
-        })?;
+    let tmp = tempfile::NamedTempFile::with_suffix(format!(".{extension}"))
+        .map_err(|e| ApiError::internal_with_context("failed to create temp file", e))?;
 
-    tokio::fs::write(tmp.path(), &bytes).await.map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to write temp file: {e}"),
-    })?;
+    tokio::fs::write(tmp.path(), &bytes)
+        .await
+        .map_err(|e| ApiError::internal_with_context("failed to write temp file", e))?;
 
     let req = IngestFileRequest {
         path: tmp.path().to_path_buf(),
@@ -195,10 +188,11 @@ pub async fn ingest_upload(
         dry_run: false,
     };
 
-    let outcome = state.ingest.ingest_file(req).await.map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("{e:#}"),
-    })?;
+    let outcome = state
+        .ingest
+        .ingest_file_trusted(req)
+        .await
+        .map_err(|e| ApiError::internal_with_context("file upload ingestion failed", e))?;
 
     Ok(Json(IngestResponse {
         documents: 1,

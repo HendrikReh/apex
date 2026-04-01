@@ -98,6 +98,7 @@ pub struct IngestService {
     default_collection: String,
     chunking_max_tokens: usize,
     chunking_overlap_ratio: f32,
+    ingest_allowed_roots: Vec<PathBuf>,
     known_collections: Mutex<HashSet<String>>,
 }
 
@@ -117,6 +118,7 @@ impl IngestService {
             bm25,
             chunking_max_tokens: config.chunking_max_tokens,
             chunking_overlap_ratio: config.chunking_overlap_ratio,
+            ingest_allowed_roots: config.ingest_allowed_roots.clone(),
             known_collections: Mutex::new(HashSet::new()),
         })
     }
@@ -131,6 +133,32 @@ impl IngestService {
     /// the document was skipped due to an unchanged checksum.
     #[allow(clippy::disallowed_methods)] // serde_json::to_value internally uses .expect()
     pub async fn ingest_file(&self, req: IngestFileRequest) -> Result<IngestOutcome> {
+        self.ingest_file_inner(req, true).await
+    }
+
+    /// Ingest a server-managed file without applying host path policy checks.
+    #[allow(clippy::disallowed_methods)] // serde_json::to_value internally uses .expect()
+    pub async fn ingest_file_trusted(&self, req: IngestFileRequest) -> Result<IngestOutcome> {
+        self.ingest_file_inner(req, false).await
+    }
+
+    #[allow(clippy::disallowed_methods)] // serde_json::to_value internally uses .expect()
+    async fn ingest_file_inner(
+        &self,
+        req: IngestFileRequest,
+        enforce_allowed_roots: bool,
+    ) -> Result<IngestOutcome> {
+        let req = if enforce_allowed_roots {
+            IngestFileRequest {
+                path: validate_ingest_path(&req.path, &self.ingest_allowed_roots)?,
+                tenant: req.tenant,
+                collection_override: req.collection_override,
+                dry_run: req.dry_run,
+            }
+        } else {
+            req
+        };
+
         let sidecar = self.load_sidecar(&req.path).await?;
         let prepared = self.extract_and_checksum(&req, &sidecar).await?;
 
@@ -216,6 +244,12 @@ impl IngestService {
         &self,
         req: IngestDirectoryRequest,
     ) -> Result<IngestBatchOutcome> {
+        let req = IngestDirectoryRequest {
+            path: validate_ingest_path(&req.path, &self.ingest_allowed_roots)?,
+            tenant: req.tenant,
+            collection_override: req.collection_override,
+            dry_run: req.dry_run,
+        };
         let pairs = discover_document_pairs(&req.path)
             .with_context(|| format!("discovering documents in {}", req.path.display()))?;
 
@@ -517,6 +551,27 @@ impl IngestService {
     }
 }
 
+/// Verify that `path` resolves under one of the pre-canonicalized `allowed_roots`.
+///
+/// `allowed_roots` are canonicalized once at startup by `AppConfig::from_env`.
+fn validate_ingest_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf> {
+    if allowed_roots.is_empty() {
+        bail!("path-based ingestion is disabled until ingest_allowed_roots is configured");
+    }
+
+    let canonical_path = path.canonicalize().with_context(|| {
+        format!("ingest path does not exist or is inaccessible: {}", path.display())
+    })?;
+
+    for allowed_root in allowed_roots {
+        if canonical_path.starts_with(allowed_root) {
+            return Ok(canonical_path);
+        }
+    }
+
+    bail!("resolved ingest path '{}' is outside configured ingest roots", canonical_path.display());
+}
+
 // ---------------------------------------------------------------------------
 // Intermediate structs
 // ---------------------------------------------------------------------------
@@ -757,6 +812,8 @@ pub fn discover_document_pairs(dir: &Path) -> Result<Vec<DocumentPair>> {
 mod tests {
     use super::*;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use tempfile::TempDir;
 
     #[test]
@@ -1006,5 +1063,54 @@ mod tests {
 
         let err = build_qdrant_points("tenant", &doc).expect_err("mismatched vectors should fail");
         assert!(err.to_string().contains("embedder returned 1 dense vectors for 2 chunks"));
+    }
+
+    /// Helper: canonicalize a path to match what `AppConfig::from_env` produces.
+    fn canonical_root(path: &std::path::Path) -> PathBuf {
+        path.canonicalize().expect("canonical root")
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn validate_ingest_path_allows_files_under_configured_root() {
+        let dir = TempDir::new().expect("tempdir");
+        let file = dir.path().join("doc.txt");
+        fs::write(&file, "hello").expect("write");
+
+        let roots = vec![canonical_root(dir.path())];
+        let resolved = validate_ingest_path(&file, &roots).expect("allowed");
+
+        assert_eq!(resolved, file.canonicalize().expect("canonical path"));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn validate_ingest_path_rejects_paths_outside_configured_roots() {
+        let allowed = TempDir::new().expect("tempdir");
+        let outside = TempDir::new().expect("tempdir");
+        let file = outside.path().join("secret.txt");
+        fs::write(&file, "secret").expect("write");
+
+        let roots = vec![canonical_root(allowed.path())];
+        let err = validate_ingest_path(&file, &roots).expect_err("reject");
+
+        assert!(err.to_string().contains("outside configured ingest roots"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn validate_ingest_path_rejects_symlink_escape() {
+        let allowed = TempDir::new().expect("tempdir");
+        let outside = TempDir::new().expect("tempdir");
+        let target = outside.path().join("secret.txt");
+        fs::write(&target, "secret").expect("write");
+        let link = allowed.path().join("link.txt");
+        symlink(&target, &link).expect("symlink");
+
+        let roots = vec![canonical_root(allowed.path())];
+        let err = validate_ingest_path(&link, &roots).expect_err("reject");
+
+        assert!(err.to_string().contains("outside configured ingest roots"));
     }
 }

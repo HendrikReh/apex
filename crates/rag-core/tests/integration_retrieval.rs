@@ -44,9 +44,10 @@ fn write_sidecar(dir: &Path, stem: &str) {
     fs::write(dir.join(format!("{stem}.metadata.json")), json).expect("writing sidecar");
 }
 
-async fn setup() -> Result<(IngestService, RetrievalService, AppConfig)> {
+async fn setup(ingest_root: &Path) -> Result<(IngestService, RetrievalService, AppConfig)> {
     let mut config = AppConfig::from_env()?;
     config.embedder = EmbedderKind::Mock;
+    config.ingest_allowed_roots = vec![ingest_root.to_path_buf()];
     let ingest_stores = Stores::new(&config).await?;
     let retrieval_stores = Stores::new(&config).await?;
     let ingest = IngestService::new(ingest_stores, &config)?;
@@ -100,8 +101,8 @@ async fn ingest_fixtures(ingest: &IngestService, dir: &TempDir) -> Result<(Tenan
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
 async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result<()> {
-    let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
     let results =
@@ -125,8 +126,8 @@ async fn dense_search_returns_relevant_results_with_tenant_isolation() -> Result
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
 async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
-    let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
     let results = retrieval
@@ -151,8 +152,8 @@ async fn sparse_search_returns_results_with_tenant_isolation() -> Result<()> {
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)]
 async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
-    let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
     let fused =
@@ -187,8 +188,8 @@ async fn hybrid_search_fuses_dense_and_sparse() -> Result<()> {
 #[ignore] // requires running Postgres + Qdrant (`just up`)
 #[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
 async fn context_assembly_respects_token_budget() -> Result<()> {
-    let (ingest, retrieval, _config) = setup().await?;
     let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
     let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
 
     let fused =

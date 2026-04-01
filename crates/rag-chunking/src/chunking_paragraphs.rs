@@ -7,6 +7,10 @@
 use crate::{CHARS_PER_TOKEN, chunking_token::chunk_text_tokens};
 
 /// Paragraph-first chunker: splits on blank lines, packs into token-limited chunks.
+///
+/// `overlap_ratio` is only applied when an individual paragraph is too large
+/// and must fall back to the token chunker. Normal paragraph packing does not
+/// currently duplicate trailing content across adjacent packed chunks.
 pub fn chunk_text_paragraphs(text: &str, max_tokens: usize, overlap_ratio: f32) -> Vec<String> {
     let bpe = crate::bpe();
 

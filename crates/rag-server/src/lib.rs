@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 pub mod auth;
 pub mod middleware;
 pub mod openapi;

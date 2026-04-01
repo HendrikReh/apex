@@ -63,11 +63,27 @@ pub struct ErrorBody {
     pub error: String,
 }
 
+const INTERNAL_ERROR_MESSAGE: &str = "internal error";
+
+impl ApiError {
+    pub fn internal() -> Self {
+        Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: INTERNAL_ERROR_MESSAGE.into() }
+    }
+
+    pub fn internal_with_context<E>(context: &'static str, error: E) -> Self
+    where
+        E: std::fmt::Display,
+    {
+        tracing::error!(context = context, error = %error, "request failed");
+        Self::internal()
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let body = ErrorBody { error: self.message };
         let json = serde_json::to_string(&body)
-            .unwrap_or_else(|_| r#"{"error":"internal error"}"#.to_string());
+            .unwrap_or_else(|_| format!(r#"{{"error":"{INTERNAL_ERROR_MESSAGE}"}}"#));
 
         // SAFETY: all values are hardcoded constants — the builder cannot fail.
         #[allow(clippy::disallowed_methods)]
@@ -81,7 +97,9 @@ impl IntoResponse for ApiError {
                 #[allow(clippy::disallowed_methods)]
                 Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(axum::body::Body::from(r#"{"error":"internal error"}"#))
+                    .body(axum::body::Body::from(format!(
+                        r#"{{"error":"{INTERNAL_ERROR_MESSAGE}"}}"#
+                    )))
                     .expect("hardcoded response must build")
             })
     }
@@ -89,6 +107,30 @@ impl IntoResponse for ApiError {
 
 impl From<anyhow::Error> for ApiError {
     fn from(err: anyhow::Error) -> Self {
-        Self { status: StatusCode::INTERNAL_SERVER_ERROR, message: format!("{err:#}") }
+        Self::internal_with_context("unhandled request error", &err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn anyhow_errors_are_sanitized_for_clients() {
+        let response =
+            ApiError::from(anyhow::anyhow!("database connection failed: postgres://secret"))
+                .into_response();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+        let parsed: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+        assert_eq!(parsed["error"], INTERNAL_ERROR_MESSAGE);
+    }
+
+    #[test]
+    fn explicit_client_errors_are_preserved() {
+        let err = ApiError { status: StatusCode::BAD_REQUEST, message: "invalid role".into() };
+        assert_eq!(err.message, "invalid role");
     }
 }

@@ -16,11 +16,12 @@ use tempfile::TempDir;
 use uuid::Uuid;
 
 async fn setup() -> Result<(IngestService, Stores, TempDir)> {
+    let dir = TempDir::new()?;
     let mut config = AppConfig::from_env()?;
     config.embedder = EmbedderKind::Mock;
+    config.ingest_allowed_roots = vec![dir.path().to_path_buf()];
     let stores = Stores::new(&config).await?;
     let service = IngestService::new(stores.clone(), &config)?;
-    let dir = TempDir::new()?;
     Ok((service, stores, dir))
 }
 

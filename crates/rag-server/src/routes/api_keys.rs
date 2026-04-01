@@ -12,6 +12,10 @@ use uuid::Uuid;
 use crate::auth::api_key;
 use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 
+fn internal_api_error(operation: &'static str, error: impl std::fmt::Display) -> ApiError {
+    ApiError::internal_with_context(operation, error)
+}
+
 // ---------------------------------------------------------------------------
 // Create service account
 // ---------------------------------------------------------------------------
@@ -57,10 +61,7 @@ pub async fn create_service_account(
         &role_str,
     )
     .await
-    .map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to create service account: {e}"),
-    })?;
+    .map_err(|e| internal_api_error("failed to create service account", e))?;
 
     Ok((
         StatusCode::CREATED,
@@ -110,10 +111,7 @@ pub async fn create_api_key(
         ctx.tenant.as_str(),
     )
     .await
-    .map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to verify service account: {e}"),
-    })?
+    .map_err(|e| internal_api_error("failed to verify service account", e))?
     .ok_or_else(|| ApiError {
         status: StatusCode::NOT_FOUND,
         message: "service account not found in this tenant".into(),
@@ -141,10 +139,7 @@ pub async fn create_api_key(
         expires_at,
     )
     .await
-    .map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to create API key: {e}"),
-    })?;
+    .map_err(|e| internal_api_error("failed to create API key", e))?;
 
     Ok((
         StatusCode::CREATED,
@@ -181,10 +176,7 @@ pub async fn revoke_api_key(
     let revoked =
         api_key::revoke_api_key_scoped(state.stores.pg_pool(), key_id, ctx.tenant.as_str())
             .await
-            .map_err(|e| ApiError {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: format!("failed to revoke API key: {e}"),
-        })?;
+            .map_err(|e| internal_api_error("failed to revoke API key", e))?;
 
     if revoked {
         Ok(StatusCode::NO_CONTENT)
@@ -244,10 +236,7 @@ pub async fn list_api_keys(
     .bind(ctx.tenant.as_str())
     .fetch_all(state.stores.pg_pool())
     .await
-    .map_err(|e| ApiError {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        message: format!("failed to list API keys: {e}"),
-    })?;
+    .map_err(|e| internal_api_error("failed to list API keys", e))?;
 
     let items: Vec<ApiKeyListItem> = rows
         .into_iter()
@@ -263,4 +252,17 @@ pub async fn list_api_keys(
         .collect();
 
     Ok(Json(items))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn internal_api_key_errors_are_sanitized() {
+        let err = internal_api_error("failed to create API key", anyhow::anyhow!("db offline"));
+
+        assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.message, "internal error");
+    }
 }

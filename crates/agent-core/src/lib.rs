@@ -1,3 +1,5 @@
+#![deny(unsafe_code)]
+
 //! Graph-flow agent orchestration for RAG pipelines.
 //!
 //! This crate defines the domain types, port traits, and runtime abstraction

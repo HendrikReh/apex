@@ -46,13 +46,8 @@ async fn run_with_reader(
         anyhow::bail!("--collection is required for the first message in a conversation");
     }
 
-    let req = ChatRequest {
-        query,
-        collection: collection.clone(),
-        conversation_id,
-        language: None,
-        history_limit: None,
-    };
+    let req =
+        ChatRequest { query, collection, conversation_id, language: None, history_limit: None };
 
     let resp = client.chat(&req).await?;
 

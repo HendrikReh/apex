@@ -124,7 +124,11 @@ pub async fn chat(
 /// not found, collection mismatch, etc.).  We inspect the root error message
 /// for known prefixes so these surface as 400 to the caller.
 fn classify_chat_error(err: anyhow::Error) -> ApiError {
-    let msg = format!("{err:#}");
+    // Match against the root cause only — rag-core uses `bail!` for client
+    // errors, so the root message is always the user-facing text. The
+    // intermediate context chain may contain internal details and is never
+    // returned to the client.
+    let root = format!("{}", err.root_cause());
 
     const CLIENT_PREFIXES: &[&str] = &[
         "collection mismatch",
@@ -135,14 +139,47 @@ fn classify_chat_error(err: anyhow::Error) -> ApiError {
         "history_limit must be",
     ];
 
-    let is_client_error = CLIENT_PREFIXES.iter().any(|p| msg.contains(p));
+    let is_client_error = CLIENT_PREFIXES.iter().any(|p| root.contains(p));
 
-    ApiError {
-        status: if is_client_error {
-            StatusCode::BAD_REQUEST
-        } else {
-            StatusCode::INTERNAL_SERVER_ERROR
-        },
-        message: msg,
+    if is_client_error {
+        ApiError { status: StatusCode::BAD_REQUEST, message: root }
+    } else {
+        ApiError::internal_with_context("chat request failed", &err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_client_errors_remain_actionable() {
+        let err = classify_chat_error(anyhow::anyhow!("conversation not found: id=123"));
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("conversation not found"));
+    }
+
+    #[test]
+    fn chat_client_errors_strip_context_chain() {
+        let inner = anyhow::anyhow!("conversation not found: id=123");
+        let chained = inner.context("internal db detail: SELECT * FROM conversations");
+
+        let err = classify_chat_error(chained);
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        // Only the root cause is returned, not the context chain
+        assert!(!err.message.contains("SELECT"));
+        assert!(err.message.contains("conversation not found"));
+    }
+
+    #[test]
+    fn chat_server_errors_are_sanitized() {
+        let err = classify_chat_error(anyhow::anyhow!(
+            "sql query failed: password authentication failed"
+        ));
+
+        assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.message, "internal error");
     }
 }

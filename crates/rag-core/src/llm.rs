@@ -595,6 +595,7 @@ mod tests {
             auth_mode: AuthMode::None,
             tenant_header: "x-tenant".to_string(),
             request_id_header: "x-request-id".to_string(),
+            ingest_allowed_roots: vec![],
             oidc_issuer: None,
             oidc_audience: None,
             oidc_jwks_url: None,

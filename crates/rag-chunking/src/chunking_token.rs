@@ -38,6 +38,10 @@ pub fn chunk_text_tokens(text: &str, max_tokens: usize, overlap_ratio: f32) -> V
     if tokens.is_empty() {
         return chunk_text_chars(text, max_tokens, overlap_ratio);
     }
+    // tiktoken-rs currently exposes stable token-byte boundaries through the
+    // underscore-prefixed helper. We rely on it here to reconstruct chunk text
+    // without re-tokenizing each slice; if the upstream API changes, we fall
+    // back to the char chunker rather than silently changing semantics.
     let token_bytes: Vec<Vec<u8>> = bpe._decode_native_and_split(tokens).collect();
     chunk_text_tokens_from_token_bytes(text, &token_bytes, max_tokens, overlap_ratio)
 }

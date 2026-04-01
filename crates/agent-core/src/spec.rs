@@ -35,7 +35,6 @@ const SUPPORTED_VERSIONS: &[&str] = &["1.0"];
 
 /// High-level agent specification loaded from YAML.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct AgentSpec {
     /// Unique identifier for this agent (e.g. `"rag_spike"`).
     pub agent_id: String,
@@ -71,6 +70,12 @@ pub struct AgentSpec {
     /// during spec loading.
     #[serde(default)]
     pub required_tools: Vec<String>,
+    /// Reserved extension fields.
+    ///
+    /// Only top-level keys prefixed with `x_` are accepted. They round-trip
+    /// through parsing/serialization but are ignored by the runtime.
+    #[serde(flatten, default, skip_serializing_if = "HashMap::is_empty")]
+    pub extensions: HashMap<String, serde_json::Value>,
 }
 
 // ---------------------------------------------------------------------------
@@ -686,6 +691,7 @@ fn placeholder_regex() -> anyhow::Result<&'static Regex> {
 impl AgentSpec {
     /// Validate internal consistency of the spec.
     fn validate(&self) -> anyhow::Result<()> {
+        self.validate_extensions()?;
         self.validate_version()?;
         self.validate_graph_references()?;
         self.validate_conditional_edges()?;
@@ -694,6 +700,23 @@ impl AgentSpec {
         self.validate_react_config()?;
         self.validate_policies()?;
         Ok(())
+    }
+
+    fn validate_extensions(&self) -> anyhow::Result<()> {
+        let mut invalid: Vec<&str> = self
+            .extensions
+            .keys()
+            .filter(|key| !key.starts_with("x_"))
+            .map(String::as_str)
+            .collect();
+        if invalid.is_empty() {
+            return Ok(());
+        }
+        invalid.sort();
+        Err(anyhow!(
+            "agent spec contains unsupported top-level fields: {} (only x_* extensions are allowed)",
+            invalid.join(", ")
+        ))
     }
 
     fn validate_react_config(&self) -> anyhow::Result<()> {
@@ -1907,6 +1930,68 @@ bogus_field: true
 
     #[test]
     #[allow(clippy::disallowed_methods)]
+    fn schema_accepts_top_level_x_extensions() {
+        let yaml = r#"
+agent_id: ext
+description: top-level extension
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+x_owner: "platform"
+x_metadata:
+  rollout: gradual
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("x_* extension should parse");
+        assert_eq!(spec.extensions.get("x_owner").and_then(|v| v.as_str()), Some("platform"));
+        assert_eq!(
+            spec.extensions
+                .get("x_metadata")
+                .and_then(|v| v.get("rollout"))
+                .and_then(|v| v.as_str()),
+            Some("gradual")
+        );
+    }
+
+    #[test]
+    fn unvalidated_parse_rejects_non_extension_top_level_field() {
+        let yaml = r#"
+agent_id: bad
+description: unknown field
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+bogus_field: true
+"#;
+        let err = AgentSpec::from_yaml_str_unvalidated(yaml).unwrap_err();
+        assert!(err.to_string().contains("only x_* extensions are allowed"), "got: {err}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn unvalidated_parse_accepts_top_level_x_extensions() {
+        let yaml = r#"
+agent_id: ext
+description: top-level extension
+spec_version: "1.0"
+tasks: [a]
+graph:
+  start_task: a
+  tasks: [a]
+  edges: []
+x_flag: true
+"#;
+        let spec = AgentSpec::from_yaml_str_unvalidated(yaml).expect("x_* extension should parse");
+        assert_eq!(spec.extensions.get("x_flag").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
     fn registry_from_map() {
         let mut map = HashMap::new();
         let spec1 = AgentSpec::from_yaml_str(VALID_SPEC).unwrap();
@@ -1951,8 +2036,9 @@ graph:
         // Non-YAML file should be ignored.
         tokio::fs::write(dir.path().join("readme.txt"), "ignore me").await.unwrap();
 
-        let registry =
-            AgentRegistry::load_from_dir(dir.path(), &HashMap::new(), &tool_registry).await.unwrap();
+        let registry = AgentRegistry::load_from_dir(dir.path(), &HashMap::new(), &tool_registry)
+            .await
+            .unwrap();
         assert_eq!(registry.len(), 2);
         assert!(registry.get("agent_a").is_some());
         assert!(registry.get("agent_b").is_some());
