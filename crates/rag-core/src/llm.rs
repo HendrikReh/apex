@@ -568,6 +568,7 @@ mod tests {
     use crate::config::AuthMode;
     use backoff::backoff::Backoff;
 
+    #[allow(clippy::disallowed_methods)] // test helper — .expect() is fine
     fn test_config() -> AppConfig {
         AppConfig {
             qdrant_url: "http://127.0.0.1:6334".to_string(),

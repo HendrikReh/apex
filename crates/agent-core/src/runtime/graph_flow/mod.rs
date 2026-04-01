@@ -178,7 +178,7 @@ impl GraphFlowRuntime {
             edges_by_from.entry(edge.from.as_str()).or_default().push(edge);
         }
 
-        for (_from, edges) in &edges_by_from {
+        for edges in edges_by_from.values() {
             let unconditional: Vec<&crate::spec::AgentGraphEdge> =
                 edges.iter().copied().filter(|e| e.condition_key.is_none()).collect();
             let conditional: Vec<&crate::spec::AgentGraphEdge> =

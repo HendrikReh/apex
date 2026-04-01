@@ -740,12 +740,13 @@ impl AgentSpec {
     }
 
     fn validate_policies(&self) -> anyhow::Result<()> {
-        if let Some(ref p) = self.policies {
-            if p.require_policy_context && p.allowed_collections.is_empty() {
-                return Err(anyhow!(
-                    "policies.require_policy_context is true but allowed_collections is empty"
-                ));
-            }
+        if let Some(ref p) = self.policies
+            && p.require_policy_context
+            && p.allowed_collections.is_empty()
+        {
+            return Err(anyhow!(
+                "policies.require_policy_context is true but allowed_collections is empty"
+            ));
         }
         Ok(())
     }

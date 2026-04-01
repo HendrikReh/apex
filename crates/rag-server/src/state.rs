@@ -120,6 +120,7 @@ mod tests {
     use axum::body::to_bytes;
 
     #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // test — .expect() is fine
     async fn anyhow_errors_are_sanitized_for_clients() {
         let response =
             ApiError::from(anyhow::anyhow!("database connection failed: postgres://secret"))
