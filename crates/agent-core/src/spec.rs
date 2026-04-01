@@ -52,6 +52,9 @@ pub struct AgentSpec {
     /// Optional data governance policies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policies: Option<AgentPolicies>,
+    /// Optional ReAct loop configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub react: Option<AgentReactConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +223,132 @@ pub struct AgentPolicies {
 }
 
 // ---------------------------------------------------------------------------
+// ReAct configuration
+// ---------------------------------------------------------------------------
+
+/// Configuration for a ReAct (Reasoning + Acting) loop.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentReactConfig {
+    /// Whether the ReAct loop is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of think→act→observe iterations.
+    #[serde(default = "default_react_max_iterations")]
+    pub max_iterations: usize,
+    /// Conditions that terminate the loop.
+    #[serde(default)]
+    pub stop_conditions: AgentReactStopConditions,
+    /// Prompt template for the reasoning step.
+    #[serde(default = "default_react_reasoning_prompt")]
+    pub reasoning_prompt: String,
+    /// Allowed action types within the loop.
+    #[serde(default = "default_react_action_types")]
+    pub action_types: Vec<AgentReactActionType>,
+    /// Whether to include reasoning traces in output.
+    #[serde(default = "default_react_trace_reasoning")]
+    pub trace_reasoning: bool,
+    /// Rolling-window cap for history entries. 0 means unbounded.
+    #[serde(default = "default_react_max_history")]
+    pub max_history: usize,
+}
+
+/// Stop conditions for the ReAct loop.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AgentReactStopConditions {
+    /// Confidence threshold (0.0–1.0) above which the loop terminates.
+    #[serde(default = "default_react_confidence_threshold")]
+    pub confidence_threshold: f32,
+    /// Maximum number of actions before forced termination.
+    #[serde(default = "default_react_max_actions")]
+    pub max_actions: usize,
+    /// Whether the agent can emit an explicit stop signal.
+    #[serde(default = "default_react_explicit_stop")]
+    pub explicit_stop: bool,
+}
+
+/// Types of actions available in a ReAct loop.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentReactActionType {
+    Search,
+    RefineQuery,
+    RequestDetail,
+    Conclude,
+}
+
+const DEFAULT_REACT_MAX_ITERATIONS: usize = 5;
+const DEFAULT_REACT_CONFIDENCE_THRESHOLD: f32 = 0.85;
+const DEFAULT_REACT_MAX_ACTIONS: usize = 10;
+const DEFAULT_REACT_TRACE_REASONING: bool = true;
+const DEFAULT_REACT_EXPLICIT_STOP: bool = true;
+const DEFAULT_REACT_MAX_HISTORY: usize = 20;
+
+fn default_react_max_iterations() -> usize {
+    DEFAULT_REACT_MAX_ITERATIONS
+}
+
+fn default_react_confidence_threshold() -> f32 {
+    DEFAULT_REACT_CONFIDENCE_THRESHOLD
+}
+
+fn default_react_max_actions() -> usize {
+    DEFAULT_REACT_MAX_ACTIONS
+}
+
+fn default_react_explicit_stop() -> bool {
+    DEFAULT_REACT_EXPLICIT_STOP
+}
+
+fn default_react_reasoning_prompt() -> String {
+    r#"Think step by step:
+1. What do I know so far?
+2. What do I still need to find out?
+3. What action should I take next?
+4. What do I expect to observe?"#
+        .to_string()
+}
+
+fn default_react_action_types() -> Vec<AgentReactActionType> {
+    vec![
+        AgentReactActionType::Search,
+        AgentReactActionType::RefineQuery,
+        AgentReactActionType::Conclude,
+    ]
+}
+
+fn default_react_trace_reasoning() -> bool {
+    DEFAULT_REACT_TRACE_REASONING
+}
+
+fn default_react_max_history() -> usize {
+    DEFAULT_REACT_MAX_HISTORY
+}
+
+impl Default for AgentReactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_iterations: DEFAULT_REACT_MAX_ITERATIONS,
+            stop_conditions: AgentReactStopConditions::default(),
+            reasoning_prompt: default_react_reasoning_prompt(),
+            action_types: default_react_action_types(),
+            trace_reasoning: DEFAULT_REACT_TRACE_REASONING,
+            max_history: DEFAULT_REACT_MAX_HISTORY,
+        }
+    }
+}
+
+impl Default for AgentReactStopConditions {
+    fn default() -> Self {
+        Self {
+            confidence_threshold: DEFAULT_REACT_CONFIDENCE_THRESHOLD,
+            max_actions: DEFAULT_REACT_MAX_ACTIONS,
+            explicit_stop: DEFAULT_REACT_EXPLICIT_STOP,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Checkpoint configuration
 // ---------------------------------------------------------------------------
 
@@ -300,6 +429,27 @@ impl AgentSpec {
         self.validate_graph_references()?;
         self.validate_acyclicity()?;
         self.validate_checkpoint_references()?;
+        self.validate_react_config()?;
+        Ok(())
+    }
+
+    fn validate_react_config(&self) -> anyhow::Result<()> {
+        if let Some(ref react) = self.react {
+            let ct = react.stop_conditions.confidence_threshold;
+            if !(0.0..=1.0).contains(&ct) {
+                return Err(anyhow!(
+                    "react.stop_conditions.confidence_threshold must be 0.0–1.0, got {ct}"
+                ));
+            }
+            if react.max_iterations == 0 {
+                return Err(anyhow!("react.max_iterations must be > 0"));
+            }
+            if react.action_types.is_empty() {
+                return Err(anyhow!(
+                    "react.action_types must not be empty (loop cannot act without action types)"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -985,6 +1135,176 @@ policies:
         assert!(!pol.require_citations, "should default to false");
         assert!(!pol.require_policy_context, "should default to false");
         assert_eq!(pol.allowed_collections, vec!["docs"]);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn parses_react_config() {
+        let yaml = r#"
+agent_id: react_test
+description: react config test
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  max_iterations: 8
+  stop_conditions:
+    confidence_threshold: 0.9
+    max_actions: 15
+    explicit_stop: false
+  reasoning_prompt: "Custom prompt"
+  action_types:
+    - search
+    - refine_query
+    - request_detail
+    - conclude
+  trace_reasoning: false
+  max_history: 50
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let rc = spec.react.expect("react should be present");
+        assert!(rc.enabled);
+        assert_eq!(rc.max_iterations, 8);
+        assert!((rc.stop_conditions.confidence_threshold - 0.9).abs() < f32::EPSILON);
+        assert_eq!(rc.stop_conditions.max_actions, 15);
+        assert!(!rc.stop_conditions.explicit_stop);
+        assert_eq!(rc.reasoning_prompt, "Custom prompt");
+        assert_eq!(rc.action_types.len(), 4);
+        assert!(!rc.trace_reasoning);
+        assert_eq!(rc.max_history, 50);
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn react_config_defaults() {
+        let yaml = r#"
+agent_id: react_default
+description: react defaults
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        let rc = spec.react.expect("react");
+        assert!(rc.enabled);
+        assert_eq!(rc.max_iterations, 5);
+        assert!((rc.stop_conditions.confidence_threshold - 0.85).abs() < f32::EPSILON);
+        assert_eq!(rc.stop_conditions.max_actions, 10);
+        assert!(rc.stop_conditions.explicit_stop);
+        assert!(rc.trace_reasoning);
+        assert_eq!(rc.max_history, 20);
+        assert_eq!(rc.action_types.len(), 3);
+    }
+
+    #[test]
+    fn rejects_out_of_range_confidence_threshold() {
+        let yaml = r#"
+agent_id: bad_ct
+description: bad confidence threshold
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  stop_conditions:
+    confidence_threshold: 1.5
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_negative_confidence_threshold() {
+        let yaml = r#"
+agent_id: bad_ct
+description: negative confidence
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  stop_conditions:
+    confidence_threshold: -0.5
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("confidence_threshold must be 0.0"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_zero_max_iterations() {
+        let yaml = r#"
+agent_id: bad_iter
+description: zero iterations
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  max_iterations: 0
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("max_iterations must be > 0"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_empty_action_types() {
+        let yaml = r#"
+agent_id: bad_actions
+description: no actions
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+react:
+  enabled: true
+  action_types: []
+"#;
+        let err = AgentSpec::from_yaml_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("action_types must not be empty"), "got: {err}");
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)]
+    fn react_config_is_optional() {
+        let yaml = r#"
+agent_id: no_react
+description: no react
+spec_version: "1.0"
+tasks: [a, b]
+graph:
+  start_task: a
+  tasks: [a, b]
+  edges:
+    - { from: a, to: b }
+"#;
+        let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
+        assert!(spec.react.is_none());
     }
 
     #[test]
