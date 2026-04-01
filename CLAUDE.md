@@ -159,6 +159,6 @@ sqlx macros verify SQL at compile time. **NEVER run migration SQL files with raw
 
 ---
 
-**Version**: 0.10.0
-**Last updated**: 2026-03-31
+**Version**: 0.10.1
+**Last updated**: 2026-04-01
 **Maintained By**: <hendrik.reh@blacksmith-consulting.ai>
