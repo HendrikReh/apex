@@ -3,7 +3,9 @@ use std::sync::Arc;
 use axum::Json;
 use axum::extract::{Multipart, State};
 use axum::http::StatusCode;
-use rag_core::ingest::{IngestBatchOutcome, IngestDirectoryRequest, IngestFileRequest};
+use rag_core::ingest::{
+    IngestBatchOutcome, IngestDirectoryRequest, IngestFileRequest, validate_ingest_path,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::state::{ApiError, AppState, Ctx, ErrorBody};
@@ -11,6 +13,22 @@ use crate::state::{ApiError, AppState, Ctx, ErrorBody};
 fn sanitize_ingest_error(path: &std::path::Path, error: anyhow::Error) -> String {
     tracing::error!(path = %path.display(), error = format!("{error:#}"), "document ingestion failed");
     "ingestion failed".to_string()
+}
+
+fn validate_request_paths(
+    paths: &[String],
+    allowed_roots: &[std::path::PathBuf],
+) -> Result<Vec<std::path::PathBuf>, ApiError> {
+    paths
+        .iter()
+        .map(|path| {
+            let path_buf = std::path::PathBuf::from(path);
+            validate_ingest_path(&path_buf, allowed_roots).map_err(|error| ApiError {
+                status: StatusCode::BAD_REQUEST,
+                message: error.to_string(),
+            })
+        })
+        .collect()
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -56,8 +74,7 @@ pub async fn ingest_paths(
             message: "paths must not be empty".into(),
         });
     }
-    let paths: Vec<std::path::PathBuf> =
-        payload.paths.iter().map(std::path::PathBuf::from).collect();
+    let paths = validate_request_paths(&payload.paths, &state.config.ingest_allowed_roots)?;
 
     let mut total =
         IngestBatchOutcome { documents: 0, chunks: 0, skipped: 0, failures: Vec::new() };
@@ -200,4 +217,17 @@ pub async fn ingest_upload(
         skipped: if outcome.skipped { 1 } else { 0 },
         failures: Vec::new(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_paths_reject_nonexistent_input_with_400() {
+        let roots = vec![std::path::PathBuf::from("/tmp")];
+        let err = validate_request_paths(&["/definitely/missing".to_string()], &roots)
+            .expect_err("reject");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+    }
 }

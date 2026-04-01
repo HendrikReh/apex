@@ -45,6 +45,19 @@ fn validate_search(req: &SearchRequest) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn classify_search_error(err: anyhow::Error) -> ApiError {
+    let msg = format!("{err:#}");
+    let msg_lower = msg.to_ascii_lowercase();
+    let is_client_error = msg_lower.contains("collection")
+        && (msg_lower.contains("does not exist") || msg_lower.contains("not found"));
+
+    if is_client_error {
+        ApiError { status: StatusCode::BAD_REQUEST, message: msg }
+    } else {
+        ApiError::internal_with_context("search request failed", &err)
+    }
+}
+
 #[utoipa::path(post, path = "/search/dense", tag = "Search",
     request_body = SearchRequest,
     params(("x-tenant" = String, Header, description = "Tenant identifier")),
@@ -65,7 +78,7 @@ pub async fn search_dense(
         .retrieval
         .search_dense(&payload.collection, &payload.query, ctx.tenant.as_str(), top_k)
         .await
-        .map_err(ApiError::from)?;
+        .map_err(classify_search_error)?;
 
     let results = chunks
         .into_iter()
@@ -101,7 +114,7 @@ pub async fn search_sparse(
         .retrieval
         .search_sparse(&payload.collection, &payload.query, ctx.tenant.as_str(), top_k)
         .await
-        .map_err(ApiError::from)?;
+        .map_err(classify_search_error)?;
 
     let results = chunks
         .into_iter()
@@ -203,7 +216,7 @@ pub async fn search_hybrid(
         .retrieval
         .search_hybrid(&payload.collection, &payload.query, ctx.tenant.as_str(), overrides)
         .await
-        .map_err(ApiError::from)?;
+        .map_err(classify_search_error)?;
 
     let results = chunks
         .into_iter()
@@ -217,4 +230,29 @@ pub async fn search_hybrid(
         .collect();
 
     Ok(Json(HybridSearchResponse { results }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_collection_not_found_is_actionable() {
+        let err = classify_search_error(anyhow::anyhow!(
+            "dense search: searching dense vectors in collection 'missing' (tenant 't'): Not found: collection does not exist"
+        ));
+
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(err.message.contains("collection 'missing'"));
+    }
+
+    #[test]
+    fn search_backend_failures_are_sanitized() {
+        let err = classify_search_error(anyhow::anyhow!(
+            "dense search: qdrant unavailable at http://127.0.0.1:6334"
+        ));
+
+        assert_eq!(err.status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(err.message, "internal error");
+    }
 }

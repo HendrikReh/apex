@@ -554,7 +554,7 @@ impl IngestService {
 /// Verify that `path` resolves under one of the pre-canonicalized `allowed_roots`.
 ///
 /// `allowed_roots` are canonicalized once at startup by `AppConfig::from_env`.
-fn validate_ingest_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf> {
+pub fn validate_ingest_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf> {
     if allowed_roots.is_empty() {
         bail!("path-based ingestion is disabled until ingest_allowed_roots is configured");
     }
