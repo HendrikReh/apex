@@ -184,7 +184,7 @@ impl AgentManager {
             .map(|entry| entry.clone())
             .ok_or_else(|| anyhow!("unknown run '{run_id}'"))?;
         if record.tenant != tenant {
-            return Err(anyhow!("run '{run_id}' not found"));
+            return Err(anyhow!("unknown run '{run_id}'"));
         }
         let runtime = self
             .runtimes
