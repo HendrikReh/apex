@@ -17,7 +17,7 @@ Today, the open-source project covers the core RAG path end to end:
 - authentication (API key + OIDC), role-based access control, and rate limiting
 - multi-tenant HTTP and CLI workflows
 
-The current Phase 1 platform is also hardened in the areas that matter operationally:
+The current platform is also hardened in the areas that matter operationally:
 
 - protected routes now fail closed by default
 - `/ingest` rejects invalid or out-of-bounds filesystem paths as `400` requests
@@ -30,7 +30,7 @@ The current Phase 1 platform is also hardened in the areas that matter operation
 
 > Apex is the open-source migration path for Apex Accelerator, my commercial offering. That migration is still in progress.
 >
-> The current open-source release is centered on Phase 1, the core RAG platform. Later phases bring over the observability, provenance, agent, and compliance layers that matter in enterprise deployments.
+> The current open-source release spans the Phase 1 RAG foundation and the emerging Phase 2 agent workflow layer. Later phases bring over the observability, provenance, and compliance capabilities that matter in enterprise deployments.
 
 ### Migration roadmap
 
