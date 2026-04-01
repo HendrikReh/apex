@@ -116,19 +116,21 @@ fn is_dynamic_path(path: &str) -> bool {
 }
 
 fn route_policy(method: &Method, path: &str) -> RoutePolicy {
+    let effective_method = if *method == Method::HEAD { &Method::GET } else { method };
+
     // Check static routes first.
     let mut path_known = false;
     for (route_path, entry) in STATIC_ROUTES {
         if *route_path == path {
             path_known = true;
-            if entry.method == method {
+            if entry.method == effective_method {
                 return RoutePolicy::Authorized(entry.capability);
             }
         }
     }
 
     // Check dynamic patterns.
-    if let Some(cap) = dynamic_route(method, path) {
+    if let Some(cap) = dynamic_route(effective_method, path) {
         return RoutePolicy::Authorized(cap);
     }
     if is_dynamic_path(path) {
@@ -161,7 +163,15 @@ mod tests {
             RoutePolicy::Authorized(Capability::AgentsOperate),
         );
         assert_eq!(
+            route_policy(&Method::HEAD, "/agents"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
             route_policy(&Method::GET, "/agents/rag_spike"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/agents/rag_spike"),
             RoutePolicy::Authorized(Capability::AgentsOperate),
         );
         assert_eq!(
@@ -173,7 +183,15 @@ mod tests {
             RoutePolicy::Authorized(Capability::AgentsOperate),
         );
         assert_eq!(
+            route_policy(&Method::HEAD, "/runs"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
             route_policy(&Method::GET, "/runs/00000000-0000-0000-0000-000000000000"),
+            RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/runs/00000000-0000-0000-0000-000000000000"),
             RoutePolicy::Authorized(Capability::AgentsOperate),
         );
         assert_eq!(
