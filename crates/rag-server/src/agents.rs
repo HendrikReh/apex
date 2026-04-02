@@ -255,8 +255,16 @@ impl ChatPort for ServerChatPort {
                 document_id: chunk.document_id.clone(),
                 chunk_index: chunk.chunk_index,
                 text: chunk.text.clone(),
+                title: None,
+                source_url: None,
+                source_domain: None,
+                language: None,
+                tags: Vec::new(),
+                section_heading: None,
+                collection: None,
                 fused_score: chunk.score,
-                sources: vec!["hybrid".to_string()],
+                score_type: "agent_summary".to_string(),
+                sources: vec!["agent-core".to_string()],
                 source_scores: std::collections::HashMap::new(),
             })
             .collect();
