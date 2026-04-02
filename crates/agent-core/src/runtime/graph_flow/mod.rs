@@ -20,7 +20,7 @@ use crate::ports::{ApprovalPort, ChatPort, RetrievalPort};
 use crate::spec::AgentSpec;
 use crate::types::{
     AgentRunConfig, AgentRunResult, AgentState, CheckpointDecision, PendingCheckpoint, QueryType,
-    RunId, ScoredChunk, StepRecord, StepStatus,
+    RouteDecision, RunId, ScoredChunk, StepRecord, StepStatus,
 };
 
 use tasks::*;
@@ -330,6 +330,7 @@ impl GraphFlowRuntime {
         let summary: Option<String> = context.get(keys::SUMMARY).await;
         let search_results: Option<Vec<ScoredChunk>> = context.get(keys::SEARCH_RESULTS).await;
         let query_type: Option<QueryType> = context.get(keys::QUERY_TYPE).await;
+        let route_decision: Option<RouteDecision> = context.get(keys::ROUTE_DECISION).await;
 
         // Read PendingCheckpoint from context (written by ApprovalCheckpointTask).
         // Only present when the run is awaiting approval.
@@ -347,7 +348,7 @@ impl GraphFlowRuntime {
             summary,
             search_results,
             query_type,
-            route_decision: None,
+            route_decision,
             pending_checkpoint,
             steps,
         }
@@ -484,5 +485,119 @@ impl super::AgentRuntime for GraphFlowRuntime {
             .await;
 
         Ok(Some(result))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::types::{AgentState, QueryClass, RetrievalProfileId, RouteDecision, RoutePath};
+
+    struct StubRetrieval;
+    struct StubChat;
+    struct StubApproval;
+
+    #[async_trait::async_trait]
+    impl RetrievalPort for StubRetrieval {
+        async fn search_dense(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_sparse(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_hybrid(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_fts(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn expand_chunk_neighbors(
+            &self,
+            _: &str,
+            _: &str,
+            _: i32,
+            _: i32,
+            _: i32,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_document(&self, _: &str, _: &str) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChatPort for StubChat {
+        async fn summarize(&self, _: &str, _: &[ScoredChunk], _: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalPort for StubApproval {
+        async fn request_approval(
+            &self,
+            _: &PendingCheckpoint,
+        ) -> anyhow::Result<Option<CheckpointDecision>> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_results_reads_route_decision_from_context() {
+        let runtime = GraphFlowRuntime::new(
+            Arc::new(StubRetrieval),
+            Arc::new(StubChat),
+            Arc::new(StubApproval),
+        );
+        let context = graph_flow::Context::new();
+        let decision = RouteDecision {
+            selected_path: RoutePath::AgenticSearch,
+            query_class: QueryClass::Procedural,
+            retrieval_profile: RetrievalProfileId::LexicalFirst,
+            ambiguity: false,
+            needs_multi_hop: false,
+            needs_high_evidence: true,
+            time_sensitive: false,
+            normalized_filters: Vec::new(),
+            reasons: vec!["procedural".to_string()],
+        };
+        context.set(keys::ROUTE_DECISION, &decision).await;
+
+        let result = runtime
+            .extract_results(&context, Uuid::new_v4(), AgentState::Completed, Vec::new())
+            .await;
+
+        assert_eq!(result.route_decision, Some(decision));
     }
 }

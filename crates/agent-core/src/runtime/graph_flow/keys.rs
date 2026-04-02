@@ -6,6 +6,7 @@ pub const QUERY: &str = "query";
 pub const COLLECTION: &str = "collection";
 pub const TENANT: &str = "tenant";
 pub const QUERY_TYPE: &str = "query_type";
+pub const ROUTE_DECISION: &str = "route_decision";
 pub const SEARCH_RESULTS: &str = "search_results";
 pub const SUMMARY: &str = "summary";
 pub const FINAL_ANSWER: &str = "final_answer";

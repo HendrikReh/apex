@@ -40,9 +40,14 @@ async fn main() -> Result<()> {
     let chat =
         Arc::new(ChatService::new(stores.clone(), &config).context("building chat service")?);
     let agents = Arc::new(
-        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
-            .await
-            .context("loading agent manager")?,
+        AgentManager::load_default(
+            &config.agent_specs_dir,
+            stores.clone(),
+            retrieval.clone(),
+            chat.clone(),
+        )
+        .await
+        .context("loading agent manager")?,
     );
 
     let tenant_header = config.tenant_header.parse().context("parsing tenant header name")?;

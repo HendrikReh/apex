@@ -10,7 +10,7 @@ use agent_core::types::{
 };
 use anyhow::{Context, Result, anyhow};
 use dashmap::DashMap;
-use rag_core::{ChatService, FusedChunk, RetrievalService, RetrievedChunk};
+use rag_core::{ChatService, FusedChunk, RetrievalService, RetrievedChunk, Stores};
 
 #[derive(Clone)]
 pub struct AgentManager {
@@ -46,6 +46,7 @@ pub struct RunWithMetadata {
 impl AgentManager {
     pub async fn load_default(
         agent_specs_dir: &std::path::Path,
+        stores: Stores,
         retrieval: Arc<RetrievalService>,
         chat: Arc<ChatService>,
     ) -> Result<Self> {
@@ -62,7 +63,10 @@ impl AgentManager {
         for (agent_id, spec) in registry.list() {
             let runtime: Arc<dyn AgentRuntime> = Arc::new(GraphFlowRuntime::from_spec(
                 spec.clone(),
-                Arc::new(ServerRetrievalPort { retrieval: retrieval.clone() }),
+                Arc::new(ServerRetrievalPort {
+                    retrieval: retrieval.clone(),
+                    stores: stores.clone(),
+                }),
                 Arc::new(ServerChatPort { chat: chat.clone() }),
                 Arc::new(PauseForApproval),
             ));
@@ -209,6 +213,7 @@ fn describe_agent(spec: &AgentSpec) -> AgentDescriptor {
 
 struct ServerRetrievalPort {
     retrieval: Arc<RetrievalService>,
+    stores: Stores,
 }
 
 fn map_retrieved_chunk(chunk: RetrievedChunk) -> ScoredChunk {
@@ -312,9 +317,36 @@ impl RetrievalPort for ServerRetrievalPort {
     }
 
     async fn fetch_document(&self, tenant: &str, document_id: &str) -> Result<serde_json::Value> {
+        let document = self.stores.get_document(tenant, document_id).await?.ok_or_else(|| {
+            anyhow!("document '{document_id}' does not exist for tenant '{tenant}'")
+        })?;
+        let chunks = self.stores.get_chunks_by_document(tenant, document_id).await?;
+
         Ok(serde_json::json!({
-            "document_id": document_id,
-            "tenant": tenant,
+            "tenant": document.tenant,
+            "document": {
+                "id": document.id,
+                "title": document.title,
+                "language": document.language,
+                "metadata": document.metadata,
+                "source_path": document.source_path,
+                "version": document.version,
+                "checksum": document.checksum,
+                "ingest_run_id": document.ingest_run_id,
+                "token_count": document.token_count,
+                "collection": document.collection,
+                "stats_collection": document.stats_collection,
+                "stats_token_count": document.stats_token_count,
+                "created_at": document.created_at,
+                "updated_at": document.updated_at,
+            },
+            "chunks": chunks.into_iter().map(|chunk| serde_json::json!({
+                "id": chunk.id,
+                "tenant": chunk.tenant,
+                "document_id": chunk.document_id,
+                "chunk_index": chunk.chunk_index,
+                "text": chunk.text,
+            })).collect::<Vec<_>>(),
         }))
     }
 }

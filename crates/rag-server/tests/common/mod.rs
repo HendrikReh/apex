@@ -34,9 +34,14 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
             .expect("test chat"),
     );
     let agents = Arc::new(
-        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
-            .await
-            .expect("agents"),
+        AgentManager::load_default(
+            &config.agent_specs_dir,
+            stores.clone(),
+            retrieval.clone(),
+            chat.clone(),
+        )
+        .await
+        .expect("agents"),
     );
     let tenant_header = config.tenant_header.parse().expect("tenant header");
     let auth =
