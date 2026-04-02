@@ -9,11 +9,17 @@ description: >
   baseline answer and an evidence-first composition branch.
 spec_version: "1.0"
 
+required_tools:
+  - retrieval.dense
+  - retrieval.hybrid
+  - retrieval.fts
+
 tasks:
   - route_query
   - baseline_answer
   - retrieve_evidence
   - compose_answer
+  - final_answer
 
 graph:
   start_task: route_query
@@ -22,7 +28,10 @@ graph:
     - baseline_answer
     - retrieve_evidence
     - compose_answer
+    - final_answer
   edges:
     - { from: route_query, to: retrieve_evidence, condition_key: route_to_agentic_search }
     - { from: route_query, to: baseline_answer }
     - { from: retrieve_evidence, to: compose_answer }
+    - { from: baseline_answer, to: final_answer }
+    - { from: compose_answer, to: final_answer }

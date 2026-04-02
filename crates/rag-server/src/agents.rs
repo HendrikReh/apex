@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_core::ports::{ApprovalPort, ChatPort, RetrievalPort};
+use agent_core::ports::{ApprovalPort, BaselineAnswerPort, ChatPort, RetrievalPort};
 use agent_core::runtime::AgentRuntime;
 use agent_core::runtime::graph_flow::GraphFlowRuntime;
 use agent_core::spec::{AgentSpec, DefaultToolRegistry};
 use agent_core::types::{
-    AgentRunConfig, AgentRunResult, CheckpointDecision, PendingCheckpoint, RunId, ScoredChunk,
+    AgentRunConfig, AgentRunResult, CheckpointDecision, GroundedAnswer as AgentGroundedAnswer,
+    PendingCheckpoint, RunId, ScoredChunk,
 };
 use anyhow::{Context, Result, anyhow};
 use dashmap::DashMap;
@@ -61,15 +62,17 @@ impl AgentManager {
 
         let mut runtimes: HashMap<String, Arc<dyn AgentRuntime>> = HashMap::new();
         for (agent_id, spec) in registry.list() {
-            let runtime: Arc<dyn AgentRuntime> = Arc::new(GraphFlowRuntime::from_spec(
-                spec.clone(),
-                Arc::new(ServerRetrievalPort {
-                    retrieval: retrieval.clone(),
-                    stores: stores.clone(),
-                }),
-                Arc::new(ServerChatPort { chat: chat.clone() }),
-                Arc::new(PauseForApproval),
-            ));
+            let runtime: Arc<dyn AgentRuntime> =
+                Arc::new(GraphFlowRuntime::from_spec_with_baseline(
+                    spec.clone(),
+                    Arc::new(ServerRetrievalPort {
+                        retrieval: retrieval.clone(),
+                        stores: stores.clone(),
+                    }),
+                    Arc::new(ServerChatPort { chat: chat.clone() }),
+                    Arc::new(PauseForApproval),
+                    Arc::new(ServerBaselineAnswerPort { chat: chat.clone() }),
+                ));
             runtimes.insert(agent_id.clone(), runtime);
         }
 
@@ -355,6 +358,10 @@ struct ServerChatPort {
     chat: Arc<ChatService>,
 }
 
+struct ServerBaselineAnswerPort {
+    chat: Arc<ChatService>,
+}
+
 #[async_trait::async_trait]
 impl ChatPort for ServerChatPort {
     async fn summarize(
@@ -387,6 +394,26 @@ impl ChatPort for ServerChatPort {
             })
             .collect();
         self.chat.summarize_chunks(query, fused_chunks).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BaselineAnswerPort for ServerBaselineAnswerPort {
+    async fn answer_single_shot(
+        &self,
+        query: &str,
+        collection: &str,
+        tenant: &str,
+        language: Option<&str>,
+    ) -> Result<AgentGroundedAnswer> {
+        let grounded = self.chat.answer_single_shot(query, collection, tenant, language).await?;
+
+        Ok(AgentGroundedAnswer {
+            answer: grounded.answer,
+            search_results: grounded.evidence.into_iter().map(map_fused_chunk).collect(),
+            citations: grounded.citations.into_iter().map(|citation| citation.chunk_id).collect(),
+            model: grounded.model,
+        })
     }
 }
 

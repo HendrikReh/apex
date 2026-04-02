@@ -227,3 +227,45 @@ async fn runs_are_tenant_scoped_for_read_and_decision_paths() {
         .expect("approve tenant b");
     assert_eq!(approve_tenant_b.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[ignore] // requires `just up`
+async fn execute_agentic_search_v1_simple_query_uses_baseline_path() {
+    let (app, _state) = common::full_app().await;
+    let server = spawn_app(app).await.expect("spawn");
+
+    let fixture =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.txt");
+
+    let client = reqwest::Client::new();
+    let suffix = unique_suffix();
+    let collection = format!("test-agentic-search-v1-coll-{suffix}");
+    let tenant = format!("test-agentic-search-v1-{suffix}");
+
+    let ingest = client
+        .post(format!("{}/ingest", server.base_url()))
+        .header("x-tenant", &tenant)
+        .json(&serde_json::json!({
+            "paths": [fixture.to_str().unwrap()],
+            "collection": &collection
+        }))
+        .send()
+        .await
+        .expect("ingest");
+    assert_eq!(ingest.status(), StatusCode::OK);
+
+    let execute = client
+        .post(format!("{}/agents/agentic_search_v1/execute", server.base_url()))
+        .header("x-tenant", &tenant)
+        .json(&serde_json::json!({
+            "query": "What is in the document?",
+            "collection": &collection
+        }))
+        .send()
+        .await
+        .expect("execute");
+    assert_eq!(execute.status(), StatusCode::OK);
+    let execute_body: serde_json::Value = execute.json().await.expect("execute json");
+    assert_eq!(execute_body["state"], "completed");
+    assert_eq!(execute_body["route_decision"]["selected_path"], "single_pass_rag");
+}

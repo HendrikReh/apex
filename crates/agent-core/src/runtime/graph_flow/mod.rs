@@ -552,6 +552,7 @@ mod tests {
         AgentRunConfig, AgentState, GroundedAnswer, QueryClass, RetrievalProfileId, RouteDecision,
         RoutePath,
     };
+    use graph_flow::Task;
 
     struct StubRetrieval;
     struct StubChat;
@@ -766,11 +767,16 @@ mod tests {
 agent_id: agentic_search_v1
 description: "Milestone 1 routed search graph"
 spec_version: "1.0"
+required_tools:
+  - retrieval.dense
+  - retrieval.hybrid
+  - retrieval.fts
 tasks:
   - route_query
   - baseline_answer
   - retrieve_evidence
   - compose_answer
+  - final_answer
 graph:
   start_task: route_query
   tasks:
@@ -778,10 +784,13 @@ graph:
     - baseline_answer
     - retrieve_evidence
     - compose_answer
+    - final_answer
   edges:
     - { from: route_query, to: retrieve_evidence, condition_key: route_to_agentic_search }
     - { from: route_query, to: baseline_answer }
     - { from: retrieve_evidence, to: compose_answer }
+    - { from: baseline_answer, to: final_answer }
+    - { from: compose_answer, to: final_answer }
 "#,
         )
         .expect("routed spec should parse")
@@ -822,6 +831,21 @@ graph:
             .await;
 
         assert_eq!(result.route_decision, Some(decision));
+    }
+
+    #[tokio::test]
+    async fn route_query_task_writes_retrieval_profile_key() {
+        let task = RouteQueryTask;
+        let context = graph_flow::Context::new();
+        context
+            .set(keys::QUERY, &"How do I rotate API keys in the auth runbook?".to_string())
+            .await;
+
+        task.run(context.clone()).await.expect("route task should run");
+
+        let retrieval_profile: RetrievalProfileId =
+            context.get(keys::RETRIEVAL_PROFILE).await.expect("retrieval profile");
+        assert_eq!(retrieval_profile, RetrievalProfileId::LexicalFirst);
     }
 
     #[tokio::test]
@@ -925,6 +949,8 @@ graph:
 
         assert_eq!(spec.agent_id, "agentic_search_v1");
         assert_eq!(spec.graph.start_task, "route_query");
-        assert_eq!(spec.graph.edges.len(), 3);
+        assert!(spec.required_tools.iter().any(|tool| tool == "retrieval.hybrid"));
+        assert!(spec.graph.tasks.iter().any(|task| task == "final_answer"));
+        assert_eq!(spec.graph.edges.len(), 5);
     }
 }

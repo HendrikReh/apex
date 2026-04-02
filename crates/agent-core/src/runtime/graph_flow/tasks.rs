@@ -53,6 +53,7 @@ impl Task for RouteQueryTask {
         info!(route = ?decision.selected_path, retrieval_profile = ?decision.retrieval_profile, "routed query");
 
         context.set(keys::ROUTE_DECISION, &decision).await;
+        context.set(keys::RETRIEVAL_PROFILE, &decision.retrieval_profile).await;
         context.set(keys::ROUTE_TO_AGENTIC_SEARCH, &route_to_agentic_search).await;
 
         Ok(TaskResult::new(Some(format!("{:?}", decision.selected_path)), NextAction::Continue))
@@ -100,7 +101,7 @@ impl Task for BaselineAnswerTask {
         context.set(keys::SEARCH_RESULTS, &grounded_answer.search_results).await;
         context.set(keys::FINAL_ANSWER, &grounded_answer.answer).await;
 
-        Ok(TaskResult::new(Some(grounded_answer.answer), NextAction::End))
+        Ok(TaskResult::new(Some(grounded_answer.answer), NextAction::Continue))
     }
 }
 
@@ -192,7 +193,7 @@ impl Task for ComposeAnswerTask {
             let msg = "No evidence retrieved to compose answer.".to_string();
             context.set(keys::SUMMARY, &msg).await;
             context.set(keys::FINAL_ANSWER, &msg).await;
-            return Ok(TaskResult::new(Some(msg), NextAction::End));
+            return Ok(TaskResult::new(Some(msg), NextAction::Continue));
         }
 
         let answer = self.chat.summarize(&query, &results, &tenant).await.map_err(|e| {
@@ -203,7 +204,7 @@ impl Task for ComposeAnswerTask {
         context.set(keys::SUMMARY, &answer).await;
         context.set(keys::FINAL_ANSWER, &answer).await;
 
-        Ok(TaskResult::new(Some(answer), NextAction::End))
+        Ok(TaskResult::new(Some(answer), NextAction::Continue))
     }
 }
 
@@ -420,10 +421,14 @@ impl Task for FinalAnswerTask {
         // TODO: re-prompt LLM with (query, chunks) → answer instead of
         // reusing the summarization output verbatim.
         let answer = if approved {
-            context
-                .get::<String>(keys::SUMMARY)
-                .await
-                .unwrap_or_else(|| "No summary available.".to_string())
+            if let Some(existing) = context.get::<String>(keys::FINAL_ANSWER).await {
+                existing
+            } else {
+                context
+                    .get::<String>(keys::SUMMARY)
+                    .await
+                    .unwrap_or_else(|| "No summary available.".to_string())
+            }
         } else {
             let reason: Option<String> = context.get(keys::CHECKPOINT_REASON).await;
             match reason {
