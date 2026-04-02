@@ -318,6 +318,7 @@ impl RetrievalPort for ServerRetrievalPort {
         Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
     }
 
+    #[allow(clippy::disallowed_methods)] // serde_json::json! internally uses unwrap()
     async fn fetch_document(&self, tenant: &str, document_id: &str) -> Result<serde_json::Value> {
         let document = self.stores.get_document(tenant, document_id).await?.ok_or_else(|| {
             anyhow!("document '{document_id}' does not exist for tenant '{tenant}'")

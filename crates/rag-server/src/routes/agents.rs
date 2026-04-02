@@ -461,6 +461,7 @@ fn map_retrieval_profile(profile: agent_core::types::RetrievalProfileId) -> Stri
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // test assertions use expect()
 mod tests {
     use std::collections::HashMap;
 

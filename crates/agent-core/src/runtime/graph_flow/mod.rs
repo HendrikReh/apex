@@ -536,6 +536,7 @@ impl super::AgentRuntime for GraphFlowRuntime {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // test assertions and lock checks use expect()/unwrap()
 mod tests {
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};

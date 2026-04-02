@@ -314,7 +314,7 @@ async fn execute_agentic_search_v1_comparison_query_uses_agentic_path() {
     assert_eq!(execute_body["route_decision"]["retrieval_profile"], "broad_then_expand");
     assert_eq!(execute_body["answer"], "Mock LLM response.");
     assert!(
-        execute_body["search_results"].as_array().expect("search_results").len() > 0,
+        !execute_body["search_results"].as_array().expect("search_results").is_empty(),
         "expected agentic search to return evidence"
     );
     assert!(

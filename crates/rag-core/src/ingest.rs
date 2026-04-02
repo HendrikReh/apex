@@ -640,8 +640,7 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
         );
     }
 
-    Ok(doc
-        .chunks
+    doc.chunks
         .iter()
         .enumerate()
         .map(|(i, chunk)| -> Result<PointStruct> {
@@ -695,7 +694,7 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
                 vectors: Some(Vectors::from(NamedVectors { vectors: named })),
             })
         })
-        .collect::<Result<Vec<_>>>()?)
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Resolve document title with precedence: sidecar > PDF native > empty.

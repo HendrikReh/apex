@@ -100,6 +100,7 @@ impl utoipa::Modify for SecurityAddon {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // test assertions use expect()
 mod tests {
     use super::ApiDoc;
     use utoipa::OpenApi;
