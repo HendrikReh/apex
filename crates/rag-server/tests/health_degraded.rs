@@ -5,7 +5,36 @@
 
 mod common;
 
+use std::path::PathBuf;
+
 use test_support::spawn_app;
+
+const DEFAULT_COMPOSE_PROJECT_NAME: &str = "apex";
+
+fn compose_project_name() -> String {
+    std::env::var("APEX_COMPOSE_PROJECT_NAME")
+        .unwrap_or_else(|_| DEFAULT_COMPOSE_PROJECT_NAME.to_string())
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().expect("workspace root")
+}
+
+fn docker_compose_service(action: &str, service: &str) {
+    let compose_file = workspace_root().join("docker-compose.yml");
+    let _ = std::process::Command::new("docker")
+        .current_dir(workspace_root())
+        .args([
+            "compose",
+            "-p",
+            &compose_project_name(),
+            "-f",
+            compose_file.to_str().expect("compose file path"),
+            action,
+            service,
+        ])
+        .status();
+}
 
 /// GET /readiness returns 503 when a dependency is unreachable.
 #[tokio::test]
@@ -14,13 +43,13 @@ async fn readiness_degrades_gracefully() {
     let (app, _state) = common::full_app().await;
     let server = spawn_app(app).await.expect("spawn");
 
-    // Stop Qdrant container.
-    let _ = std::process::Command::new("docker").args(["compose", "stop", "qdrant"]).status();
+    // Stop Qdrant container from the shared local compose project.
+    docker_compose_service("stop", "qdrant");
 
     let resp = reqwest::get(format!("{}/readiness", server.base_url())).await.expect("request");
 
     // Restart Qdrant so other tests aren't affected.
-    let _ = std::process::Command::new("docker").args(["compose", "start", "qdrant"]).status();
+    docker_compose_service("start", "qdrant");
 
     // Wait for Qdrant to become responsive again before returning,
     // so tests in other binaries aren't affected.
