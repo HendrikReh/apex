@@ -130,7 +130,22 @@ That reusable path should return a grounded answer artifact containing:
 
 ### Required boundary
 
-`agent-core` must not depend on `rag-core`. The runtime should therefore reach the baseline path through a port, not by calling `ChatService` directly. Extending the current `ChatPort` is acceptable if it remains conceptually coherent; adding a dedicated answer-generation port is also acceptable. The important constraint is that `agent-core` continues to own only traits and domain types.
+`agent-core` must not depend on `rag-core`. The runtime should therefore reach the baseline path through a port, not by calling `ChatService` directly.
+
+Milestone 1 should keep the current `ChatPort` focused on chunk-conditioned generation. Today `ChatPort` only exposes `summarize(query, context_chunks, tenant)`. The baseline path is broader than that because it includes retrieval, context assembly, and answer generation. For that reason, milestone 1 should add a separate port, for example `BaselineAnswerPort`, with a method shaped like:
+
+- `answer_single_shot(query, collection, tenant, language) -> GroundedAnswer`
+
+This keeps the contract boundary explicit:
+
+- `RetrievalPort`
+  - explicit evidence-retrieval tools
+- `ChatPort`
+  - summarize or compose over already-retrieved chunks
+- `BaselineAnswerPort`
+  - invoke the extracted single-pass RAG path used by `/chat`
+
+The important constraint is that `agent-core` continues to own only traits and domain types.
 
 ## Section 2: Structured Routing
 
@@ -201,16 +216,27 @@ The following should remain out of scope until milestone 2:
 - `Stores` accessors for metadata and neighbor lookup
 - a new FTS path backed by Postgres or an equivalent lexical search implementation already consistent with Apex’s storage model
 
+`AgentRetrievalMode::Fts` already exists in `crates/agent-core/src/spec.rs`, so milestone 1 does not need a new enum shape for FTS. It needs a backing implementation in `RetrievalService` plus the corresponding store/query layer for Postgres full-text search.
+
+`expand_chunk_neighbors` is also conceptually straightforward with the current schema because chunks already carry `document_id` and `chunk_index`. The missing piece is not data modeling but a dedicated store method that can retrieve a chunk window around one or more anchor chunks.
+
 The important design point is that the agent runtime chooses retrieval tools explicitly rather than asking one “do search” method to decide internally.
 
 ## Section 4: Evidence Payloads
 
-Milestone 1 should enrich the retrieval result type that flows through:
+Milestone 1 should enrich the retrieval result type that flows primarily through:
 
 - `crates/rag-core/src/fusion.rs`
 - `crates/agent-core/src/types.rs`
-- `crates/rag-server/src/routes/search.rs`
 - `crates/rag-server/src/routes/agents.rs`
+
+The primary milestone-1 enrichment targets are:
+
+- `FusedChunk` and related retrieval result types in `rag-core`
+- `ScoredChunk` or its replacement in `agent-core`
+- `ScoredChunkResponse` in the agent run API at `crates/rag-server/src/routes/agents.rs`
+
+`crates/rag-server/src/routes/search.rs` has its own response types for search endpoints. Aligning those endpoints is reasonable for API consistency, but it is secondary to the agent-domain and agent-run response shapes needed for milestone-1 routing and evals.
 
 The current payload is effectively:
 
@@ -239,6 +265,8 @@ That is too thin for routed search. The milestone-1 evidence payload should incl
 - `source_scores`
 
 ### Provenance rules
+
+`FusedChunk` in `crates/rag-core/src/fusion.rs` already carries `sources` and `source_scores` today. The gap is that this provenance stops at the `rag-core` fusion layer and does not flow through the `agent-core` search result type or the agent API response. Milestone 1 should preserve and surface that existing provenance rather than redesigning it.
 
 - fused results should preserve both the fused score and the per-source component scores
 - non-fused results should still identify which tool produced the score
@@ -299,6 +327,8 @@ Milestone 1 should support a small fixed set of deterministic retrieval profiles
 
 These are runtime-interpreted profiles, not free-form plans. The goal is to prove routed search, not to expose an unrestricted planner yet.
 
+Profile selection does not create separate graph branches in milestone 1. The graph only branches once on `single_pass_rag` vs `agentic_search`. Inside the agentic branch, `retrieve_evidence` reads `RouteDecision.retrieval_profile` and executes the fixed runtime sequence for that profile.
+
 ### New spec
 
 Add a new spec under `config/agents/`:
@@ -312,6 +342,48 @@ Properties:
 - no human approval
 - uses the new task graph
 - declares the retrieval tools it needs
+
+The YAML does not need per-profile graph edges. A milestone-1 sketch is:
+
+```yaml
+agent_id: agentic_search_v1
+description: >
+  Routed search agent that chooses between the baseline single-pass path and
+  a fixed-profile agentic evidence path.
+spec_version: "1.0"
+
+required_tools:
+  - retrieval.dense
+  - retrieval.sparse
+  - retrieval.hybrid
+  - retrieval.fts
+  - retrieval.expand_chunk_neighbors
+  - retrieval.fetch_document
+
+tasks:
+  - route_query
+  - baseline_answer
+  - retrieve_evidence
+  - compose_answer
+  - final_answer
+
+graph:
+  start_task: route_query
+  tasks:
+    - route_query
+    - baseline_answer
+    - retrieve_evidence
+    - compose_answer
+    - final_answer
+  edges:
+    - { from: route_query, to: retrieve_evidence, condition_key: route_to_agentic_search }
+    - { from: route_query, to: baseline_answer }
+    - { from: retrieve_evidence, to: compose_answer }
+    - { from: compose_answer, to: final_answer }
+    - { from: baseline_answer, to: final_answer }
+```
+
+In this shape, profile names such as `simple_hybrid`, `lexical_first`, and `broad_then_expand` are runtime-recognized values written into `RouteDecision.retrieval_profile` and interpreted by `retrieve_evidence`, not separate graph nodes or separate YAML branches.
 
 The existing `rag_spike.yaml` remains unchanged and continues to represent the earlier vertical slice.
 
