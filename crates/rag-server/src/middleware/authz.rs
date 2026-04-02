@@ -91,7 +91,7 @@ fn dynamic_route(method: &Method, path: &str) -> Option<Capability> {
         (&Method::POST, p) if p.starts_with("/agents/") && p.ends_with("/execute") => {
             Some(Capability::AgentsOperate)
         }
-        (&Method::GET, p) if p.starts_with("/runs/") => Some(Capability::AgentsOperate),
+        (&Method::GET, p) if is_run_detail_path(p) => Some(Capability::AgentsOperate),
         (&Method::POST, p) if p.starts_with("/runs/") && p.ends_with("/approve") => {
             Some(Capability::AgentsOperate)
         }
@@ -106,6 +106,13 @@ fn dynamic_route(method: &Method, path: &str) -> Option<Capability> {
         }
         _ => None,
     }
+}
+
+fn is_run_detail_path(path: &str) -> bool {
+    let Some(run_id) = path.strip_prefix("/runs/") else {
+        return false;
+    };
+    !run_id.is_empty() && !run_id.contains('/')
 }
 
 fn is_dynamic_path(path: &str) -> bool {
@@ -197,6 +204,18 @@ mod tests {
         assert_eq!(
             route_policy(&Method::POST, "/runs/00000000-0000-0000-0000-000000000000/approve"),
             RoutePolicy::Authorized(Capability::AgentsOperate),
+        );
+        assert_eq!(
+            route_policy(&Method::GET, "/runs/00000000-0000-0000-0000-000000000000/approve"),
+            RoutePolicy::MethodNotAllowed,
+        );
+        assert_eq!(
+            route_policy(&Method::GET, "/runs/00000000-0000-0000-0000-000000000000/reject"),
+            RoutePolicy::MethodNotAllowed,
+        );
+        assert_eq!(
+            route_policy(&Method::HEAD, "/runs/00000000-0000-0000-0000-000000000000/approve"),
+            RoutePolicy::MethodNotAllowed,
         );
     }
 
