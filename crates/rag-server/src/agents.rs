@@ -10,7 +10,7 @@ use agent_core::types::{
 };
 use anyhow::{Context, Result, anyhow};
 use dashmap::DashMap;
-use rag_core::{ChatService, FusedChunk, RetrievalService};
+use rag_core::{ChatService, FusedChunk, RetrievalService, RetrievedChunk};
 
 #[derive(Clone)]
 pub struct AgentManager {
@@ -211,8 +211,70 @@ struct ServerRetrievalPort {
     retrieval: Arc<RetrievalService>,
 }
 
+fn map_retrieved_chunk(chunk: RetrievedChunk) -> ScoredChunk {
+    ScoredChunk {
+        chunk_id: chunk.chunk_id,
+        document_id: chunk.document_id,
+        chunk_index: chunk.chunk_index,
+        text: chunk.text,
+        title: chunk.title,
+        source_url: chunk.source_url,
+        source_domain: chunk.source_domain,
+        language: chunk.language,
+        tags: chunk.tags,
+        section_heading: chunk.section_heading,
+        collection: chunk.collection,
+        score: chunk.score,
+        score_type: chunk.score_type,
+        sources: Vec::new(),
+        source_scores: std::collections::HashMap::new(),
+    }
+}
+
+fn map_fused_chunk(chunk: FusedChunk) -> ScoredChunk {
+    ScoredChunk {
+        chunk_id: chunk.chunk_id,
+        document_id: chunk.document_id,
+        chunk_index: chunk.chunk_index,
+        text: chunk.text,
+        title: chunk.title,
+        source_url: chunk.source_url,
+        source_domain: chunk.source_domain,
+        language: chunk.language,
+        tags: chunk.tags,
+        section_heading: chunk.section_heading,
+        collection: chunk.collection,
+        score: chunk.fused_score,
+        score_type: chunk.score_type,
+        sources: chunk.sources,
+        source_scores: chunk.source_scores,
+    }
+}
+
 #[async_trait::async_trait]
 impl RetrievalPort for ServerRetrievalPort {
+    async fn search_dense(
+        &self,
+        collection: &str,
+        query: &str,
+        tenant: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self.retrieval.search_dense(collection, query, tenant, limit).await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
+    async fn search_sparse(
+        &self,
+        collection: &str,
+        query: &str,
+        tenant: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self.retrieval.search_sparse(collection, query, tenant, limit).await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
     async fn search_hybrid(
         &self,
         collection: &str,
@@ -220,16 +282,40 @@ impl RetrievalPort for ServerRetrievalPort {
         tenant: &str,
     ) -> Result<Vec<ScoredChunk>> {
         let chunks = self.retrieval.search_hybrid(collection, query, tenant, None).await?;
-        Ok(chunks
-            .into_iter()
-            .map(|chunk| ScoredChunk {
-                chunk_id: chunk.chunk_id,
-                document_id: chunk.document_id,
-                chunk_index: chunk.chunk_index,
-                text: chunk.text,
-                score: chunk.fused_score,
-            })
-            .collect())
+        Ok(chunks.into_iter().map(map_fused_chunk).collect())
+    }
+
+    async fn search_fts(
+        &self,
+        collection: &str,
+        query: &str,
+        tenant: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self.retrieval.search_fts(collection, query, tenant, limit).await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
+    async fn expand_chunk_neighbors(
+        &self,
+        tenant: &str,
+        document_id: &str,
+        chunk_index: i32,
+        before: i32,
+        after: i32,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self
+            .retrieval
+            .expand_chunk_neighbors(tenant, document_id, chunk_index, before, after)
+            .await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
+    async fn fetch_document(&self, tenant: &str, document_id: &str) -> Result<serde_json::Value> {
+        Ok(serde_json::json!({
+            "document_id": document_id,
+            "tenant": tenant,
+        }))
     }
 }
 
