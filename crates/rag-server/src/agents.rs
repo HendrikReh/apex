@@ -177,11 +177,19 @@ impl AgentManager {
         run_id: RunId,
         tenant: &str,
     ) -> Result<Option<RunWithMetadata>> {
-        match self.inspect(run_id).await? {
-            Some(run) if run.record.tenant == tenant => Ok(Some(run)),
-            Some(_) => Ok(None),
-            None => Ok(None),
+        let is_owned_by_tenant = match self.runs.get(&run_id) {
+            Some(record) if record.tenant == tenant => true,
+            Some(_) => false,
+            None => return Ok(None),
+        };
+
+        if !is_owned_by_tenant {
+            // Do not protect foreign runs from pruning during unauthorized probes.
+            self.prune_run_registry();
+            return Ok(None);
         }
+
+        self.inspect_inner(run_id, Some(run_id)).await
     }
 
     pub async fn list_runs(
