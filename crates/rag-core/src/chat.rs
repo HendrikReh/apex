@@ -61,6 +61,15 @@ pub struct ChatResponse {
     pub model: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct GroundedAnswer {
+    pub answer: String,
+    pub citations: Vec<Citation>,
+    pub evidence: Vec<FusedChunk>,
+    pub usage: TokenUsage,
+    pub model: String,
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -132,7 +141,7 @@ impl ChatService {
             .get_messages(tenant, conversation_id, history_limit)
             .await
             .context("loading conversation history")?;
-        let mut messages: Vec<ChatMessage> = history_rows
+        let messages: Vec<ChatMessage> = history_rows
             .into_iter()
             .filter_map(|row| match row.role {
                 MessageRole::User => {
@@ -147,71 +156,41 @@ impl ChatService {
             })
             .collect();
 
-        // Step 3: Retrieve context.
-        let fused = self
-            .retrieval
-            .search_hybrid(&collection, &request.query, tenant, None)
-            .await
-            .context("hybrid retrieval")?;
-
-        // Step 4: Assemble context.
-        let context_config = ContextConfig {
-            max_tokens: self.defaults.context_max_tokens,
-            max_chunks: self.defaults.context_max_chunks,
-            dedupe_strategy: DedupeStrategy::ByDocId,
-            include_citations: true,
-        };
-        let context_result = self.context_builder.build(fused, &context_config);
-        let citations = context_result.citations.clone();
-
-        // Step 5: Render prompt.
-        let context_text = render_context_chunks(&context_result.chunks);
-        let language_instruction = request
-            .language
-            .as_deref()
-            .map(|lang| format!("Respond in {lang}."))
-            .unwrap_or_default();
-        let system_prompt = self
-            .prompt_renderer
-            .render_system_prompt(&PromptContext {
-                context: &context_text,
-                language_instruction: &language_instruction,
-            })
-            .context("rendering system prompt")?;
-
-        // Step 6: Call LLM.
-        messages.push(ChatMessage { role: ChatRole::User, content: request.query.clone() });
-        let llm_response = self
-            .backend
-            .complete(
-                &CompletionRequest {
-                    system: &system_prompt,
-                    messages: &messages,
-                    temperature: self.defaults.temperature,
-                    max_tokens: self.defaults.max_tokens,
-                    stop: vec![],
-                },
-                self.defaults.max_retries,
-                self.defaults.retry_backoff_ms,
+        let grounded = self
+            .answer_with_retrieval(
+                &request.query,
+                &collection,
+                tenant,
+                &messages,
+                request.language.as_deref(),
             )
-            .await
-            .context("LLM completion")?;
+            .await?;
 
         // Step 7: Persist user + assistant messages atomically (after LLM
         // success to avoid orphaned user messages on failure).
         self.stores
-            .insert_chat_turn(tenant, conversation_id, &request.query, &llm_response.text)
+            .insert_chat_turn(tenant, conversation_id, &request.query, &grounded.answer)
             .await
             .context("persisting chat turn")?;
 
         // Step 8: Return response.
         Ok(ChatResponse {
-            answer: llm_response.text,
+            answer: grounded.answer,
             conversation_id,
-            citations,
-            usage: llm_response.usage,
-            model: llm_response.model,
+            citations: grounded.citations,
+            usage: grounded.usage,
+            model: grounded.model,
         })
+    }
+
+    pub async fn answer_single_shot(
+        &self,
+        query: &str,
+        collection: &str,
+        tenant: &str,
+        language: Option<&str>,
+    ) -> Result<GroundedAnswer> {
+        self.answer_with_retrieval(query, collection, tenant, &[], language).await
     }
 
     /// Summarize a set of already-retrieved chunks for agent orchestration.
@@ -252,6 +231,67 @@ impl ChatService {
             .await
             .context("agent chunk summarization")?;
         Ok(response.text)
+    }
+
+    async fn answer_with_retrieval(
+        &self,
+        query: &str,
+        collection: &str,
+        tenant: &str,
+        messages: &[ChatMessage],
+        language: Option<&str>,
+    ) -> Result<GroundedAnswer> {
+        let fused = self
+            .retrieval
+            .search_hybrid(collection, query, tenant, None)
+            .await
+            .context("hybrid retrieval")?;
+
+        let context_config = ContextConfig {
+            max_tokens: self.defaults.context_max_tokens,
+            max_chunks: self.defaults.context_max_chunks,
+            dedupe_strategy: DedupeStrategy::ByDocId,
+            include_citations: true,
+        };
+        let context_result = self.context_builder.build(fused.clone(), &context_config);
+        let citations = context_result.citations.clone();
+        let context_text = render_context_chunks(&context_result.chunks);
+        let language_instruction =
+            language.map(|lang| format!("Respond in {lang}.")).unwrap_or_default();
+        let system_prompt = self
+            .prompt_renderer
+            .render_system_prompt(&PromptContext {
+                context: &context_text,
+                language_instruction: &language_instruction,
+            })
+            .context("rendering system prompt")?;
+
+        let mut llm_messages = messages.to_vec();
+        llm_messages.push(ChatMessage { role: ChatRole::User, content: query.to_string() });
+
+        let llm_response = self
+            .backend
+            .complete(
+                &CompletionRequest {
+                    system: &system_prompt,
+                    messages: &llm_messages,
+                    temperature: self.defaults.temperature,
+                    max_tokens: self.defaults.max_tokens,
+                    stop: vec![],
+                },
+                self.defaults.max_retries,
+                self.defaults.retry_backoff_ms,
+            )
+            .await
+            .context("LLM completion")?;
+
+        Ok(GroundedAnswer {
+            answer: llm_response.text,
+            citations,
+            evidence: fused,
+            usage: llm_response.usage,
+            model: llm_response.model,
+        })
     }
 
     /// Resolve or create conversation, returning (conversation_id, collection).
