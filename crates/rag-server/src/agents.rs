@@ -239,6 +239,7 @@ impl AgentManager {
         let result = runtime.resume(run_id, CheckpointDecision { approved, reason }).await?;
         if let Some(mut entry) = self.runs.get_mut(&run_id) {
             entry.awaiting_approval = result.pending_checkpoint.is_some();
+            entry.inserted_at = Instant::now();
         }
         Ok(result)
     }
@@ -332,21 +333,20 @@ fn prune_to_max_entries(
     }
 
     let overflow = current_len - max_entries;
-    let mut records_by_age: Vec<(RunId, Instant)> = runs
+    let mut eviction_candidates: Vec<(RunId, bool, Instant)> = runs
         .iter()
         .filter_map(|entry| {
             if protected_run_id.is_some_and(|run_id| run_id == *entry.key()) {
                 None
-            } else if entry.value().awaiting_approval {
-                None
             } else {
-                Some((*entry.key(), entry.value().inserted_at))
+                Some((*entry.key(), entry.value().awaiting_approval, entry.value().inserted_at))
             }
         })
         .collect();
-    records_by_age.sort_by_key(|(_, inserted_at)| *inserted_at);
+    eviction_candidates
+        .sort_by_key(|(_, awaiting_approval, inserted_at)| (*awaiting_approval, *inserted_at));
 
-    for (run_id, _) in records_by_age.into_iter().take(overflow) {
+    for (run_id, _, _) in eviction_candidates.into_iter().take(overflow) {
         runs.remove(&run_id);
     }
     current_len.saturating_sub(runs.len())
@@ -762,5 +762,28 @@ mod tests {
         assert!(runs.contains_key(&awaiting_oldest));
         assert!(!runs.contains_key(&middle));
         assert!(runs.contains_key(&newest));
+    }
+
+    #[test]
+    fn prune_to_max_entries_evicts_awaiting_approval_when_needed_for_cap() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let awaiting_oldest = Uuid::new_v4();
+        let awaiting_newer = Uuid::new_v4();
+
+        runs.insert(
+            awaiting_oldest,
+            sample_record(awaiting_oldest, now - Duration::from_secs(30), true),
+        );
+        runs.insert(
+            awaiting_newer,
+            sample_record(awaiting_newer, now - Duration::from_secs(10), true),
+        );
+
+        let removed = prune_to_max_entries(&runs, 1, None);
+
+        assert_eq!(removed, 1);
+        assert!(!runs.contains_key(&awaiting_oldest));
+        assert!(runs.contains_key(&awaiting_newer));
     }
 }
