@@ -54,6 +54,13 @@ struct RunRegistryPolicy {
     max_entries: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TenantInspectDisposition {
+    NotOwned,
+    ProtectRun,
+    Unprotected,
+}
+
 const DEFAULT_RUN_REGISTRY_TTL_SECS: u64 = 60 * 60 * 24;
 const DEFAULT_RUN_REGISTRY_MAX_ENTRIES: usize = 10_000;
 const RUN_REGISTRY_TTL_ENV: &str = "AGENT_RUN_REGISTRY_TTL_SECS";
@@ -177,19 +184,24 @@ impl AgentManager {
         run_id: RunId,
         tenant: &str,
     ) -> Result<Option<RunWithMetadata>> {
-        let is_owned_by_tenant = match self.runs.get(&run_id) {
-            Some(record) if record.tenant == tenant => true,
-            Some(_) => false,
+        let disposition = match self.runs.get(&run_id) {
+            Some(record) => tenant_inspect_disposition(record.value(), tenant),
             None => return Ok(None),
         };
 
-        if !is_owned_by_tenant {
-            // Do not protect foreign runs from pruning during unauthorized probes.
-            self.prune_run_registry();
-            return Ok(None);
+        match disposition {
+            TenantInspectDisposition::NotOwned => {
+                // Do not protect foreign runs from pruning during unauthorized probes.
+                self.prune_run_registry();
+                Ok(None)
+            }
+            TenantInspectDisposition::ProtectRun => self.inspect_inner(run_id, Some(run_id)).await,
+            TenantInspectDisposition::Unprotected => {
+                // Enforce TTL/cap for tenant-owned runs unless they are still awaiting approval.
+                self.prune_run_registry();
+                self.inspect_inner(run_id, None).await
+            }
         }
-
-        self.inspect_inner(run_id, Some(run_id)).await
     }
 
     pub async fn list_runs(
@@ -367,6 +379,16 @@ fn describe_agent(spec: &AgentSpec) -> AgentDescriptor {
         spec_version: spec.spec_version.clone(),
         tasks: spec.graph.tasks.clone(),
         checkpoint_count: spec.checkpoints.len(),
+    }
+}
+
+fn tenant_inspect_disposition(record: &RunRecord, tenant: &str) -> TenantInspectDisposition {
+    if record.tenant != tenant {
+        TenantInspectDisposition::NotOwned
+    } else if record.awaiting_approval {
+        TenantInspectDisposition::ProtectRun
+    } else {
+        TenantInspectDisposition::Unprotected
     }
 }
 
@@ -605,6 +627,36 @@ mod tests {
             inserted_at,
             awaiting_approval,
         }
+    }
+
+    #[test]
+    fn tenant_inspect_disposition_for_foreign_run_is_not_owned() {
+        let record = sample_record(Uuid::new_v4(), Instant::now(), false);
+
+        assert_eq!(
+            tenant_inspect_disposition(&record, "other-tenant"),
+            TenantInspectDisposition::NotOwned
+        );
+    }
+
+    #[test]
+    fn tenant_inspect_disposition_for_owned_awaiting_run_is_protected() {
+        let record = sample_record(Uuid::new_v4(), Instant::now(), true);
+
+        assert_eq!(
+            tenant_inspect_disposition(&record, "test-tenant"),
+            TenantInspectDisposition::ProtectRun
+        );
+    }
+
+    #[test]
+    fn tenant_inspect_disposition_for_owned_completed_run_is_unprotected() {
+        let record = sample_record(Uuid::new_v4(), Instant::now(), false);
+
+        assert_eq!(
+            tenant_inspect_disposition(&record, "test-tenant"),
+            TenantInspectDisposition::Unprotected
+        );
     }
 
     #[test]
