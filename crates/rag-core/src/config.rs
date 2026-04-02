@@ -579,10 +579,9 @@ impl AppConfig {
             }
             canonical
         };
-        let agent_specs_dir = {
-            let raw = env_string("AGENT_SPECS_DIR")
-                .or_else(|| f.agent_specs_dir.clone())
-                .unwrap_or_else(|| "config/agents".to_owned());
+        let agent_specs_dir = if let Some(raw) = env_string("AGENT_SPECS_DIR") {
+            canonicalize_runtime_path(std::path::PathBuf::from(raw), "agent_specs_dir")?
+        } else if let Some(raw) = f.agent_specs_dir.clone() {
             let path = std::path::Path::new(&raw);
             let candidate = if path.is_absolute() {
                 path.to_path_buf()
@@ -591,12 +590,9 @@ impl AppConfig {
             } else {
                 path.to_path_buf()
             };
-            candidate.canonicalize().with_context(|| {
-                format!(
-                    "agent_specs_dir does not exist or is inaccessible: {}",
-                    candidate.display()
-                )
-            })?
+            canonicalize_runtime_path(candidate, "agent_specs_dir")?
+        } else {
+            default_agent_specs_dir()?
         };
 
         let r = &retrieval_settings;
@@ -816,6 +812,32 @@ impl AppConfig {
     }
 }
 
+fn canonicalize_runtime_path(path: std::path::PathBuf, field: &str) -> Result<std::path::PathBuf> {
+    path.canonicalize()
+        .with_context(|| format!("{field} does not exist or is inaccessible: {}", path.display()))
+}
+
+fn default_agent_specs_dir() -> Result<std::path::PathBuf> {
+    let cwd_candidate = std::path::PathBuf::from("config/agents");
+    if cwd_candidate.exists() {
+        return canonicalize_runtime_path(cwd_candidate, "agent_specs_dir");
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        for ancestor in current_exe.ancestors() {
+            let candidate = ancestor.join("config/agents");
+            if candidate.exists() {
+                return canonicalize_runtime_path(candidate, "agent_specs_dir");
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "agent_specs_dir was not configured and no default config/agents directory was found; \
+         set AGENT_SPECS_DIR or configure app.agent_specs_dir"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -913,7 +935,6 @@ mod tests {
             .join("config/agents")
             .canonicalize()
             .expect("canonical agent specs dir");
-        unsafe { std::env::set_var("AGENT_SPECS_DIR", &workspace_agent_specs) };
 
         // -- Part 1: verify all defaults --
         let cfg = match AppConfig::from_current_env() {
@@ -1061,7 +1082,6 @@ mod tests {
             agent_specs_dir.path().canonicalize().expect("canonical agent specs env"),
         );
         unsafe { std::env::remove_var("AGENT_SPECS_DIR") };
-        unsafe { std::env::set_var("AGENT_SPECS_DIR", &workspace_agent_specs) };
 
         // -- Part 8: secret env vars load as redacted types --
         unsafe {
@@ -1109,7 +1129,6 @@ mod tests {
         );
         unsafe {
             std::env::remove_var("OCR_TIMEOUT_SECS");
-            std::env::remove_var("AGENT_SPECS_DIR");
         };
     }
 
