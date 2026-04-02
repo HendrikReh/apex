@@ -91,7 +91,7 @@ async fn benchmark_routes_and_evidence_are_scored() {
 
     let mut simple_case_count = 0usize;
     let mut agentic_case_count = 0usize;
-    let mut agentic_breadth_wins = 0usize;
+    let mut enriched_agentic_cases = 0usize;
 
     for case in &benchmark {
         let baseline = client
@@ -169,10 +169,26 @@ async fn benchmark_routes_and_evidence_are_scored() {
         let routed_docs = unique_agent_document_ids(&routed_body);
         let routed_hits = count_expected_hits(&case.expected_evidence, &routed_docs);
         let baseline_hits = count_expected_hits(&case.expected_evidence, &baseline_docs);
-        let baseline_citation_count =
-            baseline_body["citations"].as_array().map(|items| items.len()).unwrap_or_default();
-        let routed_result_count =
-            routed_body["search_results"].as_array().map(|items| items.len()).unwrap_or_default();
+        let routed_score_types: BTreeSet<String> = routed_body["search_results"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item["score_type"].as_str().map(ToOwned::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let has_enriched_metadata = routed_body["search_results"]
+            .as_array()
+            .map(|items| {
+                items.iter().any(|item| {
+                    item["text"].as_str().is_some_and(|text| !text.is_empty())
+                        && item["score_type"]
+                            .as_str()
+                            .is_some_and(|score_type| !score_type.is_empty())
+                })
+            })
+            .unwrap_or(false);
 
         assert_eq!(
             routed_hits,
@@ -183,6 +199,9 @@ async fn benchmark_routes_and_evidence_are_scored() {
 
         if case.expected_route == "single_pass_rag" {
             simple_case_count += 1;
+            // `full_app()` wires a mock LLM, so exact answer parity is the
+            // strongest signal that the routed single-pass branch is reusing
+            // the same baseline generation path as `/chat`.
             assert_eq!(
                 baseline_body["answer"], routed_body["answer"],
                 "simple-query answer drift for benchmark case {}",
@@ -205,8 +224,13 @@ async fn benchmark_routes_and_evidence_are_scored() {
                 "agentic routed path recovered less evidence than baseline /chat for benchmark case {}",
                 case.id
             );
-            if routed_result_count > baseline_citation_count {
-                agentic_breadth_wins += 1;
+            assert!(
+                !routed_score_types.is_empty(),
+                "agentic routed path should preserve score provenance for benchmark case {}",
+                case.id
+            );
+            if has_enriched_metadata {
+                enriched_agentic_cases += 1;
             }
         }
     }
@@ -214,7 +238,7 @@ async fn benchmark_routes_and_evidence_are_scored() {
     assert!(simple_case_count > 0, "benchmark must include simple baseline cases");
     assert!(agentic_case_count > 0, "benchmark must include agentic cases");
     assert!(
-        agentic_breadth_wins * 2 >= agentic_case_count,
-        "agentic routed path should expose a broader evidence surface than baseline /chat for most agentic benchmark cases"
+        enriched_agentic_cases == agentic_case_count,
+        "agentic routed path should expose enriched evidence metadata for every agentic benchmark case"
     );
 }

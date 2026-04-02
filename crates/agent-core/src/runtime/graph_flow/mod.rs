@@ -750,11 +750,16 @@ mod tests {
         }
     }
 
-    fn test_chunk(text: &str) -> ScoredChunk {
+    fn test_chunk_with(
+        chunk_id: &str,
+        document_id: &str,
+        chunk_index: i32,
+        text: &str,
+    ) -> ScoredChunk {
         ScoredChunk {
-            chunk_id: "chunk-1".to_string(),
-            document_id: "doc-1".to_string(),
-            chunk_index: 0,
+            chunk_id: chunk_id.to_string(),
+            document_id: document_id.to_string(),
+            chunk_index,
             text: text.to_string(),
             title: None,
             source_url: None,
@@ -869,7 +874,12 @@ graph:
                 state: state.clone(),
                 dense_results: Vec::new(),
                 fts_results: Vec::new(),
-                hybrid_results: vec![test_chunk("retrieved evidence")],
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-retrieved",
+                    "doc-1",
+                    0,
+                    "retrieved evidence",
+                )],
                 expanded_results: Vec::new(),
             }),
             Arc::new(TrackingChat { state: state.clone() }),
@@ -878,7 +888,12 @@ graph:
                 state: state.clone(),
                 grounded_answer: GroundedAnswer {
                     answer: "baseline answer".to_string(),
-                    search_results: vec![test_chunk("baseline evidence")],
+                    search_results: vec![test_chunk_with(
+                        "chunk-baseline",
+                        "doc-1",
+                        0,
+                        "baseline evidence",
+                    )],
                     citations: vec!["doc-1".to_string()],
                     model: "baseline-model".to_string(),
                 },
@@ -911,8 +926,13 @@ graph:
             Arc::new(TrackingRetrieval {
                 state: state.clone(),
                 dense_results: Vec::new(),
-                fts_results: vec![test_chunk("fts evidence")],
-                hybrid_results: vec![test_chunk("hybrid evidence")],
+                fts_results: vec![test_chunk_with("chunk-fts", "doc-1", 0, "fts evidence")],
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-hybrid",
+                    "doc-2",
+                    0,
+                    "hybrid evidence",
+                )],
                 expanded_results: Vec::new(),
             }),
             Arc::new(TrackingChat { state: state.clone() }),
@@ -957,6 +977,46 @@ graph:
     }
 
     #[tokio::test]
+    async fn routed_spec_deduplicates_overlapping_lexical_first_results() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: vec![test_chunk_with("chunk-shared", "doc-1", 0, "fts evidence")],
+                hybrid_results: vec![
+                    test_chunk_with("chunk-shared", "doc-1", 0, "hybrid duplicate"),
+                    test_chunk_with("chunk-unique", "doc-2", 0, "hybrid unique"),
+                ],
+                expanded_results: Vec::new(),
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("How do I rotate API keys in the auth runbook?"))
+            .await
+            .expect("agentic route should complete");
+
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'How do I rotate API keys in the auth runbook?' from 2 chunks")
+        );
+        assert_eq!(result.search_results.as_ref().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
     async fn routed_spec_expands_neighbors_for_broad_then_expand_queries() {
         let state = Arc::new(Mutex::new(RoutedCallState::default()));
         let runtime = GraphFlowRuntime::from_spec(
@@ -965,8 +1025,18 @@ graph:
                 state: state.clone(),
                 dense_results: Vec::new(),
                 fts_results: Vec::new(),
-                hybrid_results: vec![test_chunk("anchor evidence")],
-                expanded_results: vec![test_chunk("neighbor evidence")],
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-anchor",
+                    "doc-1",
+                    0,
+                    "anchor evidence",
+                )],
+                expanded_results: vec![test_chunk_with(
+                    "chunk-neighbor",
+                    "doc-1",
+                    1,
+                    "neighbor evidence",
+                )],
             }),
             Arc::new(TrackingChat { state: state.clone() }),
             Arc::new(StubApproval),
@@ -1002,6 +1072,51 @@ graph:
             state.expand_requests,
             vec![("tenant-a".to_string(), "doc-1".to_string(), 0, 1, 1)]
         );
+    }
+
+    #[tokio::test]
+    async fn routed_spec_deduplicates_anchor_from_neighbor_expansion() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: Vec::new(),
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-anchor",
+                    "doc-1",
+                    0,
+                    "anchor evidence",
+                )],
+                expanded_results: vec![
+                    test_chunk_with("chunk-anchor", "doc-1", 0, "anchor duplicate"),
+                    test_chunk_with("chunk-neighbor", "doc-1", 1, "neighbor evidence"),
+                ],
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("Compare Rust and Python tradeoffs for async services"))
+            .await
+            .expect("broad-then-expand route should complete");
+
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'Compare Rust and Python tradeoffs for async services' from 2 chunks")
+        );
+        assert_eq!(result.search_results.as_ref().map(Vec::len), Some(2));
     }
 
     #[tokio::test]

@@ -4,6 +4,7 @@
 //! defined in [`super::keys`]. Business data is (de)serialized through the
 //! agent-core domain types — graph-flow's `Context` is just the transport.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use graph_flow::{Context, NextAction, Task, TaskResult};
@@ -27,6 +28,11 @@ pub const ROUTE_QUERY_TASK: &str = "route_query";
 pub const BASELINE_ANSWER_TASK: &str = "baseline_answer";
 pub const RETRIEVE_EVIDENCE_TASK: &str = "retrieve_evidence";
 pub const COMPOSE_ANSWER_TASK: &str = "compose_answer";
+
+fn dedupe_scored_chunks(chunks: Vec<ScoredChunk>) -> Vec<ScoredChunk> {
+    let mut seen = HashSet::new();
+    chunks.into_iter().filter(|chunk| seen.insert(chunk.chunk_id.clone())).collect()
+}
 
 // ---------------------------------------------------------------------------
 // Route query
@@ -162,7 +168,7 @@ impl Task for RetrieveEvidenceTask {
                         },
                     )?;
                 lexical.extend(hybrid);
-                Ok(lexical)
+                Ok(dedupe_scored_chunks(lexical))
             }
             RetrievalProfileId::BroadThenExpand => {
                 let mut hybrid =
@@ -191,7 +197,7 @@ impl Task for RetrieveEvidenceTask {
                         })?;
                     hybrid.extend(neighbors);
                 }
-                Ok(hybrid)
+                Ok(dedupe_scored_chunks(hybrid))
             }
         }?;
 

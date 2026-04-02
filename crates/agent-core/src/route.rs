@@ -16,6 +16,9 @@ pub fn route_query(query: &str) -> RouteDecision {
         || lower.contains("docs about");
     let has_time = lower.contains("today") || lower.contains("latest") || lower.contains("current");
 
+    // QueryClass uses first-match precedence. We still retain every matched
+    // heuristic in `reasons` below so run output shows the full signal set
+    // that the deterministic router observed.
     let (selected_path, query_class, retrieval_profile, needs_multi_hop) = if has_compare {
         (
             RoutePath::AgenticSearch,
@@ -103,6 +106,15 @@ mod tests {
         assert_eq!(decision.selected_path, RoutePath::AgenticSearch);
         assert_eq!(decision.query_class, QueryClass::Procedural);
         assert_eq!(decision.retrieval_profile, RetrievalProfileId::LexicalFirst);
+    }
+
+    #[test]
+    fn multi_signal_queries_use_first_match_precedence() {
+        let decision = route_query("Compare steps to rotate API keys");
+        assert_eq!(decision.selected_path, RoutePath::AgenticSearch);
+        assert_eq!(decision.query_class, QueryClass::MultiHopResearch);
+        assert_eq!(decision.retrieval_profile, RetrievalProfileId::BroadThenExpand);
+        assert_eq!(decision.reasons, vec!["compare".to_string(), "procedural".to_string()]);
     }
 
     #[test]

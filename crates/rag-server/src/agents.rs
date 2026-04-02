@@ -258,6 +258,26 @@ fn map_fused_chunk(chunk: FusedChunk) -> ScoredChunk {
     }
 }
 
+fn map_scored_chunk_for_summary(chunk: &ScoredChunk) -> FusedChunk {
+    FusedChunk {
+        chunk_id: chunk.chunk_id.clone(),
+        document_id: chunk.document_id.clone(),
+        chunk_index: chunk.chunk_index,
+        text: chunk.text.clone(),
+        title: chunk.title.clone(),
+        source_url: chunk.source_url.clone(),
+        source_domain: chunk.source_domain.clone(),
+        language: chunk.language.clone(),
+        tags: chunk.tags.clone(),
+        section_heading: chunk.section_heading.clone(),
+        collection: chunk.collection.clone(),
+        fused_score: chunk.score,
+        score_type: chunk.score_type.clone(),
+        sources: chunk.sources.clone(),
+        source_scores: chunk.source_scores.clone(),
+    }
+}
+
 #[async_trait::async_trait]
 impl RetrievalPort for ServerRetrievalPort {
     async fn search_dense(
@@ -373,26 +393,7 @@ impl ChatPort for ServerChatPort {
         // Summarization operates only on already-retrieved in-memory chunks.
         // Tenant isolation is enforced at retrieval time before these chunks
         // are passed into agent-core.
-        let fused_chunks = chunks
-            .iter()
-            .map(|chunk| FusedChunk {
-                chunk_id: chunk.chunk_id.clone(),
-                document_id: chunk.document_id.clone(),
-                chunk_index: chunk.chunk_index,
-                text: chunk.text.clone(),
-                title: None,
-                source_url: None,
-                source_domain: None,
-                language: None,
-                tags: Vec::new(),
-                section_heading: None,
-                collection: None,
-                fused_score: chunk.score,
-                score_type: "agent_summary".to_string(),
-                sources: vec!["agent-core".to_string()],
-                source_scores: std::collections::HashMap::new(),
-            })
-            .collect();
+        let fused_chunks = chunks.iter().map(map_scored_chunk_for_summary).collect();
         self.chat.summarize_chunks(query, fused_chunks).await
     }
 }
@@ -426,5 +427,51 @@ impl ApprovalPort for PauseForApproval {
         _checkpoint: &PendingCheckpoint,
     ) -> Result<Option<CheckpointDecision>> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn map_scored_chunk_for_summary_preserves_metadata_and_provenance() {
+        let chunk = ScoredChunk {
+            chunk_id: "chunk-1".to_string(),
+            document_id: "doc-1".to_string(),
+            chunk_index: 3,
+            text: "chunk text".to_string(),
+            title: Some("Title".to_string()),
+            source_url: Some("https://example.com/doc-1".to_string()),
+            source_domain: Some("example.com".to_string()),
+            language: Some("en".to_string()),
+            tags: vec!["guide".to_string()],
+            section_heading: Some("Overview".to_string()),
+            collection: Some("docs".to_string()),
+            score: 0.75,
+            score_type: "fts".to_string(),
+            sources: vec!["fts".to_string()],
+            source_scores: HashMap::from([("fts".to_string(), 0.75)]),
+        };
+
+        let fused = map_scored_chunk_for_summary(&chunk);
+
+        assert_eq!(fused.chunk_id, chunk.chunk_id);
+        assert_eq!(fused.document_id, chunk.document_id);
+        assert_eq!(fused.chunk_index, chunk.chunk_index);
+        assert_eq!(fused.text, chunk.text);
+        assert_eq!(fused.title, chunk.title);
+        assert_eq!(fused.source_url, chunk.source_url);
+        assert_eq!(fused.source_domain, chunk.source_domain);
+        assert_eq!(fused.language, chunk.language);
+        assert_eq!(fused.tags, chunk.tags);
+        assert_eq!(fused.section_heading, chunk.section_heading);
+        assert_eq!(fused.collection, chunk.collection);
+        assert_eq!(fused.fused_score, chunk.score);
+        assert_eq!(fused.score_type, chunk.score_type);
+        assert_eq!(fused.sources, chunk.sources);
+        assert_eq!(fused.source_scores, chunk.source_scores);
     }
 }
