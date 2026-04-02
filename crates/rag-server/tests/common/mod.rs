@@ -27,9 +27,10 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
         .join("tests/fixtures")
         .canonicalize()
         .expect("fixture root");
+    let eval_root = workspace_root.join("data/evals").canonicalize().expect("eval root");
     unsafe { std::env::set_var("LLM_PROMPT_TEMPLATE_PATH", &template_path) };
     let mut config = AppConfig::from_env().expect("test config");
-    config.ingest_allowed_roots = vec![ingest_fixture_root];
+    config.ingest_allowed_roots = vec![ingest_fixture_root, eval_root];
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
     let retrieval =

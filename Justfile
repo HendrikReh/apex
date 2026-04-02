@@ -65,6 +65,10 @@ integration-test: up
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_lifecycle -- --ignored --nocapture
     CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_retrieval -- --ignored --nocapture
 
+# Offline benchmark for routed agentic search.
+agentic-eval: up
+    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test agentic_eval -- --ignored --nocapture --test-threads=1
+
 # Optional provider/native smoke tests.
 # These require extra local setup such as PDFium, Tesseract, or live LLM credentials.
 smoke-test: up

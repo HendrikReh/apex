@@ -1,0 +1,30 @@
+[
+  {
+    "id": "simple-rust",
+    "query": "What is Rust?",
+    "expected_route": "single_pass_rag",
+    "expected_query_class": "simple_fact",
+    "expected_evidence": ["rust-guide"]
+  },
+  {
+    "id": "api-key-runbook",
+    "query": "How do I rotate API keys in the auth runbook?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "procedural",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "python-vs-rust",
+    "query": "Compare Rust and Python tradeoffs for async services",
+    "expected_route": "agentic_search",
+    "expected_query_class": "multi_hop_research",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "ambiguous-deployment",
+    "query": "Which deployment notes talk about rollback timing?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "ambiguity_disambiguation",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  }
+]
