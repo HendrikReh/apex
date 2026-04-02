@@ -445,9 +445,7 @@ fn map_route_path(path: agent_core::types::RoutePath) -> String {
 fn map_query_class(query_class: agent_core::types::QueryClass) -> String {
     match query_class {
         agent_core::types::QueryClass::SimpleFact => "simple_fact".into(),
-        agent_core::types::QueryClass::AmbiguityDisambiguation => {
-            "ambiguity_disambiguation".into()
-        }
+        agent_core::types::QueryClass::AmbiguityDisambiguation => "ambiguity_disambiguation".into(),
         agent_core::types::QueryClass::ExploratorySearch => "exploratory_search".into(),
         agent_core::types::QueryClass::Procedural => "procedural".into(),
         agent_core::types::QueryClass::MultiHopResearch => "multi_hop_research".into(),

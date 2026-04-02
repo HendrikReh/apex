@@ -58,6 +58,7 @@ use crate::state::ErrorBody;
         agents::CheckpointDecisionRequest,
         agents::RunSummaryResponse,
         agents::AgentRunResponse,
+        agents::RouteDecisionResponse,
         agents::PendingCheckpointResponse,
         agents::StepRecordResponse,
         agents::ScoredChunkResponse,
@@ -94,6 +95,22 @@ impl utoipa::Modify for SecurityAddon {
                     .bearer_format("API Key or JWT")
                     .build(),
             ),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiDoc;
+    use utoipa::OpenApi;
+
+    #[test]
+    fn openapi_registers_route_decision_response_schema() {
+        let openapi = ApiDoc::openapi();
+        let components = openapi.components.expect("components");
+        assert!(
+            components.schemas.contains_key("RouteDecisionResponse"),
+            "RouteDecisionResponse schema should be registered"
         );
     }
 }

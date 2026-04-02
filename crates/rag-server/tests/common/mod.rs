@@ -23,8 +23,13 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
         .and_then(|p| p.parent())
         .expect("workspace root");
     let template_path = workspace_root.join("config/prompts/chat_system.hbs");
+    let ingest_fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .canonicalize()
+        .expect("fixture root");
     unsafe { std::env::set_var("LLM_PROMPT_TEMPLATE_PATH", &template_path) };
-    let config = AppConfig::from_env().expect("test config");
+    let mut config = AppConfig::from_env().expect("test config");
+    config.ingest_allowed_roots = vec![ingest_fixture_root];
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
     let retrieval =

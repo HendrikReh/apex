@@ -59,7 +59,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .route("/health", get(routes::health::health))
         .route("/readiness", get(routes::health::readiness))
-        .route("/openapi.json", get(|| async { axum::Json(ApiDoc::openapi()) }))
         .with_state(state);
 
     let swagger =
