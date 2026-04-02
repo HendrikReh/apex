@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use agent_core::types::{AgentRunResult, PendingCheckpoint, QueryType, ScoredChunk, StepRecord};
+use agent_core::types::{
+    AgentRunResult, PendingCheckpoint, QueryType, RouteDecision, ScoredChunk, StepRecord,
+};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -62,9 +64,23 @@ pub struct AgentRunResponse {
     pub answer: Option<String>,
     pub summary: Option<String>,
     pub query_type: Option<String>,
+    pub route_decision: Option<RouteDecisionResponse>,
     pub pending_checkpoint: Option<PendingCheckpointResponse>,
     pub steps: Vec<StepRecordResponse>,
     pub search_results: Option<Vec<ScoredChunkResponse>>,
+}
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct RouteDecisionResponse {
+    pub selected_path: String,
+    pub query_class: String,
+    pub retrieval_profile: String,
+    pub ambiguity: bool,
+    pub needs_multi_hop: bool,
+    pub needs_high_evidence: bool,
+    pub time_sensitive: bool,
+    pub normalized_filters: Vec<String>,
+    pub reasons: Vec<String>,
 }
 
 #[derive(Serialize, utoipa::ToSchema)]
@@ -90,7 +106,17 @@ pub struct ScoredChunkResponse {
     pub document_id: String,
     pub chunk_index: i32,
     pub text: String,
+    pub title: Option<String>,
+    pub source_url: Option<String>,
+    pub source_domain: Option<String>,
+    pub language: Option<String>,
+    pub tags: Vec<String>,
+    pub section_heading: Option<String>,
+    pub collection: Option<String>,
     pub score: f32,
+    pub score_type: String,
+    pub sources: Vec<String>,
+    pub source_scores: std::collections::HashMap<String, f32>,
 }
 
 #[utoipa::path(get, path = "/agents", tag = "Agents",
@@ -322,6 +348,7 @@ fn map_run_response(result: AgentRunResult) -> AgentRunResponse {
         answer: result.answer,
         summary: result.summary,
         query_type: result.query_type.map(map_query_type),
+        route_decision: result.route_decision.map(map_route_decision),
         pending_checkpoint: result.pending_checkpoint.map(map_pending_checkpoint),
         steps: result.steps.into_iter().map(map_step_record).collect(),
         search_results: result
@@ -348,6 +375,20 @@ fn map_pending_checkpoint(checkpoint: PendingCheckpoint) -> PendingCheckpointRes
     }
 }
 
+fn map_route_decision(route_decision: RouteDecision) -> RouteDecisionResponse {
+    RouteDecisionResponse {
+        selected_path: map_route_path(route_decision.selected_path),
+        query_class: map_query_class(route_decision.query_class),
+        retrieval_profile: map_retrieval_profile(route_decision.retrieval_profile),
+        ambiguity: route_decision.ambiguity,
+        needs_multi_hop: route_decision.needs_multi_hop,
+        needs_high_evidence: route_decision.needs_high_evidence,
+        time_sensitive: route_decision.time_sensitive,
+        normalized_filters: route_decision.normalized_filters,
+        reasons: route_decision.reasons,
+    }
+}
+
 fn map_step_record(step: StepRecord) -> StepRecordResponse {
     StepRecordResponse {
         task_id: step.task_id,
@@ -363,7 +404,17 @@ fn map_scored_chunk(chunk: ScoredChunk) -> ScoredChunkResponse {
         document_id: chunk.document_id,
         chunk_index: chunk.chunk_index,
         text: chunk.text,
+        title: chunk.title,
+        source_url: chunk.source_url,
+        source_domain: chunk.source_domain,
+        language: chunk.language,
+        tags: chunk.tags,
+        section_heading: chunk.section_heading,
+        collection: chunk.collection,
         score: chunk.score,
+        score_type: chunk.score_type,
+        sources: chunk.sources,
+        source_scores: chunk.source_scores,
     }
 }
 
@@ -381,5 +432,123 @@ fn map_step_status(status: agent_core::types::StepStatus) -> String {
         agent_core::types::StepStatus::Completed => "completed".into(),
         agent_core::types::StepStatus::Paused => "paused".into(),
         agent_core::types::StepStatus::Failed => "failed".into(),
+    }
+}
+
+fn map_route_path(path: agent_core::types::RoutePath) -> String {
+    match path {
+        agent_core::types::RoutePath::SinglePassRag => "single_pass_rag".into(),
+        agent_core::types::RoutePath::AgenticSearch => "agentic_search".into(),
+    }
+}
+
+fn map_query_class(query_class: agent_core::types::QueryClass) -> String {
+    match query_class {
+        agent_core::types::QueryClass::SimpleFact => "simple_fact".into(),
+        agent_core::types::QueryClass::AmbiguityDisambiguation => {
+            "ambiguity_disambiguation".into()
+        }
+        agent_core::types::QueryClass::ExploratorySearch => "exploratory_search".into(),
+        agent_core::types::QueryClass::Procedural => "procedural".into(),
+        agent_core::types::QueryClass::MultiHopResearch => "multi_hop_research".into(),
+    }
+}
+
+fn map_retrieval_profile(profile: agent_core::types::RetrievalProfileId) -> String {
+    match profile {
+        agent_core::types::RetrievalProfileId::SimpleHybrid => "simple_hybrid".into(),
+        agent_core::types::RetrievalProfileId::LexicalFirst => "lexical_first".into(),
+        agent_core::types::RetrievalProfileId::BroadThenExpand => "broad_then_expand".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use agent_core::types::{
+        AgentState, QueryClass, RetrievalProfileId, RouteDecision, RoutePath, StepStatus,
+    };
+
+    use super::*;
+
+    #[test]
+    fn map_run_response_preserves_route_decision() {
+        let route_decision = RouteDecision {
+            selected_path: RoutePath::AgenticSearch,
+            query_class: QueryClass::MultiHopResearch,
+            retrieval_profile: RetrievalProfileId::BroadThenExpand,
+            ambiguity: true,
+            needs_multi_hop: true,
+            needs_high_evidence: true,
+            time_sensitive: false,
+            normalized_filters: vec!["tenant:default".into()],
+            reasons: vec!["compare".into()],
+        };
+        let result = AgentRunResult {
+            run_id: Uuid::nil(),
+            state: AgentState::Completed,
+            answer: Some("answer".into()),
+            summary: Some("summary".into()),
+            search_results: None,
+            query_type: Some(QueryType::Unstructured),
+            route_decision: Some(route_decision),
+            pending_checkpoint: None,
+            steps: vec![StepRecord {
+                task_id: "final_answer".into(),
+                started_at: chrono::Utc::now(),
+                elapsed_ms: 1,
+                status: StepStatus::Completed,
+            }],
+        };
+
+        let response = map_run_response(result);
+
+        let route_decision = response.route_decision.expect("route decision");
+        assert_eq!(route_decision.selected_path, "agentic_search");
+        assert_eq!(route_decision.query_class, "multi_hop_research");
+        assert_eq!(route_decision.retrieval_profile, "broad_then_expand");
+        assert!(route_decision.ambiguity);
+        assert!(route_decision.needs_multi_hop);
+        assert_eq!(route_decision.normalized_filters, vec!["tenant:default"]);
+        assert_eq!(route_decision.reasons, vec!["compare"]);
+    }
+
+    #[test]
+    fn map_scored_chunk_preserves_enriched_metadata() {
+        let mut source_scores = HashMap::new();
+        source_scores.insert("dense".into(), 0.91);
+        source_scores.insert("sparse".into(), 0.72);
+        let chunk = ScoredChunk {
+            chunk_id: "chunk-1".into(),
+            document_id: "doc-1".into(),
+            chunk_index: 2,
+            text: "chunk text".into(),
+            title: Some("Doc Title".into()),
+            source_url: Some("https://example.com/doc-1".into()),
+            source_domain: Some("example.com".into()),
+            language: Some("en".into()),
+            tags: vec!["guide".into(), "rust".into()],
+            section_heading: Some("Overview".into()),
+            collection: Some("docs".into()),
+            score: 0.88,
+            score_type: "rrf_fused".into(),
+            sources: vec!["dense".into(), "sparse".into()],
+            source_scores,
+        };
+
+        let response = map_scored_chunk(chunk);
+
+        assert_eq!(response.title.as_deref(), Some("Doc Title"));
+        assert_eq!(response.source_url.as_deref(), Some("https://example.com/doc-1"));
+        assert_eq!(response.source_domain.as_deref(), Some("example.com"));
+        assert_eq!(response.language.as_deref(), Some("en"));
+        assert_eq!(response.tags, vec!["guide", "rust"]);
+        assert_eq!(response.section_heading.as_deref(), Some("Overview"));
+        assert_eq!(response.collection.as_deref(), Some("docs"));
+        assert_eq!(response.score_type, "rrf_fused");
+        assert_eq!(response.sources, vec!["dense", "sparse"]);
+        assert_eq!(response.source_scores.get("dense"), Some(&0.91));
+        assert_eq!(response.source_scores.get("sparse"), Some(&0.72));
     }
 }
