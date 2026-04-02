@@ -548,8 +548,6 @@ mod tests {
         AgentRunConfig, AgentState, GroundedAnswer, QueryClass, RetrievalProfileId, RouteDecision,
         RoutePath,
     };
-    use graph_flow::Task;
-
     struct StubRetrieval;
     struct StubChat;
     struct StubApproval;
@@ -848,21 +846,6 @@ graph:
             .await;
 
         assert_eq!(result.route_decision, Some(decision));
-    }
-
-    #[tokio::test]
-    async fn route_query_task_writes_retrieval_profile_key() {
-        let task = RouteQueryTask;
-        let context = graph_flow::Context::new();
-        context
-            .set(keys::QUERY, &"How do I rotate API keys in the auth runbook?".to_string())
-            .await;
-
-        task.run(context.clone()).await.expect("route task should run");
-
-        let retrieval_profile: RetrievalProfileId =
-            context.get(keys::RETRIEVAL_PROFILE).await.expect("retrieval profile");
-        assert_eq!(retrieval_profile, RetrievalProfileId::LexicalFirst);
     }
 
     #[tokio::test]

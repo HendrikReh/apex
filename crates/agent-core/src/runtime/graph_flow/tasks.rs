@@ -59,7 +59,6 @@ impl Task for RouteQueryTask {
         info!(route = ?decision.selected_path, retrieval_profile = ?decision.retrieval_profile, "routed query");
 
         context.set(keys::ROUTE_DECISION, &decision).await;
-        context.set(keys::RETRIEVAL_PROFILE, &decision.retrieval_profile).await;
         context.set(keys::ROUTE_TO_AGENTIC_SEARCH, &route_to_agentic_search).await;
 
         Ok(TaskResult::new(Some(format!("{:?}", decision.selected_path)), NextAction::Continue))
