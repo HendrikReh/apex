@@ -216,7 +216,6 @@ impl AgentManager {
         approved: bool,
         reason: Option<String>,
     ) -> Result<AgentRunResult> {
-        self.prune_run_registry();
         let record = self
             .runs
             .get(&run_id)
@@ -225,6 +224,7 @@ impl AgentManager {
         if record.tenant != tenant {
             return Err(anyhow!("unknown run '{run_id}'"));
         }
+        self.prune_run_registry_with_protected(Some(run_id));
         let runtime = self
             .runtimes
             .get(&record.agent_id)
@@ -234,9 +234,18 @@ impl AgentManager {
     }
 
     fn prune_run_registry(&self) {
+        self.prune_run_registry_with_protected(None);
+    }
+
+    fn prune_run_registry_with_protected(&self, protected_run_id: Option<RunId>) {
         let now = Instant::now();
-        let expired = prune_expired_runs(&self.runs, now, self.run_registry_policy.ttl);
-        let overflow = prune_to_max_entries(&self.runs, self.run_registry_policy.max_entries);
+        let expired =
+            prune_expired_runs(&self.runs, now, self.run_registry_policy.ttl, protected_run_id);
+        let overflow = prune_to_max_entries(
+            &self.runs,
+            self.run_registry_policy.max_entries,
+            protected_run_id,
+        );
         if expired > 0 || overflow > 0 {
             tracing::debug!(
                 expired,
@@ -276,10 +285,18 @@ fn load_run_registry_policy() -> Result<RunRegistryPolicy> {
     Ok(RunRegistryPolicy { ttl: Duration::from_secs(ttl_secs), max_entries })
 }
 
-fn prune_expired_runs(runs: &DashMap<RunId, RunRecord>, now: Instant, ttl: Duration) -> usize {
+fn prune_expired_runs(
+    runs: &DashMap<RunId, RunRecord>,
+    now: Instant,
+    ttl: Duration,
+    protected_run_id: Option<RunId>,
+) -> usize {
     let stale_run_ids: Vec<RunId> = runs
         .iter()
         .filter_map(|entry| {
+            if protected_run_id.is_some_and(|run_id| run_id == *entry.key()) {
+                return None;
+            }
             let age = now.saturating_duration_since(entry.value().inserted_at);
             if age >= ttl { Some(*entry.key()) } else { None }
         })
@@ -291,21 +308,33 @@ fn prune_expired_runs(runs: &DashMap<RunId, RunRecord>, now: Instant, ttl: Durat
     removed
 }
 
-fn prune_to_max_entries(runs: &DashMap<RunId, RunRecord>, max_entries: usize) -> usize {
+fn prune_to_max_entries(
+    runs: &DashMap<RunId, RunRecord>,
+    max_entries: usize,
+    protected_run_id: Option<RunId>,
+) -> usize {
     let current_len = runs.len();
     if current_len <= max_entries {
         return 0;
     }
 
     let overflow = current_len - max_entries;
-    let mut records_by_age: Vec<(RunId, Instant)> =
-        runs.iter().map(|entry| (*entry.key(), entry.value().inserted_at)).collect();
+    let mut records_by_age: Vec<(RunId, Instant)> = runs
+        .iter()
+        .filter_map(|entry| {
+            if protected_run_id.is_some_and(|run_id| run_id == *entry.key()) {
+                None
+            } else {
+                Some((*entry.key(), entry.value().inserted_at))
+            }
+        })
+        .collect();
     records_by_age.sort_by_key(|(_, inserted_at)| *inserted_at);
 
     for (run_id, _) in records_by_age.into_iter().take(overflow) {
         runs.remove(&run_id);
     }
-    overflow
+    current_len.saturating_sub(runs.len())
 }
 
 fn describe_agent(spec: &AgentSpec) -> AgentDescriptor {
@@ -604,7 +633,7 @@ mod tests {
         runs.insert(stale_run, sample_record(stale_run, now - Duration::from_secs(120)));
         runs.insert(fresh_run, sample_record(fresh_run, now - Duration::from_secs(5)));
 
-        let removed = prune_expired_runs(&runs, now, ttl);
+        let removed = prune_expired_runs(&runs, now, ttl, None);
 
         assert_eq!(removed, 1);
         assert!(!runs.contains_key(&stale_run));
@@ -623,11 +652,55 @@ mod tests {
         runs.insert(middle, sample_record(middle, now - Duration::from_secs(20)));
         runs.insert(newest, sample_record(newest, now - Duration::from_secs(10)));
 
-        let removed = prune_to_max_entries(&runs, 2);
+        let removed = prune_to_max_entries(&runs, 2, None);
 
         assert_eq!(removed, 1);
         assert!(!runs.contains_key(&oldest));
         assert!(runs.contains_key(&middle));
+        assert!(runs.contains_key(&newest));
+    }
+
+    #[test]
+    fn prune_expired_runs_keeps_protected_run() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let protected = Uuid::new_v4();
+        let stale_unprotected = Uuid::new_v4();
+        let ttl = Duration::from_secs(30);
+
+        runs.insert(protected, sample_record(protected, now - Duration::from_secs(120)));
+        runs.insert(
+            stale_unprotected,
+            sample_record(stale_unprotected, now - Duration::from_secs(120)),
+        );
+
+        let removed = prune_expired_runs(&runs, now, ttl, Some(protected));
+
+        assert_eq!(removed, 1);
+        assert!(runs.contains_key(&protected));
+        assert!(!runs.contains_key(&stale_unprotected));
+    }
+
+    #[test]
+    fn prune_to_max_entries_keeps_protected_run() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let protected_oldest = Uuid::new_v4();
+        let middle = Uuid::new_v4();
+        let newest = Uuid::new_v4();
+
+        runs.insert(
+            protected_oldest,
+            sample_record(protected_oldest, now - Duration::from_secs(30)),
+        );
+        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20)));
+        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10)));
+
+        let removed = prune_to_max_entries(&runs, 2, Some(protected_oldest));
+
+        assert_eq!(removed, 1);
+        assert!(runs.contains_key(&protected_oldest));
+        assert!(!runs.contains_key(&middle));
         assert!(runs.contains_key(&newest));
     }
 }
