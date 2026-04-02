@@ -30,6 +30,7 @@ pub struct RunRecord {
     pub collection: String,
     pub tenant: String,
     inserted_at: Instant,
+    awaiting_approval: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +140,7 @@ impl AgentManager {
                 collection,
                 tenant,
                 inserted_at: Instant::now(),
+                awaiting_approval: result.pending_checkpoint.is_some(),
             },
         );
         self.prune_run_registry();
@@ -146,12 +148,16 @@ impl AgentManager {
     }
 
     pub async fn inspect(&self, run_id: RunId) -> Result<Option<RunWithMetadata>> {
-        self.inspect_inner(run_id, true).await
+        self.inspect_inner(run_id, Some(run_id)).await
     }
 
-    async fn inspect_inner(&self, run_id: RunId, prune: bool) -> Result<Option<RunWithMetadata>> {
-        if prune {
-            self.prune_run_registry();
+    async fn inspect_inner(
+        &self,
+        run_id: RunId,
+        protected_run_id: Option<RunId>,
+    ) -> Result<Option<RunWithMetadata>> {
+        if let Some(protected_run_id) = protected_run_id {
+            self.prune_run_registry_with_protected(Some(protected_run_id));
         }
         let record = match self.runs.get(&run_id) {
             Some(record) => record.clone(),
@@ -201,7 +207,7 @@ impl AgentManager {
 
         let mut runs = Vec::new();
         for record in records {
-            if let Some(run) = self.inspect_inner(record.run_id, false).await? {
+            if let Some(run) = self.inspect_inner(record.run_id, None).await? {
                 runs.push(run);
             }
         }
@@ -230,7 +236,11 @@ impl AgentManager {
             .get(&record.agent_id)
             .cloned()
             .ok_or_else(|| anyhow!("runtime for agent '{}' is unavailable", record.agent_id))?;
-        runtime.resume(run_id, CheckpointDecision { approved, reason }).await
+        let result = runtime.resume(run_id, CheckpointDecision { approved, reason }).await?;
+        if let Some(mut entry) = self.runs.get_mut(&run_id) {
+            entry.awaiting_approval = result.pending_checkpoint.is_some();
+        }
+        Ok(result)
     }
 
     fn prune_run_registry(&self) {
@@ -297,6 +307,9 @@ fn prune_expired_runs(
             if protected_run_id.is_some_and(|run_id| run_id == *entry.key()) {
                 return None;
             }
+            if entry.value().awaiting_approval {
+                return None;
+            }
             let age = now.saturating_duration_since(entry.value().inserted_at);
             if age >= ttl { Some(*entry.key()) } else { None }
         })
@@ -323,6 +336,8 @@ fn prune_to_max_entries(
         .iter()
         .filter_map(|entry| {
             if protected_run_id.is_some_and(|run_id| run_id == *entry.key()) {
+                None
+            } else if entry.value().awaiting_approval {
                 None
             } else {
                 Some((*entry.key(), entry.value().inserted_at))
@@ -572,7 +587,7 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    fn sample_record(run_id: RunId, inserted_at: Instant) -> RunRecord {
+    fn sample_record(run_id: RunId, inserted_at: Instant, awaiting_approval: bool) -> RunRecord {
         RunRecord {
             run_id,
             agent_id: "rag_spike".to_string(),
@@ -580,6 +595,7 @@ mod tests {
             collection: "test-collection".to_string(),
             tenant: "test-tenant".to_string(),
             inserted_at,
+            awaiting_approval,
         }
     }
 
@@ -630,8 +646,8 @@ mod tests {
         let fresh_run = Uuid::new_v4();
         let ttl = Duration::from_secs(30);
 
-        runs.insert(stale_run, sample_record(stale_run, now - Duration::from_secs(120)));
-        runs.insert(fresh_run, sample_record(fresh_run, now - Duration::from_secs(5)));
+        runs.insert(stale_run, sample_record(stale_run, now - Duration::from_secs(120), false));
+        runs.insert(fresh_run, sample_record(fresh_run, now - Duration::from_secs(5), false));
 
         let removed = prune_expired_runs(&runs, now, ttl, None);
 
@@ -648,9 +664,9 @@ mod tests {
         let middle = Uuid::new_v4();
         let newest = Uuid::new_v4();
 
-        runs.insert(oldest, sample_record(oldest, now - Duration::from_secs(30)));
-        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20)));
-        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10)));
+        runs.insert(oldest, sample_record(oldest, now - Duration::from_secs(30), false));
+        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20), false));
+        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10), false));
 
         let removed = prune_to_max_entries(&runs, 2, None);
 
@@ -668,10 +684,10 @@ mod tests {
         let stale_unprotected = Uuid::new_v4();
         let ttl = Duration::from_secs(30);
 
-        runs.insert(protected, sample_record(protected, now - Duration::from_secs(120)));
+        runs.insert(protected, sample_record(protected, now - Duration::from_secs(120), false));
         runs.insert(
             stale_unprotected,
-            sample_record(stale_unprotected, now - Duration::from_secs(120)),
+            sample_record(stale_unprotected, now - Duration::from_secs(120), false),
         );
 
         let removed = prune_expired_runs(&runs, now, ttl, Some(protected));
@@ -691,15 +707,59 @@ mod tests {
 
         runs.insert(
             protected_oldest,
-            sample_record(protected_oldest, now - Duration::from_secs(30)),
+            sample_record(protected_oldest, now - Duration::from_secs(30), false),
         );
-        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20)));
-        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10)));
+        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20), false));
+        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10), false));
 
         let removed = prune_to_max_entries(&runs, 2, Some(protected_oldest));
 
         assert_eq!(removed, 1);
         assert!(runs.contains_key(&protected_oldest));
+        assert!(!runs.contains_key(&middle));
+        assert!(runs.contains_key(&newest));
+    }
+
+    #[test]
+    fn prune_expired_runs_keeps_awaiting_approval_run() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let awaiting = Uuid::new_v4();
+        let stale_unprotected = Uuid::new_v4();
+        let ttl = Duration::from_secs(30);
+
+        runs.insert(awaiting, sample_record(awaiting, now - Duration::from_secs(120), true));
+        runs.insert(
+            stale_unprotected,
+            sample_record(stale_unprotected, now - Duration::from_secs(120), false),
+        );
+
+        let removed = prune_expired_runs(&runs, now, ttl, None);
+
+        assert_eq!(removed, 1);
+        assert!(runs.contains_key(&awaiting));
+        assert!(!runs.contains_key(&stale_unprotected));
+    }
+
+    #[test]
+    fn prune_to_max_entries_keeps_awaiting_approval_run() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let awaiting_oldest = Uuid::new_v4();
+        let middle = Uuid::new_v4();
+        let newest = Uuid::new_v4();
+
+        runs.insert(
+            awaiting_oldest,
+            sample_record(awaiting_oldest, now - Duration::from_secs(30), true),
+        );
+        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20), false));
+        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10), false));
+
+        let removed = prune_to_max_entries(&runs, 2, None);
+
+        assert_eq!(removed, 1);
+        assert!(runs.contains_key(&awaiting_oldest));
         assert!(!runs.contains_key(&middle));
         assert!(runs.contains_key(&newest));
     }
