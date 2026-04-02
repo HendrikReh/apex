@@ -18,15 +18,15 @@ rust_log_server := "info,rag_server=debug,rag_core=debug,tower_http=debug"
 
 # Start Postgres + Qdrant
 up:
-    docker compose -f {{compose_file}} up -d
+    docker compose -p ${APEX_COMPOSE_PROJECT_NAME:-apex} -f {{compose_file}} up -d
 
 # Stop services
 down:
-    docker compose -f {{compose_file}} down
+    docker compose -p ${APEX_COMPOSE_PROJECT_NAME:-apex} -f {{compose_file}} down
 
 # Stop services and remove volumes
 down-v:
-    docker compose -f {{compose_file}} down -v
+    docker compose -p ${APEX_COMPOSE_PROJECT_NAME:-apex} -f {{compose_file}} down -v
 
 # ── Build ─────────────────────────────────────────────────────────────
 
@@ -52,29 +52,29 @@ unit-test:
 # Integration tests and API smoke against local Postgres + Qdrant.
 # Starts Docker infra first and then runs the repo's non-provider integration suites.
 integration-test: up
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-client --test client_tests -- --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-cli --test e2e -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health_degraded -- --ignored --nocapture --test-threads=1
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test ingest -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test search -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test e2e -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_conversations -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_ingest -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_lifecycle -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_retrieval -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-client --test client_tests -- --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-cli --test e2e -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test health_degraded -- --ignored --nocapture --test-threads=1
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test ingest -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test search -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test e2e -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_conversations -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_ingest -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_lifecycle -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-core --test integration_retrieval -- --ignored --nocapture
 
 # Offline benchmark for routed agentic search.
 agentic-eval: up
-    CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test agentic_eval -- --ignored --nocapture --test-threads=1
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_itest}} cargo test -p rag-server --test agentic_eval -- --ignored --nocapture --test-threads=1
 
 # Optional provider/native smoke tests.
 # These require extra local setup such as PDFium, Tesseract, or live LLM credentials.
 smoke-test: up
-    CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_pdf -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_chat -- --ignored --nocapture
-    CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test smoke_llm -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_pdf -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test integration_chat -- --ignored --nocapture
+    APEX_COMPOSE_PROJECT_NAME=${APEX_COMPOSE_PROJECT_NAME:-apex} CARGO_TARGET_DIR={{target_dir_smoke}} cargo test -p rag-core --test smoke_llm -- --ignored --nocapture
 
 # ── Server ────────────────────────────────────────────────────────────
 

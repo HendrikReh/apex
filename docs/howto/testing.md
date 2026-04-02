@@ -88,6 +88,11 @@ This command starts local services first:
 just up
 ```
 
+`just up` uses a shared local Docker Compose project (`apex`) so multiple repo
+worktrees reuse the same Postgres/Qdrant stack instead of racing for host ports.
+The health-degraded integration test also targets this shared project when
+stopping/starting Qdrant.
+
 Then it runs the repo's integration targets, including:
 
 - `crates/rag-client/tests/client_tests.rs`
@@ -364,7 +369,7 @@ Check services:
 
 ```bash
 just up
-docker compose ps
+docker compose -p apex ps
 ```
 
 ### Ignored tests do not run
