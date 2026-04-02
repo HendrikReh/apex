@@ -1,5 +1,7 @@
 //! Chat service orchestrating retrieval, context assembly, and LLM completion.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
@@ -255,6 +257,13 @@ impl ChatService {
         };
         let context_result = self.context_builder.build(fused.clone(), &context_config);
         let citations = context_result.citations.clone();
+        let fused_by_chunk_id: HashMap<String, FusedChunk> =
+            fused.into_iter().map(|chunk| (chunk.chunk_id.clone(), chunk)).collect();
+        let evidence = context_result
+            .chunks
+            .iter()
+            .filter_map(|chunk| fused_by_chunk_id.get(&chunk.chunk_id).cloned())
+            .collect();
         let context_text = render_context_chunks(&context_result.chunks);
         let language_instruction =
             language.map(|lang| format!("Respond in {lang}.")).unwrap_or_default();
@@ -288,7 +297,7 @@ impl ChatService {
         Ok(GroundedAnswer {
             answer: llm_response.text,
             citations,
-            evidence: fused,
+            evidence,
             usage: llm_response.usage,
             model: llm_response.model,
         })

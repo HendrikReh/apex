@@ -39,9 +39,19 @@ fn write_sidecar(dir: &Path, stem: &str) {
 }
 
 async fn setup(ingest_root: &Path) -> Result<(IngestService, ChatService)> {
+    setup_with_context_max_chunks(ingest_root, None).await
+}
+
+async fn setup_with_context_max_chunks(
+    ingest_root: &Path,
+    context_max_chunks: Option<usize>,
+) -> Result<(IngestService, ChatService)> {
     let mut config = AppConfig::from_env()?;
     config.embedder = EmbedderKind::Mock;
     config.ingest_allowed_roots = vec![ingest_root.canonicalize()?];
+    if let Some(limit) = context_max_chunks {
+        config.context_max_chunks = limit;
+    }
     config.llm_prompt_template_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../config/prompts/chat_system.hbs")
         .display()
@@ -79,6 +89,39 @@ async fn ingest_fixtures(
     Ok(())
 }
 
+async fn ingest_multi_fixtures(
+    ingest: &IngestService,
+    dir: &TempDir,
+    tenant: &TenantId,
+    collection: &str,
+) -> Result<()> {
+    write_fixture(
+        dir.path(),
+        "rust.md",
+        "Rust is a systems programming language focused on safety and concurrency. \
+         Ownership and borrowing prevent data races.",
+    );
+    write_sidecar(dir.path(), "rust");
+    write_fixture(
+        dir.path(),
+        "tokio.md",
+        "Tokio is an async runtime for Rust. \
+         It provides task scheduling, timers, and networking primitives.",
+    );
+    write_sidecar(dir.path(), "tokio");
+
+    ingest
+        .ingest_directory(IngestDirectoryRequest {
+            path: dir.path().to_owned(),
+            tenant: tenant.clone(),
+            collection_override: Some(collection.to_owned()),
+            dry_run: false,
+        })
+        .await?;
+
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore] // requires `just up`
 async fn answer_single_shot_returns_grounded_answer() -> Result<()> {
@@ -97,6 +140,41 @@ async fn answer_single_shot_returns_grounded_answer() -> Result<()> {
     assert!(!response.citations.is_empty(), "citations should be present");
     assert!(!response.evidence.is_empty(), "evidence should be present");
     assert!(!response.model.is_empty(), "model should be populated");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // requires `just up`
+async fn answer_single_shot_evidence_matches_cited_chunks_under_budget() -> Result<()> {
+    let dir = TempDir::new()?;
+    let (ingest, chat) = setup_with_context_max_chunks(dir.path(), Some(1)).await?;
+    let suffix = unique_id();
+    let tenant: TenantId = format!("test-single-shot-budget-{suffix}").parse()?;
+    let collection = format!("test_single_shot_budget_{suffix}");
+
+    ingest_multi_fixtures(&ingest, &dir, &tenant, &collection).await?;
+
+    let response = chat
+        .answer_single_shot("What are Rust and Tokio?", &collection, tenant.as_str(), None)
+        .await?;
+
+    assert!(!response.citations.is_empty(), "citations should be present");
+    assert_eq!(
+        response.evidence.len(),
+        response.citations.len(),
+        "evidence should only include chunks that survived context building",
+    );
+
+    let evidence_chunk_ids: Vec<&str> =
+        response.evidence.iter().map(|chunk| chunk.chunk_id.as_str()).collect();
+    let citation_chunk_ids: Vec<&str> =
+        response.citations.iter().map(|citation| citation.chunk_id.as_str()).collect();
+
+    assert_eq!(
+        evidence_chunk_ids, citation_chunk_ids,
+        "evidence should align with the chunks actually cited in the prompt",
+    );
 
     Ok(())
 }
