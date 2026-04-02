@@ -11,7 +11,15 @@ pub struct RetrievedChunk {
     pub document_id: String,
     pub chunk_index: i32,
     pub text: String,
+    pub title: Option<String>,
+    pub source_url: Option<String>,
+    pub source_domain: Option<String>,
+    pub language: Option<String>,
+    pub tags: Vec<String>,
+    pub section_heading: Option<String>,
+    pub collection: Option<String>,
     pub score: f32,
+    pub score_type: String,
 }
 
 #[derive(Debug, Clone)]
@@ -20,7 +28,15 @@ pub struct FusedChunk {
     pub document_id: String,
     pub chunk_index: i32,
     pub text: String,
+    pub title: Option<String>,
+    pub source_url: Option<String>,
+    pub source_domain: Option<String>,
+    pub language: Option<String>,
+    pub tags: Vec<String>,
+    pub section_heading: Option<String>,
+    pub collection: Option<String>,
     pub fused_score: f32,
+    pub score_type: String,
     pub sources: Vec<String>,
     pub source_scores: HashMap<String, f32>,
 }
@@ -49,11 +65,40 @@ pub fn rrf_fusion(results: &[(&str, Vec<RetrievedChunk>)], k: u32) -> Vec<FusedC
                 document_id: chunk.document_id.clone(),
                 chunk_index: chunk.chunk_index,
                 text: chunk.text.clone(),
+                title: chunk.title.clone(),
+                source_url: chunk.source_url.clone(),
+                source_domain: chunk.source_domain.clone(),
+                language: chunk.language.clone(),
+                tags: chunk.tags.clone(),
+                section_heading: chunk.section_heading.clone(),
+                collection: chunk.collection.clone(),
                 fused_score: 0.0,
+                score_type: "rrf_fused".to_string(),
                 sources: Vec::new(),
                 source_scores: HashMap::new(),
             });
 
+            if entry.title.is_none() {
+                entry.title = chunk.title.clone();
+            }
+            if entry.source_url.is_none() {
+                entry.source_url = chunk.source_url.clone();
+            }
+            if entry.source_domain.is_none() {
+                entry.source_domain = chunk.source_domain.clone();
+            }
+            if entry.language.is_none() {
+                entry.language = chunk.language.clone();
+            }
+            if entry.tags.is_empty() && !chunk.tags.is_empty() {
+                entry.tags = chunk.tags.clone();
+            }
+            if entry.section_heading.is_none() {
+                entry.section_heading = chunk.section_heading.clone();
+            }
+            if entry.collection.is_none() {
+                entry.collection = chunk.collection.clone();
+            }
             entry.fused_score += rrf_score;
             entry.sources.push((*source_name).to_string());
             entry.source_scores.insert((*source_name).to_string(), chunk.score);
@@ -80,7 +125,15 @@ mod tests {
             document_id: doc.to_string(),
             chunk_index: index,
             text: format!("text of {id}"),
+            title: Some(format!("title of {doc}")),
+            source_url: Some(format!("https://example.com/{doc}")),
+            source_domain: Some("example.com".to_string()),
+            language: Some("en".to_string()),
+            tags: vec!["test".to_string()],
+            section_heading: Some("Section".to_string()),
+            collection: Some("test_collection".to_string()),
             score,
+            score_type: "dense".to_string(),
         }
     }
 
@@ -97,6 +150,8 @@ mod tests {
         let expected_score_rank1 = 1.0 / 62.0;
         assert!((fused[1].fused_score - expected_score_rank1).abs() < 1e-6);
         assert_eq!(fused[0].sources, vec!["dense"]);
+        assert_eq!(fused[0].score_type, "rrf_fused");
+        assert_eq!(fused[0].source_domain.as_deref(), Some("example.com"));
     }
 
     #[test]
@@ -112,6 +167,7 @@ mod tests {
         assert_eq!(fused[0].sources.len(), 2);
         assert!(fused[0].source_scores.contains_key("dense"));
         assert!(fused[0].source_scores.contains_key("sparse"));
+        assert_eq!(fused[0].tags, vec!["test"]);
     }
 
     #[test]

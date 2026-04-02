@@ -17,6 +17,20 @@ pub struct ChunkRecord {
     pub text: String,
 }
 
+/// A retrieval-oriented chunk row joined with document metadata.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ChunkSearchRow {
+    pub tenant: String,
+    pub document_id: String,
+    pub chunk_index: i32,
+    pub text: String,
+    pub title: String,
+    pub language: Option<String>,
+    pub metadata: Option<serde_json::Value>,
+    pub collection: Option<String>,
+    pub score: f32,
+}
+
 impl Stores {
     /// Insert (or update) chunks for a document, removing stale trailing chunks.
     ///
@@ -122,5 +136,97 @@ impl Stores {
             .context("deleting document chunks")?;
 
         Ok(result.rows_affected())
+    }
+
+    /// FTS query for chunks in a tenant-scoped collection.
+    pub async fn search_chunks_fts(
+        &self,
+        tenant: &str,
+        collection: &str,
+        query: &str,
+        limit: u64,
+    ) -> Result<Vec<ChunkSearchRow>> {
+        let limit = i64::try_from(limit).context("fts result limit exceeds i64::MAX")?;
+
+        let rows = sqlx::query_as::<_, ChunkSearchRow>(
+            r#"
+            SELECT
+                c.tenant,
+                c.document_id,
+                c.chunk_index,
+                c.text,
+                d.title,
+                d.language,
+                d.metadata,
+                d.collection,
+                ts_rank_cd(
+                    to_tsvector('simple', c.text),
+                    websearch_to_tsquery('simple', $3)
+                )::float4 AS score
+            FROM chunks c
+            JOIN documents d
+              ON d.tenant = c.tenant
+             AND d.id = c.document_id
+            WHERE c.tenant = $1
+              AND d.collection = $2
+              AND to_tsvector('simple', c.text) @@ websearch_to_tsquery('simple', $3)
+            ORDER BY score DESC, c.document_id ASC, c.chunk_index ASC
+            LIMIT $4
+            "#,
+        )
+        .bind(tenant)
+        .bind(collection)
+        .bind(query)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .context("fts searching chunks")?;
+
+        Ok(rows)
+    }
+
+    /// Fetch a chunk neighborhood joined with document metadata.
+    pub async fn get_chunk_neighbors(
+        &self,
+        tenant: &str,
+        document_id: &str,
+        center_chunk_index: i32,
+        before: i32,
+        after: i32,
+    ) -> Result<Vec<ChunkSearchRow>> {
+        let start = center_chunk_index.saturating_sub(before.max(0));
+        let end = center_chunk_index.saturating_add(after.max(0));
+
+        let rows = sqlx::query_as::<_, ChunkSearchRow>(
+            r#"
+            SELECT
+                c.tenant,
+                c.document_id,
+                c.chunk_index,
+                c.text,
+                d.title,
+                d.language,
+                d.metadata,
+                d.collection,
+                0.0::float4 AS score
+            FROM chunks c
+            JOIN documents d
+              ON d.tenant = c.tenant
+             AND d.id = c.document_id
+            WHERE c.tenant = $1
+              AND c.document_id = $2
+              AND c.chunk_index BETWEEN $3 AND $4
+            ORDER BY c.chunk_index
+            "#,
+        )
+        .bind(tenant)
+        .bind(document_id)
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await
+        .context("fetching chunk neighbors")?;
+
+        Ok(rows)
     }
 }
