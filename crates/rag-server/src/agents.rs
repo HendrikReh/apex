@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use agent_core::ports::{ApprovalPort, ChatPort, RetrievalPort};
+use agent_core::ports::{ApprovalPort, BaselineAnswerPort, ChatPort, RetrievalPort};
 use agent_core::runtime::AgentRuntime;
 use agent_core::runtime::graph_flow::GraphFlowRuntime;
 use agent_core::spec::{AgentSpec, DefaultToolRegistry};
 use agent_core::types::{
-    AgentRunConfig, AgentRunResult, CheckpointDecision, PendingCheckpoint, RunId, ScoredChunk,
+    AgentRunConfig, AgentRunResult, CheckpointDecision, GroundedAnswer as AgentGroundedAnswer,
+    PendingCheckpoint, RunId, ScoredChunk,
 };
 use anyhow::{Context, Result, anyhow};
 use dashmap::DashMap;
-use rag_core::{ChatService, FusedChunk, RetrievalService};
+use rag_core::{ChatService, FusedChunk, RetrievalService, RetrievedChunk, Stores};
 
 #[derive(Clone)]
 pub struct AgentManager {
@@ -46,6 +47,7 @@ pub struct RunWithMetadata {
 impl AgentManager {
     pub async fn load_default(
         agent_specs_dir: &std::path::Path,
+        stores: Stores,
         retrieval: Arc<RetrievalService>,
         chat: Arc<ChatService>,
     ) -> Result<Self> {
@@ -62,9 +64,13 @@ impl AgentManager {
         for (agent_id, spec) in registry.list() {
             let runtime: Arc<dyn AgentRuntime> = Arc::new(GraphFlowRuntime::from_spec(
                 spec.clone(),
-                Arc::new(ServerRetrievalPort { retrieval: retrieval.clone() }),
+                Arc::new(ServerRetrievalPort {
+                    retrieval: retrieval.clone(),
+                    stores: stores.clone(),
+                }),
                 Arc::new(ServerChatPort { chat: chat.clone() }),
                 Arc::new(PauseForApproval),
+                Arc::new(ServerBaselineAnswerPort { chat: chat.clone() }),
             ));
             runtimes.insert(agent_id.clone(), runtime);
         }
@@ -209,10 +215,93 @@ fn describe_agent(spec: &AgentSpec) -> AgentDescriptor {
 
 struct ServerRetrievalPort {
     retrieval: Arc<RetrievalService>,
+    stores: Stores,
+}
+
+fn map_retrieved_chunk(chunk: RetrievedChunk) -> ScoredChunk {
+    ScoredChunk {
+        chunk_id: chunk.chunk_id,
+        document_id: chunk.document_id,
+        chunk_index: chunk.chunk_index,
+        text: chunk.text,
+        title: chunk.title,
+        source_url: chunk.source_url,
+        source_domain: chunk.source_domain,
+        language: chunk.language,
+        tags: chunk.tags,
+        section_heading: chunk.section_heading,
+        collection: chunk.collection,
+        score: chunk.score,
+        score_type: chunk.score_type,
+        sources: Vec::new(),
+        source_scores: std::collections::HashMap::new(),
+    }
+}
+
+fn map_fused_chunk(chunk: FusedChunk) -> ScoredChunk {
+    ScoredChunk {
+        chunk_id: chunk.chunk_id,
+        document_id: chunk.document_id,
+        chunk_index: chunk.chunk_index,
+        text: chunk.text,
+        title: chunk.title,
+        source_url: chunk.source_url,
+        source_domain: chunk.source_domain,
+        language: chunk.language,
+        tags: chunk.tags,
+        section_heading: chunk.section_heading,
+        collection: chunk.collection,
+        score: chunk.fused_score,
+        score_type: chunk.score_type,
+        sources: chunk.sources,
+        source_scores: chunk.source_scores,
+    }
+}
+
+fn map_scored_chunk_for_summary(chunk: &ScoredChunk) -> FusedChunk {
+    FusedChunk {
+        chunk_id: chunk.chunk_id.clone(),
+        document_id: chunk.document_id.clone(),
+        chunk_index: chunk.chunk_index,
+        text: chunk.text.clone(),
+        title: chunk.title.clone(),
+        source_url: chunk.source_url.clone(),
+        source_domain: chunk.source_domain.clone(),
+        language: chunk.language.clone(),
+        tags: chunk.tags.clone(),
+        section_heading: chunk.section_heading.clone(),
+        collection: chunk.collection.clone(),
+        fused_score: chunk.score,
+        score_type: chunk.score_type.clone(),
+        sources: chunk.sources.clone(),
+        source_scores: chunk.source_scores.clone(),
+    }
 }
 
 #[async_trait::async_trait]
 impl RetrievalPort for ServerRetrievalPort {
+    async fn search_dense(
+        &self,
+        collection: &str,
+        query: &str,
+        tenant: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self.retrieval.search_dense(collection, query, tenant, limit).await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
+    async fn search_sparse(
+        &self,
+        collection: &str,
+        query: &str,
+        tenant: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self.retrieval.search_sparse(collection, query, tenant, limit).await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
     async fn search_hybrid(
         &self,
         collection: &str,
@@ -220,20 +309,76 @@ impl RetrievalPort for ServerRetrievalPort {
         tenant: &str,
     ) -> Result<Vec<ScoredChunk>> {
         let chunks = self.retrieval.search_hybrid(collection, query, tenant, None).await?;
-        Ok(chunks
-            .into_iter()
-            .map(|chunk| ScoredChunk {
-                chunk_id: chunk.chunk_id,
-                document_id: chunk.document_id,
-                chunk_index: chunk.chunk_index,
-                text: chunk.text,
-                score: chunk.fused_score,
-            })
-            .collect())
+        Ok(chunks.into_iter().map(map_fused_chunk).collect())
+    }
+
+    async fn search_fts(
+        &self,
+        collection: &str,
+        query: &str,
+        tenant: &str,
+        limit: u64,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self.retrieval.search_fts(collection, query, tenant, limit).await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
+    async fn expand_chunk_neighbors(
+        &self,
+        tenant: &str,
+        document_id: &str,
+        chunk_index: i32,
+        before: i32,
+        after: i32,
+    ) -> Result<Vec<ScoredChunk>> {
+        let chunks = self
+            .retrieval
+            .expand_chunk_neighbors(tenant, document_id, chunk_index, before, after)
+            .await?;
+        Ok(chunks.into_iter().map(map_retrieved_chunk).collect())
+    }
+
+    #[allow(clippy::disallowed_methods)] // serde_json::json! internally uses unwrap()
+    async fn fetch_document(&self, tenant: &str, document_id: &str) -> Result<serde_json::Value> {
+        let document = self.stores.get_document(tenant, document_id).await?.ok_or_else(|| {
+            anyhow!("document '{document_id}' does not exist for tenant '{tenant}'")
+        })?;
+        let chunks = self.stores.get_chunks_by_document(tenant, document_id).await?;
+
+        Ok(serde_json::json!({
+            "tenant": document.tenant,
+            "document": {
+                "id": document.id,
+                "title": document.title,
+                "language": document.language,
+                "metadata": document.metadata,
+                "source_path": document.source_path,
+                "version": document.version,
+                "checksum": document.checksum,
+                "ingest_run_id": document.ingest_run_id,
+                "token_count": document.token_count,
+                "collection": document.collection,
+                "stats_collection": document.stats_collection,
+                "stats_token_count": document.stats_token_count,
+                "created_at": document.created_at,
+                "updated_at": document.updated_at,
+            },
+            "chunks": chunks.into_iter().map(|chunk| serde_json::json!({
+                "id": chunk.id,
+                "tenant": chunk.tenant,
+                "document_id": chunk.document_id,
+                "chunk_index": chunk.chunk_index,
+                "text": chunk.text,
+            })).collect::<Vec<_>>(),
+        }))
     }
 }
 
 struct ServerChatPort {
+    chat: Arc<ChatService>,
+}
+
+struct ServerBaselineAnswerPort {
     chat: Arc<ChatService>,
 }
 
@@ -248,19 +393,28 @@ impl ChatPort for ServerChatPort {
         // Summarization operates only on already-retrieved in-memory chunks.
         // Tenant isolation is enforced at retrieval time before these chunks
         // are passed into agent-core.
-        let fused_chunks = chunks
-            .iter()
-            .map(|chunk| FusedChunk {
-                chunk_id: chunk.chunk_id.clone(),
-                document_id: chunk.document_id.clone(),
-                chunk_index: chunk.chunk_index,
-                text: chunk.text.clone(),
-                fused_score: chunk.score,
-                sources: vec!["hybrid".to_string()],
-                source_scores: std::collections::HashMap::new(),
-            })
-            .collect();
+        let fused_chunks = chunks.iter().map(map_scored_chunk_for_summary).collect();
         self.chat.summarize_chunks(query, fused_chunks).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BaselineAnswerPort for ServerBaselineAnswerPort {
+    async fn answer_single_shot(
+        &self,
+        query: &str,
+        collection: &str,
+        tenant: &str,
+        language: Option<&str>,
+    ) -> Result<AgentGroundedAnswer> {
+        let grounded = self.chat.answer_single_shot(query, collection, tenant, language).await?;
+
+        Ok(AgentGroundedAnswer {
+            answer: grounded.answer,
+            search_results: grounded.evidence.into_iter().map(map_fused_chunk).collect(),
+            citations: grounded.citations.into_iter().map(|citation| citation.chunk_id).collect(),
+            model: grounded.model,
+        })
     }
 }
 
@@ -273,5 +427,51 @@ impl ApprovalPort for PauseForApproval {
         _checkpoint: &PendingCheckpoint,
     ) -> Result<Option<CheckpointDecision>> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn map_scored_chunk_for_summary_preserves_metadata_and_provenance() {
+        let chunk = ScoredChunk {
+            chunk_id: "chunk-1".to_string(),
+            document_id: "doc-1".to_string(),
+            chunk_index: 3,
+            text: "chunk text".to_string(),
+            title: Some("Title".to_string()),
+            source_url: Some("https://example.com/doc-1".to_string()),
+            source_domain: Some("example.com".to_string()),
+            language: Some("en".to_string()),
+            tags: vec!["guide".to_string()],
+            section_heading: Some("Overview".to_string()),
+            collection: Some("docs".to_string()),
+            score: 0.75,
+            score_type: "fts".to_string(),
+            sources: vec!["fts".to_string()],
+            source_scores: HashMap::from([("fts".to_string(), 0.75)]),
+        };
+
+        let fused = map_scored_chunk_for_summary(&chunk);
+
+        assert_eq!(fused.chunk_id, chunk.chunk_id);
+        assert_eq!(fused.document_id, chunk.document_id);
+        assert_eq!(fused.chunk_index, chunk.chunk_index);
+        assert_eq!(fused.text, chunk.text);
+        assert_eq!(fused.title, chunk.title);
+        assert_eq!(fused.source_url, chunk.source_url);
+        assert_eq!(fused.source_domain, chunk.source_domain);
+        assert_eq!(fused.language, chunk.language);
+        assert_eq!(fused.tags, chunk.tags);
+        assert_eq!(fused.section_heading, chunk.section_heading);
+        assert_eq!(fused.collection, chunk.collection);
+        assert_eq!(fused.fused_score, chunk.score);
+        assert_eq!(fused.score_type, chunk.score_type);
+        assert_eq!(fused.sources, chunk.sources);
+        assert_eq!(fused.source_scores, chunk.source_scores);
     }
 }

@@ -4,13 +4,14 @@
 //! defined in [`super::keys`]. Business data is (de)serialized through the
 //! agent-core domain types — graph-flow's `Context` is just the transport.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use graph_flow::{Context, NextAction, Task, TaskResult};
 use tracing::info;
 
-use crate::ports::{ApprovalPort, ChatPort, RetrievalPort};
-use crate::types::{PendingCheckpoint, ScoredChunk};
+use crate::ports::{ApprovalPort, BaselineAnswerPort, ChatPort, RetrievalPort};
+use crate::types::{PendingCheckpoint, RetrievalProfileId, RouteDecision, RoutePath, ScoredChunk};
 
 use super::keys;
 
@@ -23,6 +24,238 @@ pub const HYBRID_SEARCH_TASK: &str = "hybrid_search";
 pub const SUMMARIZE_TASK: &str = "summarize";
 pub const APPROVAL_CHECKPOINT_TASK: &str = "approval_checkpoint";
 pub const FINAL_ANSWER_TASK: &str = "final_answer";
+pub const ROUTE_QUERY_TASK: &str = "route_query";
+pub const BASELINE_ANSWER_TASK: &str = "baseline_answer";
+pub const RETRIEVE_EVIDENCE_TASK: &str = "retrieve_evidence";
+pub const COMPOSE_ANSWER_TASK: &str = "compose_answer";
+
+fn dedupe_scored_chunks(chunks: Vec<ScoredChunk>) -> Vec<ScoredChunk> {
+    let mut seen = HashSet::new();
+    chunks.into_iter().filter(|chunk| seen.insert(chunk.chunk_id.clone())).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Route query
+// ---------------------------------------------------------------------------
+
+/// Deterministic route selection for routed search.
+pub struct RouteQueryTask;
+
+#[async_trait::async_trait]
+impl Task for RouteQueryTask {
+    fn id(&self) -> &str {
+        ROUTE_QUERY_TASK
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        let query: String = context
+            .get(keys::QUERY)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing query".into()))?;
+
+        let decision = crate::route::route_query(&query);
+        let route_to_agentic_search = decision.selected_path == RoutePath::AgenticSearch;
+
+        info!(route = ?decision.selected_path, retrieval_profile = ?decision.retrieval_profile, "routed query");
+
+        context.set(keys::ROUTE_DECISION, &decision).await;
+        context.set(keys::ROUTE_TO_AGENTIC_SEARCH, &route_to_agentic_search).await;
+
+        Ok(TaskResult::new(Some(format!("{:?}", decision.selected_path)), NextAction::Continue))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Baseline answer
+// ---------------------------------------------------------------------------
+
+/// Executes the single-pass baseline answer path.
+pub struct BaselineAnswerTask {
+    pub baseline: Arc<dyn BaselineAnswerPort>,
+}
+
+#[async_trait::async_trait]
+impl Task for BaselineAnswerTask {
+    fn id(&self) -> &str {
+        BASELINE_ANSWER_TASK
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        let query: String = context
+            .get(keys::QUERY)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing query".into()))?;
+        let collection: String = context.get(keys::COLLECTION).await.ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed("missing collection".into())
+        })?;
+        let tenant: String = context
+            .get(keys::TENANT)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing tenant".into()))?;
+
+        let grounded_answer = self
+            .baseline
+            .answer_single_shot(&query, &collection, &tenant, None)
+            .await
+            .map_err(|e| {
+                graph_flow::GraphError::TaskExecutionFailed(format!("baseline answer failed: {e}"))
+            })?;
+
+        info!(result_count = grounded_answer.search_results.len(), "baseline answer completed");
+
+        context.set(keys::SEARCH_RESULTS, &grounded_answer.search_results).await;
+        context.set(keys::FINAL_ANSWER, &grounded_answer.answer).await;
+
+        Ok(TaskResult::new(Some(grounded_answer.answer), NextAction::Continue))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Retrieve evidence
+// ---------------------------------------------------------------------------
+
+/// Executes deterministic retrieval selected by the route decision.
+pub struct RetrieveEvidenceTask {
+    pub retrieval: Arc<dyn RetrievalPort>,
+}
+
+#[async_trait::async_trait]
+impl Task for RetrieveEvidenceTask {
+    fn id(&self) -> &str {
+        RETRIEVE_EVIDENCE_TASK
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        let query: String = context
+            .get(keys::QUERY)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing query".into()))?;
+        let collection: String = context.get(keys::COLLECTION).await.ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed("missing collection".into())
+        })?;
+        let tenant: String = context
+            .get(keys::TENANT)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing tenant".into()))?;
+        let decision: RouteDecision = context.get(keys::ROUTE_DECISION).await.ok_or_else(|| {
+            graph_flow::GraphError::TaskExecutionFailed("missing route decision".into())
+        })?;
+
+        let results = match decision.retrieval_profile {
+            RetrievalProfileId::SimpleHybrid => {
+                self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "retrieve evidence failed: {e}"
+                    ))
+                })
+            }
+            RetrievalProfileId::LexicalFirst => {
+                let mut lexical =
+                    self.retrieval.search_fts(&collection, &query, &tenant, 10).await.map_err(
+                        |e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        },
+                    )?;
+                let hybrid =
+                    self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(
+                        |e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        },
+                    )?;
+                lexical.extend(hybrid);
+                Ok(dedupe_scored_chunks(lexical))
+            }
+            RetrievalProfileId::BroadThenExpand => {
+                let mut hybrid =
+                    self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(
+                        |e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        },
+                    )?;
+                if let Some(anchor) = hybrid.first() {
+                    let neighbors = self
+                        .retrieval
+                        .expand_chunk_neighbors(
+                            &tenant,
+                            &anchor.document_id,
+                            anchor.chunk_index,
+                            1,
+                            1,
+                        )
+                        .await
+                        .map_err(|e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        })?;
+                    hybrid.extend(neighbors);
+                }
+                Ok(dedupe_scored_chunks(hybrid))
+            }
+        }?;
+
+        info!(
+            retrieval_profile = ?decision.retrieval_profile,
+            result_count = results.len(),
+            "retrieved evidence"
+        );
+
+        context.set(keys::SEARCH_RESULTS, &results).await;
+
+        Ok(TaskResult::new(Some(format!("{} results", results.len())), NextAction::Continue))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compose answer
+// ---------------------------------------------------------------------------
+
+/// Composes the final answer from the retrieved evidence.
+pub struct ComposeAnswerTask {
+    pub chat: Arc<dyn ChatPort>,
+}
+
+#[async_trait::async_trait]
+impl Task for ComposeAnswerTask {
+    fn id(&self) -> &str {
+        COMPOSE_ANSWER_TASK
+    }
+
+    async fn run(&self, context: Context) -> graph_flow::Result<TaskResult> {
+        let query: String = context
+            .get(keys::QUERY)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing query".into()))?;
+        let tenant: String = context
+            .get(keys::TENANT)
+            .await
+            .ok_or_else(|| graph_flow::GraphError::TaskExecutionFailed("missing tenant".into()))?;
+        let results: Vec<ScoredChunk> = context.get(keys::SEARCH_RESULTS).await.unwrap_or_default();
+
+        if results.is_empty() {
+            let msg = "No evidence retrieved to compose answer.".to_string();
+            context.set(keys::SUMMARY, &msg).await;
+            context.set(keys::FINAL_ANSWER, &msg).await;
+            return Ok(TaskResult::new(Some(msg), NextAction::Continue));
+        }
+
+        let answer = self.chat.summarize(&query, &results, &tenant).await.map_err(|e| {
+            graph_flow::GraphError::TaskExecutionFailed(format!("compose answer failed: {e}"))
+        })?;
+
+        info!(answer_len = answer.len(), "composed answer");
+        context.set(keys::SUMMARY, &answer).await;
+        context.set(keys::FINAL_ANSWER, &answer).await;
+
+        Ok(TaskResult::new(Some(answer), NextAction::Continue))
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Classify
@@ -237,10 +470,14 @@ impl Task for FinalAnswerTask {
         // TODO: re-prompt LLM with (query, chunks) → answer instead of
         // reusing the summarization output verbatim.
         let answer = if approved {
-            context
-                .get::<String>(keys::SUMMARY)
-                .await
-                .unwrap_or_else(|| "No summary available.".to_string())
+            if let Some(existing) = context.get::<String>(keys::FINAL_ANSWER).await {
+                existing
+            } else {
+                context
+                    .get::<String>(keys::SUMMARY)
+                    .await
+                    .unwrap_or_else(|| "No summary available.".to_string())
+            }
         } else {
             let reason: Option<String> = context.get(keys::CHECKPOINT_REASON).await;
             match reason {

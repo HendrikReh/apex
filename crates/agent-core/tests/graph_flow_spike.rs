@@ -16,8 +16,54 @@ use agent_core::types::{
 
 struct MockRetrieval;
 
+fn test_chunk(
+    chunk_id: &str,
+    document_id: &str,
+    chunk_index: i32,
+    text: &str,
+    score: f32,
+) -> ScoredChunk {
+    ScoredChunk {
+        chunk_id: chunk_id.into(),
+        document_id: document_id.into(),
+        chunk_index,
+        text: text.into(),
+        title: None,
+        source_url: None,
+        source_domain: None,
+        language: None,
+        tags: Vec::new(),
+        section_heading: None,
+        collection: None,
+        score,
+        score_type: "test".into(),
+        sources: Vec::new(),
+        source_scores: std::collections::HashMap::new(),
+    }
+}
+
 #[async_trait::async_trait]
 impl RetrievalPort for MockRetrieval {
+    async fn search_dense(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
+    async fn search_sparse(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
     async fn search_hybrid(
         &self,
         _collection: &str,
@@ -25,22 +71,50 @@ impl RetrievalPort for MockRetrieval {
         _tenant: &str,
     ) -> anyhow::Result<Vec<ScoredChunk>> {
         Ok(vec![
-            ScoredChunk {
-                chunk_id: "chunk-1".into(),
-                document_id: "doc-1".into(),
-                chunk_index: 0,
-                text: "Retrieval-Augmented Generation combines retrieval with generation.".into(),
-                score: 0.95,
-            },
-            ScoredChunk {
-                chunk_id: "chunk-2".into(),
-                document_id: "doc-1".into(),
-                chunk_index: 1,
-                text: "RAG reduces hallucination by grounding answers in retrieved documents."
-                    .into(),
-                score: 0.87,
-            },
+            test_chunk(
+                "chunk-1",
+                "doc-1",
+                0,
+                "Retrieval-Augmented Generation combines retrieval with generation.",
+                0.95,
+            ),
+            test_chunk(
+                "chunk-2",
+                "doc-1",
+                1,
+                "RAG reduces hallucination by grounding answers in retrieved documents.",
+                0.87,
+            ),
         ])
+    }
+
+    async fn search_fts(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
+    async fn expand_chunk_neighbors(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+        _chunk_index: i32,
+        _before: i32,
+        _after: i32,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
+    async fn fetch_document(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::json!({}))
     }
 }
 
@@ -104,8 +178,11 @@ fn config() -> AgentRunConfig {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn full_run_with_auto_approve() {
-    let runtime =
-        GraphFlowRuntime::new(Arc::new(MockRetrieval), Arc::new(MockChat), Arc::new(AutoApprove));
+    let runtime = GraphFlowRuntime::new_without_baseline(
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
 
     let result = runtime.start(config()).await.expect("start failed");
 
@@ -122,7 +199,7 @@ async fn full_run_with_auto_approve() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn pause_and_resume_with_manual_approval() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
         Arc::new(ManualApproval),
@@ -149,7 +226,7 @@ async fn pause_and_resume_with_manual_approval() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn rejection_at_checkpoint() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
         Arc::new(ManualApproval),
@@ -175,7 +252,7 @@ async fn rejection_at_checkpoint() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn inspect_returns_session_state() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
         Arc::new(ManualApproval),
@@ -192,8 +269,11 @@ async fn inspect_returns_session_state() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn inspect_unknown_run_returns_none() {
-    let runtime =
-        GraphFlowRuntime::new(Arc::new(MockRetrieval), Arc::new(MockChat), Arc::new(AutoApprove));
+    let runtime = GraphFlowRuntime::new_without_baseline(
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
 
     let result = runtime.inspect(uuid::Uuid::new_v4()).await.expect("inspect failed");
     assert!(result.is_none());
@@ -236,7 +316,7 @@ checkpoints:
 #[allow(clippy::disallowed_methods)]
 async fn spec_driven_full_run() {
     let spec = AgentSpec::from_yaml_str(RAG_SPIKE_SPEC).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -255,7 +335,7 @@ async fn spec_driven_full_run() {
 #[allow(clippy::disallowed_methods)]
 async fn spec_driven_pause_and_resume() {
     let spec = AgentSpec::from_yaml_str(RAG_SPIKE_SPEC).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -286,7 +366,7 @@ async fn spec_from_yaml_file() {
     assert_eq!(spec.checkpoints.len(), 1);
 
     // Verify the loaded spec drives a full run.
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -329,7 +409,7 @@ checkpoints:
 
     // Use ManualApproval port — which always returns None (would pause).
     // But approval_type: auto in the spec should bypass the port entirely.
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -346,7 +426,7 @@ checkpoints:
 #[allow(clippy::disallowed_methods)]
 async fn spec_checkpoint_config_surfaces_in_pending() {
     let spec = AgentSpec::from_yaml_str(RAG_SPIKE_SPEC).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -464,7 +544,7 @@ graph:
     - { from: summarize, to: final_answer }
 "#;
     let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -546,6 +626,26 @@ struct FailingRetrieval;
 
 #[async_trait::async_trait]
 impl RetrievalPort for FailingRetrieval {
+    async fn search_dense(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn search_sparse(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
     async fn search_hybrid(
         &self,
         _collection: &str,
@@ -554,12 +654,41 @@ impl RetrievalPort for FailingRetrieval {
     ) -> anyhow::Result<Vec<ScoredChunk>> {
         anyhow::bail!("simulated retrieval failure")
     }
+
+    async fn search_fts(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn expand_chunk_neighbors(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+        _chunk_index: i32,
+        _before: i32,
+        _after: i32,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn fetch_document(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::bail!("simulated retrieval failure")
+    }
 }
 
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn retrieval_error_produces_failed_state() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(FailingRetrieval),
         Arc::new(MockChat),
         Arc::new(AutoApprove),
@@ -573,7 +702,7 @@ async fn retrieval_error_produces_failed_state() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn inspect_reports_failed_state_correctly() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(FailingRetrieval),
         Arc::new(MockChat),
         Arc::new(AutoApprove),

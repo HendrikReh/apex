@@ -47,7 +47,7 @@ fn write_sidecar(dir: &Path, stem: &str) {
 async fn setup(ingest_root: &Path) -> Result<(IngestService, RetrievalService, AppConfig)> {
     let mut config = AppConfig::from_env()?;
     config.embedder = EmbedderKind::Mock;
-    config.ingest_allowed_roots = vec![ingest_root.to_path_buf()];
+    config.ingest_allowed_roots = vec![ingest_root.canonicalize()?];
     let ingest_stores = Stores::new(&config).await?;
     let retrieval_stores = Stores::new(&config).await?;
     let ingest = IngestService::new(ingest_stores, &config)?;
@@ -214,6 +214,67 @@ async fn context_assembly_respects_token_budget() -> Result<()> {
         assert!(!result.chunks.is_empty());
         assert_eq!(result.citations.len(), result.stats.final_count);
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
+async fn fts_search_returns_lexical_hits() -> Result<()> {
+    let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
+    let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
+
+    let results =
+        retrieval.search_fts(&collection, "\"starter culture\"", tenant.as_str(), 10).await?;
+
+    assert!(!results.is_empty(), "fts search should return results");
+    assert_eq!(results[0].document_id, "cooking");
+    assert_eq!(results[0].source_domain.as_deref(), Some("example.com"));
+    assert_eq!(results[0].title.as_deref(), Some("Test cooking"));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
+async fn expand_chunk_neighbors_returns_adjacent_chunks() -> Result<()> {
+    let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
+    let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
+
+    let fused =
+        retrieval.search_hybrid(&collection, "borrow checker", tenant.as_str(), None).await?;
+    let anchor = fused.first().expect("anchor chunk");
+
+    let neighbors = retrieval
+        .expand_chunk_neighbors(tenant.as_str(), &anchor.document_id, anchor.chunk_index, 1, 1)
+        .await?;
+
+    assert!(!neighbors.is_empty(), "neighbor expansion should return results");
+    assert!(neighbors.iter().any(|chunk| chunk.chunk_index == anchor.chunk_index));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore] // requires running Postgres + Qdrant (`just up`)
+#[allow(clippy::disallowed_methods)] // false positive: Ok(()) is flagged as Result::expect
+async fn hybrid_search_carries_metadata_and_provenance() -> Result<()> {
+    let dir = TempDir::new()?;
+    let (ingest, retrieval, _config) = setup(dir.path()).await?;
+    let (tenant, collection) = ingest_fixtures(&ingest, &dir).await?;
+
+    let fused =
+        retrieval.search_hybrid(&collection, "rust programming", tenant.as_str(), None).await?;
+
+    let first = fused.first().expect("fused result");
+    assert_eq!(first.source_domain.as_deref(), Some("example.com"));
+    assert!(!first.sources.is_empty(), "rrf provenance should be preserved");
+    assert!(first.source_scores.keys().all(|source| first.sources.contains(source)));
+    assert!(!first.tags.is_empty(), "tags should be preserved");
 
     Ok(())
 }

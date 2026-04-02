@@ -1,0 +1,40 @@
+# Routed search milestone-1 graph:
+# - route the query deterministically
+# - fall back to a single-pass baseline answer for simple facts
+# - otherwise retrieve evidence and compose the answer from retrieved chunks
+
+agent_id: agentic_search_v1
+description: >
+  Routed search agent that deterministically selects between a single-pass
+  baseline answer and an evidence-first composition branch.
+spec_version: "1.0"
+
+required_tools:
+  - retrieval.dense
+  - retrieval.sparse
+  - retrieval.hybrid
+  - retrieval.fts
+  - retrieval.expand_chunk_neighbors
+  - retrieval.fetch_document
+
+tasks:
+  - route_query
+  - baseline_answer
+  - retrieve_evidence
+  - compose_answer
+  - final_answer
+
+graph:
+  start_task: route_query
+  tasks:
+    - route_query
+    - baseline_answer
+    - retrieve_evidence
+    - compose_answer
+    - final_answer
+  edges:
+    - { from: route_query, to: retrieve_evidence, condition_key: route_to_agentic_search }
+    - { from: route_query, to: baseline_answer }
+    - { from: retrieve_evidence, to: compose_answer }
+    - { from: baseline_answer, to: final_answer }
+    - { from: compose_answer, to: final_answer }

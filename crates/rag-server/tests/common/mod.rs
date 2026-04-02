@@ -23,8 +23,15 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
         .and_then(|p| p.parent())
         .expect("workspace root");
     let template_path = workspace_root.join("config/prompts/chat_system.hbs");
+    let ingest_fixture_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .canonicalize()
+        .expect("fixture root");
+    let eval_root =
+        workspace_root.join("data/evals/agentic_search_v1").canonicalize().expect("eval root");
     unsafe { std::env::set_var("LLM_PROMPT_TEMPLATE_PATH", &template_path) };
-    let config = AppConfig::from_env().expect("test config");
+    let mut config = AppConfig::from_env().expect("test config");
+    config.ingest_allowed_roots = vec![ingest_fixture_root, eval_root];
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
     let retrieval =
@@ -34,9 +41,14 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
             .expect("test chat"),
     );
     let agents = Arc::new(
-        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
-            .await
-            .expect("agents"),
+        AgentManager::load_default(
+            &config.agent_specs_dir,
+            stores.clone(),
+            retrieval.clone(),
+            chat.clone(),
+        )
+        .await
+        .expect("agents"),
     );
     let tenant_header = config.tenant_header.parse().expect("tenant header");
     let auth =

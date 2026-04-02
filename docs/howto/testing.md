@@ -5,6 +5,7 @@ This repo uses three test tiers:
 - `unit-test`: fast crate-local tests with no Docker, provider, or native-library requirements
 - `integration-test`: tests that exercise real Postgres/Qdrant, HTTP routes, and end-to-end application wiring
 - `smoke-test`: optional higher-cost tests that need external providers or native tools such as PDFium or Tesseract
+- `agentic-eval`: offline routed-search benchmark for `agentic_search_v1`
 
 The commands below are the supported entry points:
 
@@ -12,6 +13,7 @@ The commands below are the supported entry points:
 just unit-test
 just integration-test
 just smoke-test
+just agentic-eval
 just test
 ```
 
@@ -126,6 +128,19 @@ These tests require some combination of:
 - `LLM_API_KEY`
 
 They are intentionally `#[ignore]` because they are slower, costlier, or depend on local machine setup.
+
+### `just agentic-eval`
+
+Use this to compare the baseline `/chat` path against `agentic_search_v1` on the checked-in benchmark set under `data/evals/agentic_search_v1/`.
+
+Runs:
+
+```bash
+just up
+CARGO_TARGET_DIR=target/itest cargo test -p rag-server --test agentic_eval -- --ignored --nocapture --test-threads=1
+```
+
+This is an ignored integration benchmark, so it exercises the live server stack without running in the default `just test` flow.
 
 ## Test Taxonomy
 

@@ -16,11 +16,11 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::ports::{ApprovalPort, ChatPort, RetrievalPort};
+use crate::ports::{ApprovalPort, BaselineAnswerPort, ChatPort, RetrievalPort};
 use crate::spec::AgentSpec;
 use crate::types::{
     AgentRunConfig, AgentRunResult, AgentState, CheckpointDecision, PendingCheckpoint, QueryType,
-    RunId, ScoredChunk, StepRecord, StepStatus,
+    RouteDecision, RunId, ScoredChunk, StepRecord, StepStatus,
 };
 
 use tasks::*;
@@ -52,6 +52,7 @@ pub struct GraphFlowRuntime {
     retrieval: Arc<dyn RetrievalPort>,
     chat: Arc<dyn ChatPort>,
     approval: Arc<dyn ApprovalPort>,
+    baseline: Arc<dyn BaselineAnswerPort>,
     /// Optional spec driving graph construction. When `None`, falls back to
     /// the hardcoded 5-task spike graph.
     spec: Option<AgentSpec>,
@@ -61,21 +62,47 @@ pub struct GraphFlowRuntime {
     meta: Arc<Mutex<std::collections::HashMap<RunId, RunMeta>>>,
 }
 
+struct UnavailableBaselineAnswerPort;
+
+#[async_trait::async_trait]
+impl BaselineAnswerPort for UnavailableBaselineAnswerPort {
+    async fn answer_single_shot(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+    ) -> anyhow::Result<crate::types::GroundedAnswer> {
+        anyhow::bail!("baseline answer port is not configured for this runtime")
+    }
+}
+
 impl GraphFlowRuntime {
     /// Create a runtime with the hardcoded spike graph (no spec).
     pub fn new(
         retrieval: Arc<dyn RetrievalPort>,
         chat: Arc<dyn ChatPort>,
         approval: Arc<dyn ApprovalPort>,
+        baseline: Arc<dyn BaselineAnswerPort>,
     ) -> Self {
         Self {
             retrieval,
             chat,
             approval,
+            baseline,
             spec: None,
             sessions: Arc::new(InMemorySessionStorage::new()),
             meta: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Create a runtime with the hardcoded spike graph and no baseline-answer port.
+    pub fn new_without_baseline(
+        retrieval: Arc<dyn RetrievalPort>,
+        chat: Arc<dyn ChatPort>,
+        approval: Arc<dyn ApprovalPort>,
+    ) -> Self {
+        Self::new(retrieval, chat, approval, Arc::new(UnavailableBaselineAnswerPort))
     }
 
     /// Create a runtime driven by a YAML agent spec.
@@ -84,20 +111,40 @@ impl GraphFlowRuntime {
         retrieval: Arc<dyn RetrievalPort>,
         chat: Arc<dyn ChatPort>,
         approval: Arc<dyn ApprovalPort>,
+        baseline: Arc<dyn BaselineAnswerPort>,
     ) -> Self {
         Self {
             retrieval,
             chat,
             approval,
+            baseline,
             spec: Some(spec),
             sessions: Arc::new(InMemorySessionStorage::new()),
             meta: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
+    /// Create a runtime driven by a YAML agent spec and no baseline-answer port.
+    pub fn from_spec_without_baseline(
+        spec: AgentSpec,
+        retrieval: Arc<dyn RetrievalPort>,
+        chat: Arc<dyn ChatPort>,
+        approval: Arc<dyn ApprovalPort>,
+    ) -> Self {
+        Self::from_spec(spec, retrieval, chat, approval, Arc::new(UnavailableBaselineAnswerPort))
+    }
+
     /// Map a task ID from a spec to its concrete [`graph_flow::Task`] implementation.
     fn make_task(&self, task_id: &str) -> Option<Arc<dyn graph_flow::Task>> {
         match task_id {
+            ROUTE_QUERY_TASK => Some(Arc::new(RouteQueryTask)),
+            BASELINE_ANSWER_TASK => {
+                Some(Arc::new(BaselineAnswerTask { baseline: self.baseline.clone() }))
+            }
+            RETRIEVE_EVIDENCE_TASK => {
+                Some(Arc::new(RetrieveEvidenceTask { retrieval: self.retrieval.clone() }))
+            }
+            COMPOSE_ANSWER_TASK => Some(Arc::new(ComposeAnswerTask { chat: self.chat.clone() })),
             CLASSIFY_TASK => Some(Arc::new(ClassifyTask)),
             HYBRID_SEARCH_TASK => {
                 Some(Arc::new(HybridSearchTask { retrieval: self.retrieval.clone() }))
@@ -330,6 +377,7 @@ impl GraphFlowRuntime {
         let summary: Option<String> = context.get(keys::SUMMARY).await;
         let search_results: Option<Vec<ScoredChunk>> = context.get(keys::SEARCH_RESULTS).await;
         let query_type: Option<QueryType> = context.get(keys::QUERY_TYPE).await;
+        let route_decision: Option<RouteDecision> = context.get(keys::ROUTE_DECISION).await;
 
         // Read PendingCheckpoint from context (written by ApprovalCheckpointTask).
         // Only present when the run is awaiting approval.
@@ -347,6 +395,7 @@ impl GraphFlowRuntime {
             summary,
             search_results,
             query_type,
+            route_decision,
             pending_checkpoint,
             steps,
         }
@@ -483,5 +532,600 @@ impl super::AgentRuntime for GraphFlowRuntime {
             .await;
 
         Ok(Some(result))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)] // test assertions and lock checks use expect()/unwrap()
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::ports::BaselineAnswerPort;
+    use crate::runtime::AgentRuntime;
+    use crate::types::{
+        AgentRunConfig, AgentState, GroundedAnswer, QueryClass, RetrievalProfileId, RouteDecision,
+        RoutePath,
+    };
+    struct StubRetrieval;
+    struct StubChat;
+    struct StubApproval;
+
+    #[derive(Debug, Default, Clone)]
+    struct RoutedCallState {
+        baseline_queries: Vec<String>,
+        retrieval_calls: Vec<&'static str>,
+        compose_queries: Vec<String>,
+        expand_requests: Vec<(String, String, i32, i32, i32)>,
+    }
+
+    struct TrackingRetrieval {
+        state: Arc<Mutex<RoutedCallState>>,
+        dense_results: Vec<ScoredChunk>,
+        fts_results: Vec<ScoredChunk>,
+        hybrid_results: Vec<ScoredChunk>,
+        expanded_results: Vec<ScoredChunk>,
+    }
+
+    struct TrackingChat {
+        state: Arc<Mutex<RoutedCallState>>,
+    }
+
+    struct TrackingBaseline {
+        state: Arc<Mutex<RoutedCallState>>,
+        grounded_answer: GroundedAnswer,
+    }
+
+    #[async_trait::async_trait]
+    impl RetrievalPort for StubRetrieval {
+        async fn search_dense(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_sparse(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_hybrid(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_fts(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn expand_chunk_neighbors(
+            &self,
+            _: &str,
+            _: &str,
+            _: i32,
+            _: i32,
+            _: i32,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch_document(&self, _: &str, _: &str) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChatPort for StubChat {
+        async fn summarize(&self, _: &str, _: &[ScoredChunk], _: &str) -> anyhow::Result<String> {
+            Ok(String::new())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalPort for StubApproval {
+        async fn request_approval(
+            &self,
+            _: &PendingCheckpoint,
+        ) -> anyhow::Result<Option<CheckpointDecision>> {
+            Ok(None)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RetrievalPort for TrackingRetrieval {
+        async fn search_dense(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            self.state.lock().expect("retrieval state").retrieval_calls.push("dense");
+            Ok(self.dense_results.clone())
+        }
+
+        async fn search_sparse(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            self.state.lock().expect("retrieval state").retrieval_calls.push("sparse");
+            Ok(self.dense_results.clone())
+        }
+
+        async fn search_hybrid(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            self.state.lock().expect("retrieval state").retrieval_calls.push("hybrid");
+            Ok(self.hybrid_results.clone())
+        }
+
+        async fn search_fts(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            _: u64,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            self.state.lock().expect("retrieval state").retrieval_calls.push("fts");
+            Ok(self.fts_results.clone())
+        }
+
+        async fn expand_chunk_neighbors(
+            &self,
+            tenant: &str,
+            document_id: &str,
+            chunk_index: i32,
+            before: i32,
+            after: i32,
+        ) -> anyhow::Result<Vec<ScoredChunk>> {
+            let mut state = self.state.lock().expect("retrieval state");
+            state.retrieval_calls.push("expand");
+            state.expand_requests.push((
+                tenant.to_string(),
+                document_id.to_string(),
+                chunk_index,
+                before,
+                after,
+            ));
+            Ok(self.expanded_results.clone())
+        }
+
+        async fn fetch_document(&self, _: &str, _: &str) -> anyhow::Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ChatPort for TrackingChat {
+        async fn summarize(
+            &self,
+            query: &str,
+            chunks: &[ScoredChunk],
+            _: &str,
+        ) -> anyhow::Result<String> {
+            self.state.lock().expect("chat state").compose_queries.push(query.to_string());
+            Ok(format!("composed '{}' from {} chunks", query, chunks.len()))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BaselineAnswerPort for TrackingBaseline {
+        async fn answer_single_shot(
+            &self,
+            query: &str,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+        ) -> anyhow::Result<GroundedAnswer> {
+            self.state.lock().expect("baseline state").baseline_queries.push(query.to_string());
+            Ok(self.grounded_answer.clone())
+        }
+    }
+
+    fn test_chunk_with(
+        chunk_id: &str,
+        document_id: &str,
+        chunk_index: i32,
+        text: &str,
+    ) -> ScoredChunk {
+        ScoredChunk {
+            chunk_id: chunk_id.to_string(),
+            document_id: document_id.to_string(),
+            chunk_index,
+            text: text.to_string(),
+            title: None,
+            source_url: None,
+            source_domain: None,
+            language: Some("en".to_string()),
+            tags: Vec::new(),
+            section_heading: None,
+            collection: Some("docs".to_string()),
+            score: 0.9,
+            score_type: "test".to_string(),
+            sources: Vec::new(),
+            source_scores: std::collections::HashMap::new(),
+        }
+    }
+
+    fn routed_spec() -> AgentSpec {
+        AgentSpec::from_yaml_str(
+            r#"
+agent_id: agentic_search_v1
+description: "Milestone 1 routed search graph"
+spec_version: "1.0"
+required_tools:
+  - retrieval.dense
+  - retrieval.sparse
+  - retrieval.hybrid
+  - retrieval.fts
+  - retrieval.expand_chunk_neighbors
+  - retrieval.fetch_document
+tasks:
+  - route_query
+  - baseline_answer
+  - retrieve_evidence
+  - compose_answer
+  - final_answer
+graph:
+  start_task: route_query
+  tasks:
+    - route_query
+    - baseline_answer
+    - retrieve_evidence
+    - compose_answer
+    - final_answer
+  edges:
+    - { from: route_query, to: retrieve_evidence, condition_key: route_to_agentic_search }
+    - { from: route_query, to: baseline_answer }
+    - { from: retrieve_evidence, to: compose_answer }
+    - { from: baseline_answer, to: final_answer }
+    - { from: compose_answer, to: final_answer }
+"#,
+        )
+        .expect("routed spec should parse")
+    }
+
+    fn routed_config(query: &str) -> AgentRunConfig {
+        AgentRunConfig {
+            query: query.to_string(),
+            collection: "docs".to_string(),
+            tenant: "tenant-a".to_string(),
+            max_steps: 10,
+        }
+    }
+
+    #[tokio::test]
+    async fn extract_results_reads_route_decision_from_context() {
+        let runtime = GraphFlowRuntime::new_without_baseline(
+            Arc::new(StubRetrieval),
+            Arc::new(StubChat),
+            Arc::new(StubApproval),
+        );
+        let context = graph_flow::Context::new();
+        let decision = RouteDecision {
+            selected_path: RoutePath::AgenticSearch,
+            query_class: QueryClass::Procedural,
+            retrieval_profile: RetrievalProfileId::LexicalFirst,
+            ambiguity: false,
+            needs_multi_hop: false,
+            needs_high_evidence: true,
+            time_sensitive: false,
+            normalized_filters: Vec::new(),
+            reasons: vec!["procedural".to_string()],
+        };
+        context.set(keys::ROUTE_DECISION, &decision).await;
+
+        let result = runtime
+            .extract_results(&context, Uuid::new_v4(), AgentState::Completed, Vec::new())
+            .await;
+
+        assert_eq!(result.route_decision, Some(decision));
+    }
+
+    #[tokio::test]
+    async fn routed_spec_uses_baseline_answer_for_single_pass_queries() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: Vec::new(),
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-retrieved",
+                    "doc-1",
+                    0,
+                    "retrieved evidence",
+                )],
+                expanded_results: Vec::new(),
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline answer".to_string(),
+                    search_results: vec![test_chunk_with(
+                        "chunk-baseline",
+                        "doc-1",
+                        0,
+                        "baseline evidence",
+                    )],
+                    citations: vec!["doc-1".to_string()],
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("What is Rust?"))
+            .await
+            .expect("single-pass route should complete");
+
+        assert_eq!(result.state, AgentState::Completed);
+        assert_eq!(result.answer.as_deref(), Some("baseline answer"));
+        assert_eq!(
+            result.route_decision.as_ref().map(|d| d.selected_path),
+            Some(RoutePath::SinglePassRag)
+        );
+
+        let state = state.lock().expect("call state");
+        assert_eq!(state.baseline_queries, vec!["What is Rust?".to_string()]);
+        assert!(state.retrieval_calls.is_empty(), "single-pass route should not retrieve evidence");
+        assert!(state.compose_queries.is_empty(), "single-pass route should not compose");
+    }
+
+    #[tokio::test]
+    async fn routed_spec_uses_retrieval_and_composition_for_agentic_queries() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: vec![test_chunk_with("chunk-fts", "doc-1", 0, "fts evidence")],
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-hybrid",
+                    "doc-2",
+                    0,
+                    "hybrid evidence",
+                )],
+                expanded_results: Vec::new(),
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("How do I rotate API keys in the auth runbook?"))
+            .await
+            .expect("agentic route should complete");
+
+        assert_eq!(result.state, AgentState::Completed);
+        assert_eq!(
+            result.route_decision.as_ref().map(|d| d.selected_path),
+            Some(RoutePath::AgenticSearch)
+        );
+        assert_eq!(
+            result.route_decision.as_ref().map(|d| d.retrieval_profile),
+            Some(RetrievalProfileId::LexicalFirst)
+        );
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'How do I rotate API keys in the auth runbook?' from 2 chunks")
+        );
+
+        let state = state.lock().expect("call state");
+        assert!(state.baseline_queries.is_empty(), "agentic route should bypass baseline answer");
+        assert_eq!(state.retrieval_calls, vec!["fts", "hybrid"]);
+        assert_eq!(
+            state.compose_queries,
+            vec!["How do I rotate API keys in the auth runbook?".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_spec_deduplicates_overlapping_lexical_first_results() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: vec![test_chunk_with("chunk-shared", "doc-1", 0, "fts evidence")],
+                hybrid_results: vec![
+                    test_chunk_with("chunk-shared", "doc-1", 0, "hybrid duplicate"),
+                    test_chunk_with("chunk-unique", "doc-2", 0, "hybrid unique"),
+                ],
+                expanded_results: Vec::new(),
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("How do I rotate API keys in the auth runbook?"))
+            .await
+            .expect("agentic route should complete");
+
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'How do I rotate API keys in the auth runbook?' from 2 chunks")
+        );
+        assert_eq!(result.search_results.as_ref().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn routed_spec_expands_neighbors_for_broad_then_expand_queries() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: Vec::new(),
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-anchor",
+                    "doc-1",
+                    0,
+                    "anchor evidence",
+                )],
+                expanded_results: vec![test_chunk_with(
+                    "chunk-neighbor",
+                    "doc-1",
+                    1,
+                    "neighbor evidence",
+                )],
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("Compare Rust and Python tradeoffs for async services"))
+            .await
+            .expect("broad-then-expand route should complete");
+
+        assert_eq!(result.state, AgentState::Completed);
+        assert_eq!(
+            result.route_decision.as_ref().map(|d| d.retrieval_profile),
+            Some(RetrievalProfileId::BroadThenExpand)
+        );
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'Compare Rust and Python tradeoffs for async services' from 2 chunks")
+        );
+
+        let state = state.lock().expect("call state");
+        assert_eq!(state.retrieval_calls, vec!["hybrid", "expand"]);
+        assert_eq!(
+            state.expand_requests,
+            vec![("tenant-a".to_string(), "doc-1".to_string(), 0, 1, 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_spec_deduplicates_anchor_from_neighbor_expansion() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: Vec::new(),
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-anchor",
+                    "doc-1",
+                    0,
+                    "anchor evidence",
+                )],
+                expanded_results: vec![
+                    test_chunk_with("chunk-anchor", "doc-1", 0, "anchor duplicate"),
+                    test_chunk_with("chunk-neighbor", "doc-1", 1, "neighbor evidence"),
+                ],
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("Compare Rust and Python tradeoffs for async services"))
+            .await
+            .expect("broad-then-expand route should complete");
+
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'Compare Rust and Python tradeoffs for async services' from 2 chunks")
+        );
+        assert_eq!(result.search_results.as_ref().map(Vec::len), Some(2));
+    }
+
+    #[tokio::test]
+    async fn loads_agentic_search_v1_spec_file() {
+        let spec = AgentSpec::from_yaml_file(std::path::Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/agents/agentic_search_v1.yaml"
+        )))
+        .await
+        .expect("agentic_search_v1 spec should load");
+
+        assert_eq!(spec.agent_id, "agentic_search_v1");
+        assert_eq!(spec.graph.start_task, "route_query");
+        let required_tools: HashSet<_> = spec.required_tools.iter().cloned().collect();
+        let expected_tools: HashSet<_> = [
+            "retrieval.dense".to_string(),
+            "retrieval.sparse".to_string(),
+            "retrieval.hybrid".to_string(),
+            "retrieval.fts".to_string(),
+            "retrieval.expand_chunk_neighbors".to_string(),
+            "retrieval.fetch_document".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(required_tools, expected_tools);
+        assert!(spec.graph.tasks.iter().any(|task| task == "final_answer"));
+        assert_eq!(spec.graph.edges.len(), 5);
     }
 }

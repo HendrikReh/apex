@@ -38,7 +38,12 @@ async fn full_app() -> axum::Router {
     // SAFETY: same reasoning as above; this test process owns these env writes.
     unsafe { std::env::set_var("LLM_PROMPT_TEMPLATE_PATH", &template_path) };
 
-    let config = AppConfig::from_env().expect("test config");
+    let fixture_root = workspace_root()
+        .join("crates/rag-server/tests/fixtures")
+        .canonicalize()
+        .expect("fixture root");
+    let mut config = AppConfig::from_env().expect("test config");
+    config.ingest_allowed_roots = vec![fixture_root];
     let stores = Stores::new(&config).await.expect("test stores");
     let ingest = IngestService::new(stores.clone(), &config).expect("test ingest");
     let retrieval =
@@ -48,9 +53,14 @@ async fn full_app() -> axum::Router {
             .expect("test chat"),
     );
     let agents = Arc::new(
-        AgentManager::load_default(&config.agent_specs_dir, retrieval.clone(), chat.clone())
-            .await
-            .expect("agents"),
+        AgentManager::load_default(
+            &config.agent_specs_dir,
+            stores.clone(),
+            retrieval.clone(),
+            chat.clone(),
+        )
+        .await
+        .expect("agents"),
     );
     let tenant_header = config.tenant_header.parse().expect("tenant header");
     let auth =

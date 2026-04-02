@@ -447,12 +447,13 @@ pub struct DefaultToolRegistry;
 impl DefaultToolRegistry {
     /// Built-in tool names shipped with the agent runtime.
     const BUILT_IN: &[&str] = &[
-        "retrieval.search",
         "retrieval.dense",
         "retrieval.sparse",
+        "retrieval.hybrid",
         "retrieval.fts",
+        "retrieval.expand_chunk_neighbors",
+        "retrieval.fetch_document",
         "sql_allowlist",
-        "hybrid_search",
     ];
 }
 
@@ -1392,11 +1393,11 @@ graph:
   edges:
     - { from: a, to: b }
 required_tools:
-  - retrieval.search
-  - hybrid_search
+  - retrieval.dense
+  - retrieval.hybrid
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
-        assert_eq!(spec.required_tools, vec!["retrieval.search", "hybrid_search"]);
+        assert_eq!(spec.required_tools, vec!["retrieval.dense", "retrieval.hybrid"]);
     }
 
     #[test]
@@ -1464,11 +1465,23 @@ graph:
   edges:
     - { from: a, to: b }
 required_tools:
-  - retrieval.search
+  - retrieval.hybrid
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");
         let registry = DefaultToolRegistry;
         assert!(spec.validate_required_tools(&registry).is_ok());
+    }
+
+    #[test]
+    fn default_tool_registry_includes_agentic_search_tools() {
+        let tools = DefaultToolRegistry.known_tools();
+
+        assert!(tools.contains("retrieval.dense"));
+        assert!(tools.contains("retrieval.sparse"));
+        assert!(tools.contains("retrieval.hybrid"));
+        assert!(tools.contains("retrieval.fts"));
+        assert!(tools.contains("retrieval.expand_chunk_neighbors"));
+        assert!(tools.contains("retrieval.fetch_document"));
     }
 
     #[test]
@@ -1485,7 +1498,7 @@ graph:
   edges:
     - { from: a, to: b }
 required_tools:
-  - retrieval.search
+  - retrieval.hybrid
   - magic_wand
 "#;
         let spec = AgentSpec::from_yaml_str(yaml).expect("should parse");

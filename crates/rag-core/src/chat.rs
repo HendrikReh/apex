@@ -1,5 +1,7 @@
 //! Chat service orchestrating retrieval, context assembly, and LLM completion.
 
+use std::collections::HashMap;
+
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
@@ -61,6 +63,15 @@ pub struct ChatResponse {
     pub model: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct GroundedAnswer {
+    pub answer: String,
+    pub citations: Vec<Citation>,
+    pub evidence: Vec<FusedChunk>,
+    pub usage: TokenUsage,
+    pub model: String,
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -72,6 +83,25 @@ pub struct ChatService {
     prompt_renderer: PromptRenderer,
     stores: Stores,
     defaults: ChatDefaults,
+}
+
+fn build_summary_context(
+    context_builder: &ContextBuilder,
+    defaults: &ChatDefaults,
+    chunks: Vec<FusedChunk>,
+) -> String {
+    let context = context_builder.build(
+        chunks,
+        &ContextConfig {
+            max_tokens: defaults.context_max_tokens,
+            max_chunks: defaults.context_max_chunks,
+            // Agentic retrieval may intentionally expand multiple chunks from
+            // the same document, so preserve chunk-level evidence here.
+            dedupe_strategy: DedupeStrategy::ByChunkId,
+            include_citations: false,
+        },
+    );
+    render_context_chunks(&context.chunks)
 }
 
 impl ChatService {
@@ -132,7 +162,7 @@ impl ChatService {
             .get_messages(tenant, conversation_id, history_limit)
             .await
             .context("loading conversation history")?;
-        let mut messages: Vec<ChatMessage> = history_rows
+        let messages: Vec<ChatMessage> = history_rows
             .into_iter()
             .filter_map(|row| match row.role {
                 MessageRole::User => {
@@ -147,71 +177,41 @@ impl ChatService {
             })
             .collect();
 
-        // Step 3: Retrieve context.
-        let fused = self
-            .retrieval
-            .search_hybrid(&collection, &request.query, tenant, None)
-            .await
-            .context("hybrid retrieval")?;
-
-        // Step 4: Assemble context.
-        let context_config = ContextConfig {
-            max_tokens: self.defaults.context_max_tokens,
-            max_chunks: self.defaults.context_max_chunks,
-            dedupe_strategy: DedupeStrategy::ByDocId,
-            include_citations: true,
-        };
-        let context_result = self.context_builder.build(fused, &context_config);
-        let citations = context_result.citations.clone();
-
-        // Step 5: Render prompt.
-        let context_text = render_context_chunks(&context_result.chunks);
-        let language_instruction = request
-            .language
-            .as_deref()
-            .map(|lang| format!("Respond in {lang}."))
-            .unwrap_or_default();
-        let system_prompt = self
-            .prompt_renderer
-            .render_system_prompt(&PromptContext {
-                context: &context_text,
-                language_instruction: &language_instruction,
-            })
-            .context("rendering system prompt")?;
-
-        // Step 6: Call LLM.
-        messages.push(ChatMessage { role: ChatRole::User, content: request.query.clone() });
-        let llm_response = self
-            .backend
-            .complete(
-                &CompletionRequest {
-                    system: &system_prompt,
-                    messages: &messages,
-                    temperature: self.defaults.temperature,
-                    max_tokens: self.defaults.max_tokens,
-                    stop: vec![],
-                },
-                self.defaults.max_retries,
-                self.defaults.retry_backoff_ms,
+        let grounded = self
+            .answer_with_retrieval(
+                &request.query,
+                &collection,
+                tenant,
+                &messages,
+                request.language.as_deref(),
             )
-            .await
-            .context("LLM completion")?;
+            .await?;
 
         // Step 7: Persist user + assistant messages atomically (after LLM
         // success to avoid orphaned user messages on failure).
         self.stores
-            .insert_chat_turn(tenant, conversation_id, &request.query, &llm_response.text)
+            .insert_chat_turn(tenant, conversation_id, &request.query, &grounded.answer)
             .await
             .context("persisting chat turn")?;
 
         // Step 8: Return response.
         Ok(ChatResponse {
-            answer: llm_response.text,
+            answer: grounded.answer,
             conversation_id,
-            citations,
-            usage: llm_response.usage,
-            model: llm_response.model,
+            citations: grounded.citations,
+            usage: grounded.usage,
+            model: grounded.model,
         })
+    }
+
+    pub async fn answer_single_shot(
+        &self,
+        query: &str,
+        collection: &str,
+        tenant: &str,
+        language: Option<&str>,
+    ) -> Result<GroundedAnswer> {
+        self.answer_with_retrieval(query, collection, tenant, &[], language).await
     }
 
     /// Summarize a set of already-retrieved chunks for agent orchestration.
@@ -219,16 +219,7 @@ impl ChatService {
     /// This avoids re-running retrieval and reuses the configured LLM backend,
     /// including the mock backend used by integration tests.
     pub async fn summarize_chunks(&self, query: &str, chunks: Vec<FusedChunk>) -> Result<String> {
-        let context = self.context_builder.build(
-            chunks,
-            &ContextConfig {
-                max_tokens: self.defaults.context_max_tokens,
-                max_chunks: self.defaults.context_max_chunks,
-                dedupe_strategy: DedupeStrategy::ByDocId,
-                include_citations: false,
-            },
-        );
-        let context_text = render_context_chunks(&context.chunks);
+        let context_text = build_summary_context(&self.context_builder, &self.defaults, chunks);
         let system_prompt = format!(
             "You are an analyst summarizing retrieved context for an agent workflow.\n\
              Summarize only what is supported by the provided context.\n\
@@ -252,6 +243,74 @@ impl ChatService {
             .await
             .context("agent chunk summarization")?;
         Ok(response.text)
+    }
+
+    async fn answer_with_retrieval(
+        &self,
+        query: &str,
+        collection: &str,
+        tenant: &str,
+        messages: &[ChatMessage],
+        language: Option<&str>,
+    ) -> Result<GroundedAnswer> {
+        let fused = self
+            .retrieval
+            .search_hybrid(collection, query, tenant, None)
+            .await
+            .context("hybrid retrieval")?;
+
+        let context_config = ContextConfig {
+            max_tokens: self.defaults.context_max_tokens,
+            max_chunks: self.defaults.context_max_chunks,
+            dedupe_strategy: DedupeStrategy::ByDocId,
+            include_citations: true,
+        };
+        let context_result = self.context_builder.build(fused.clone(), &context_config);
+        let citations = context_result.citations.clone();
+        let fused_by_chunk_id: HashMap<String, FusedChunk> =
+            fused.into_iter().map(|chunk| (chunk.chunk_id.clone(), chunk)).collect();
+        let evidence = context_result
+            .chunks
+            .iter()
+            .filter_map(|chunk| fused_by_chunk_id.get(&chunk.chunk_id).cloned())
+            .collect();
+        let context_text = render_context_chunks(&context_result.chunks);
+        let language_instruction =
+            language.map(|lang| format!("Respond in {lang}.")).unwrap_or_default();
+        let system_prompt = self
+            .prompt_renderer
+            .render_system_prompt(&PromptContext {
+                context: &context_text,
+                language_instruction: &language_instruction,
+            })
+            .context("rendering system prompt")?;
+
+        let mut llm_messages = messages.to_vec();
+        llm_messages.push(ChatMessage { role: ChatRole::User, content: query.to_string() });
+
+        let llm_response = self
+            .backend
+            .complete(
+                &CompletionRequest {
+                    system: &system_prompt,
+                    messages: &llm_messages,
+                    temperature: self.defaults.temperature,
+                    max_tokens: self.defaults.max_tokens,
+                    stop: vec![],
+                },
+                self.defaults.max_retries,
+                self.defaults.retry_backoff_ms,
+            )
+            .await
+            .context("LLM completion")?;
+
+        Ok(GroundedAnswer {
+            answer: llm_response.text,
+            citations,
+            evidence,
+            usage: llm_response.usage,
+            model: llm_response.model,
+        })
     }
 
     /// Resolve or create conversation, returning (conversation_id, collection).
@@ -319,5 +378,59 @@ impl ChatService {
                 Ok((conv.id, collection))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn summary_defaults() -> ChatDefaults {
+        ChatDefaults {
+            temperature: 0.1,
+            max_tokens: 4096,
+            context_max_tokens: 8_000,
+            context_max_chunks: 50,
+            history_limit: 30,
+            max_retries: 3,
+            retry_backoff_ms: 500,
+        }
+    }
+
+    fn fused_chunk(id: &str, doc: &str, index: i32, score: f32, text: &str) -> FusedChunk {
+        FusedChunk {
+            chunk_id: id.to_string(),
+            document_id: doc.to_string(),
+            chunk_index: index,
+            text: text.to_string(),
+            title: Some(format!("title-{doc}")),
+            source_url: Some(format!("https://example.com/{doc}")),
+            source_domain: Some("example.com".to_string()),
+            language: Some("en".to_string()),
+            tags: vec!["test".to_string()],
+            section_heading: Some("Section".to_string()),
+            collection: Some("docs".to_string()),
+            fused_score: score,
+            score_type: "rrf_fused".to_string(),
+            sources: vec!["dense".to_string()],
+            source_scores: HashMap::from([("dense".to_string(), score)]),
+        }
+    }
+
+    #[test]
+    fn build_summary_context_keeps_same_document_neighbors() {
+        let context_text = build_summary_context(
+            &ContextBuilder::new(),
+            &summary_defaults(),
+            vec![
+                fused_chunk("chunk-1", "doc-1", 7, 0.9, "anchor chunk"),
+                fused_chunk("chunk-2", "doc-1", 8, 0.8, "neighbor chunk"),
+            ],
+        );
+
+        assert!(context_text.contains("anchor chunk"));
+        assert!(context_text.contains("neighbor chunk"));
     }
 }

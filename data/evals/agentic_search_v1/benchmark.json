@@ -1,0 +1,177 @@
+[
+  {
+    "id": "simple-rust",
+    "query": "What is Rust?",
+    "expected_route": "single_pass_rag",
+    "expected_query_class": "simple_fact",
+    "expected_evidence": ["rust-guide"]
+  },
+  {
+    "id": "simple-rust-safety",
+    "query": "What prevents data races in Rust?",
+    "expected_route": "single_pass_rag",
+    "expected_query_class": "simple_fact",
+    "expected_evidence": ["rust-guide"]
+  },
+  {
+    "id": "simple-rust-runtime",
+    "query": "What runtime is common for Rust services?",
+    "expected_route": "single_pass_rag",
+    "expected_query_class": "simple_fact",
+    "expected_evidence": ["rust-guide"]
+  },
+  {
+    "id": "simple-python-gil",
+    "query": "What limits true CPU-bound parallelism in Python?",
+    "expected_route": "single_pass_rag",
+    "expected_query_class": "simple_fact",
+    "expected_evidence": ["python-tradeoffs"]
+  },
+  {
+    "id": "simple-key-rotation",
+    "query": "What happens after traffic is verified on the new key?",
+    "expected_route": "single_pass_rag",
+    "expected_query_class": "simple_fact",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "procedural-api-key-runbook",
+    "query": "How do I rotate API keys in the auth runbook?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "procedural",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "procedural-api-key-steps",
+    "query": "What steps are in the API key rotation runbook?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "procedural",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "procedural-deploy-before-revoke",
+    "query": "How do I deploy the new key before revoking the old one?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "procedural",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "procedural-verify-traffic",
+    "query": "What runbook steps verify traffic on a replacement key?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "procedural",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "procedural-revoke-old-key",
+    "query": "How do I revoke the old key after verification?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "procedural",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "ambiguity-deployment",
+    "query": "Which deployment notes talk about rollback timing?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "ambiguity_disambiguation",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "ambiguity-rollback-difference",
+    "query": "What is the difference between deployment rollback windows and credential rotation cutovers?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "ambiguity_disambiguation",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "ambiguity-rollback-meaning",
+    "query": "Which notes should I read if rollback timing could mean different things?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "ambiguity_disambiguation",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "ambiguity-release-vs-cutover",
+    "query": "What is the difference between release rollback timing and cutover timing?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "ambiguity_disambiguation",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "ambiguity-explains-meaning",
+    "query": "Which document explains whether rollback timing is about releases or cutovers?",
+    "expected_route": "agentic_search",
+    "expected_query_class": "ambiguity_disambiguation",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "multi-hop-python-vs-rust",
+    "query": "Compare Rust and Python tradeoffs for async services",
+    "expected_route": "agentic_search",
+    "expected_query_class": "multi_hop_research",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "multi-hop-safety-vs-gil",
+    "query": "Compare Rust safety guarantees with Python GIL tradeoffs for services",
+    "expected_route": "agentic_search",
+    "expected_query_class": "multi_hop_research",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "multi-hop-tokio-vs-asyncio",
+    "query": "Compare Tokio and asyncio tradeoffs for service development",
+    "expected_route": "agentic_search",
+    "expected_query_class": "multi_hop_research",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "multi-hop-concurrency-vs-productivity",
+    "query": "Compare Rust concurrency guarantees versus Python productivity for async teams",
+    "expected_route": "agentic_search",
+    "expected_query_class": "multi_hop_research",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "multi-hop-ownership-vs-gil",
+    "query": "Compare ownership and borrowing with the GIL for service design",
+    "expected_route": "agentic_search",
+    "expected_query_class": "multi_hop_research",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "exploratory-rollback-docs",
+    "query": "Find documents about rollback timing for release incidents",
+    "expected_route": "agentic_search",
+    "expected_query_class": "exploratory_search",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "exploratory-async-docs",
+    "query": "Show me docs about Rust and Python async services",
+    "expected_route": "agentic_search",
+    "expected_query_class": "exploratory_search",
+    "expected_evidence": ["rust-guide", "python-tradeoffs"]
+  },
+  {
+    "id": "exploratory-key-rotation",
+    "query": "Search for documents about API key rotation verification",
+    "expected_route": "agentic_search",
+    "expected_query_class": "exploratory_search",
+    "expected_evidence": ["auth-runbook"]
+  },
+  {
+    "id": "exploratory-cutover-overview",
+    "query": "Give me an overview of docs about rollback cutover timing",
+    "expected_route": "agentic_search",
+    "expected_query_class": "exploratory_search",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  },
+  {
+    "id": "exploratory-release-incident-docs",
+    "query": "Find documents about rollback timing and release incidents",
+    "expected_route": "agentic_search",
+    "expected_query_class": "exploratory_search",
+    "expected_evidence": ["deployment-notes", "disambiguation-notes"]
+  }
+]

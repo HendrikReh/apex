@@ -640,18 +640,40 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
         );
     }
 
-    Ok(doc
-        .chunks
+    doc.chunks
         .iter()
         .enumerate()
-        .map(|(i, chunk)| {
+        .map(|(i, chunk)| -> Result<PointStruct> {
             let point_id = stable_chunk_uuid(tenant, &doc.document_id, i);
+            let title =
+                resolve_title(doc.sidecar.as_ref(), doc.native_metadata.as_ref()).to_string();
+            let source_url =
+                doc.sidecar.as_ref().map(|sidecar| sidecar.source.url.clone()).unwrap_or_default();
+            let source_domain = doc
+                .sidecar
+                .as_ref()
+                .map(|sidecar| sidecar.source.domain.clone())
+                .unwrap_or_default();
+            let language =
+                doc.sidecar.as_ref().map(|sidecar| sidecar.language.clone()).unwrap_or_default();
+            let section_heading = chunk.section.section_title.clone().unwrap_or_default();
+            let tags = serde_json::to_string(
+                &doc.sidecar.as_ref().map(|sidecar| sidecar.tags.clone()).unwrap_or_default(),
+            )
+            .context("serializing chunk tags for Qdrant payload")?;
 
             let payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> = [
                 ("tenant".to_string(), tenant.to_string().into()),
                 ("document_id".to_string(), doc.document_id.clone().into()),
                 ("chunk_index".to_string(), (i as i64).into()),
                 ("text".to_string(), chunk.text.clone().into()),
+                ("title".to_string(), title.into()),
+                ("source_url".to_string(), source_url.into()),
+                ("source_domain".to_string(), source_domain.into()),
+                ("language".to_string(), language.into()),
+                ("collection".to_string(), doc.collection.clone().into()),
+                ("section_heading".to_string(), section_heading.into()),
+                ("tags".to_string(), tags.into()),
             ]
             .into();
 
@@ -666,13 +688,13 @@ fn build_qdrant_points(tenant: &str, doc: &EmbeddedDocument) -> Result<Vec<Point
             named.insert(DENSE_VECTOR_NAME.to_string(), dense);
             named.insert(SPARSE_VECTOR_NAME.to_string(), sparse);
 
-            PointStruct {
+            Ok(PointStruct {
                 id: Some(point_id.to_string().into()),
                 payload,
                 vectors: Some(Vectors::from(NamedVectors { vectors: named })),
-            }
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>>>()
 }
 
 /// Resolve document title with precedence: sidecar > PDF native > empty.
