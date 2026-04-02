@@ -16,8 +16,54 @@ use agent_core::types::{
 
 struct MockRetrieval;
 
+fn test_chunk(
+    chunk_id: &str,
+    document_id: &str,
+    chunk_index: i32,
+    text: &str,
+    score: f32,
+) -> ScoredChunk {
+    ScoredChunk {
+        chunk_id: chunk_id.into(),
+        document_id: document_id.into(),
+        chunk_index,
+        text: text.into(),
+        title: None,
+        source_url: None,
+        source_domain: None,
+        language: None,
+        tags: Vec::new(),
+        section_heading: None,
+        collection: None,
+        score,
+        score_type: "test".into(),
+        sources: Vec::new(),
+        source_scores: std::collections::HashMap::new(),
+    }
+}
+
 #[async_trait::async_trait]
 impl RetrievalPort for MockRetrieval {
+    async fn search_dense(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
+    async fn search_sparse(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
     async fn search_hybrid(
         &self,
         _collection: &str,
@@ -25,22 +71,50 @@ impl RetrievalPort for MockRetrieval {
         _tenant: &str,
     ) -> anyhow::Result<Vec<ScoredChunk>> {
         Ok(vec![
-            ScoredChunk {
-                chunk_id: "chunk-1".into(),
-                document_id: "doc-1".into(),
-                chunk_index: 0,
-                text: "Retrieval-Augmented Generation combines retrieval with generation.".into(),
-                score: 0.95,
-            },
-            ScoredChunk {
-                chunk_id: "chunk-2".into(),
-                document_id: "doc-1".into(),
-                chunk_index: 1,
-                text: "RAG reduces hallucination by grounding answers in retrieved documents."
-                    .into(),
-                score: 0.87,
-            },
+            test_chunk(
+                "chunk-1",
+                "doc-1",
+                0,
+                "Retrieval-Augmented Generation combines retrieval with generation.",
+                0.95,
+            ),
+            test_chunk(
+                "chunk-2",
+                "doc-1",
+                1,
+                "RAG reduces hallucination by grounding answers in retrieved documents.",
+                0.87,
+            ),
         ])
+    }
+
+    async fn search_fts(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
+    async fn expand_chunk_neighbors(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+        _chunk_index: i32,
+        _before: i32,
+        _after: i32,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        Ok(Vec::new())
+    }
+
+    async fn fetch_document(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
+        Ok(serde_json::json!({}))
     }
 }
 
@@ -546,12 +620,61 @@ struct FailingRetrieval;
 
 #[async_trait::async_trait]
 impl RetrievalPort for FailingRetrieval {
+    async fn search_dense(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn search_sparse(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
     async fn search_hybrid(
         &self,
         _collection: &str,
         _query: &str,
         _tenant: &str,
     ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn search_fts(
+        &self,
+        _collection: &str,
+        _query: &str,
+        _tenant: &str,
+        _limit: u64,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn expand_chunk_neighbors(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+        _chunk_index: i32,
+        _before: i32,
+        _after: i32,
+    ) -> anyhow::Result<Vec<ScoredChunk>> {
+        anyhow::bail!("simulated retrieval failure")
+    }
+
+    async fn fetch_document(
+        &self,
+        _tenant: &str,
+        _document_id: &str,
+    ) -> anyhow::Result<serde_json::Value> {
         anyhow::bail!("simulated retrieval failure")
     }
 }
