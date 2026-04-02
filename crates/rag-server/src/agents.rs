@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use agent_core::ports::{ApprovalPort, BaselineAnswerPort, ChatPort, RetrievalPort};
 use agent_core::runtime::AgentRuntime;
@@ -18,6 +19,7 @@ pub struct AgentManager {
     registry: agent_core::AgentRegistry,
     runtimes: HashMap<String, Arc<dyn AgentRuntime>>,
     runs: Arc<DashMap<RunId, RunRecord>>,
+    run_registry_policy: RunRegistryPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,7 @@ pub struct RunRecord {
     pub query: String,
     pub collection: String,
     pub tenant: String,
+    inserted_at: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +46,17 @@ pub struct RunWithMetadata {
     pub record: RunRecord,
     pub result: AgentRunResult,
 }
+
+#[derive(Debug, Clone, Copy)]
+struct RunRegistryPolicy {
+    ttl: Duration,
+    max_entries: usize,
+}
+
+const DEFAULT_RUN_REGISTRY_TTL_SECS: u64 = 60 * 60 * 24;
+const DEFAULT_RUN_REGISTRY_MAX_ENTRIES: usize = 10_000;
+const RUN_REGISTRY_TTL_ENV: &str = "AGENT_RUN_REGISTRY_TTL_SECS";
+const RUN_REGISTRY_MAX_ENTRIES_ENV: &str = "AGENT_RUN_REGISTRY_MAX_ENTRIES";
 
 impl AgentManager {
     pub async fn load_default(
@@ -75,7 +89,12 @@ impl AgentManager {
             runtimes.insert(agent_id.clone(), runtime);
         }
 
-        Ok(Self { registry, runtimes, runs: Arc::new(DashMap::new()) })
+        Ok(Self {
+            registry,
+            runtimes,
+            runs: Arc::new(DashMap::new()),
+            run_registry_policy: load_run_registry_policy()?,
+        })
     }
 
     pub fn list_agents(&self) -> Vec<AgentDescriptor> {
@@ -96,6 +115,7 @@ impl AgentManager {
         tenant: String,
         max_steps: usize,
     ) -> Result<AgentRunResult> {
+        self.prune_run_registry();
         let runtime = self
             .runtimes
             .get(agent_id)
@@ -118,12 +138,21 @@ impl AgentManager {
                 query,
                 collection,
                 tenant,
+                inserted_at: Instant::now(),
             },
         );
+        self.prune_run_registry();
         Ok(result)
     }
 
     pub async fn inspect(&self, run_id: RunId) -> Result<Option<RunWithMetadata>> {
+        self.inspect_inner(run_id, true).await
+    }
+
+    async fn inspect_inner(&self, run_id: RunId, prune: bool) -> Result<Option<RunWithMetadata>> {
+        if prune {
+            self.prune_run_registry();
+        }
         let record = match self.runs.get(&run_id) {
             Some(record) => record.clone(),
             None => return Ok(None),
@@ -154,6 +183,7 @@ impl AgentManager {
         tenant: &str,
         agent_id: Option<&str>,
     ) -> Result<Vec<RunWithMetadata>> {
+        self.prune_run_registry();
         let records: Vec<RunRecord> = self
             .runs
             .iter()
@@ -171,7 +201,7 @@ impl AgentManager {
 
         let mut runs = Vec::new();
         for record in records {
-            if let Some(run) = self.inspect(record.run_id).await? {
+            if let Some(run) = self.inspect_inner(record.run_id, false).await? {
                 runs.push(run);
             }
         }
@@ -186,6 +216,7 @@ impl AgentManager {
         approved: bool,
         reason: Option<String>,
     ) -> Result<AgentRunResult> {
+        self.prune_run_registry();
         let record = self
             .runs
             .get(&run_id)
@@ -201,6 +232,80 @@ impl AgentManager {
             .ok_or_else(|| anyhow!("runtime for agent '{}' is unavailable", record.agent_id))?;
         runtime.resume(run_id, CheckpointDecision { approved, reason }).await
     }
+
+    fn prune_run_registry(&self) {
+        let now = Instant::now();
+        let expired = prune_expired_runs(&self.runs, now, self.run_registry_policy.ttl);
+        let overflow = prune_to_max_entries(&self.runs, self.run_registry_policy.max_entries);
+        if expired > 0 || overflow > 0 {
+            tracing::debug!(
+                expired,
+                overflow,
+                max_entries = self.run_registry_policy.max_entries,
+                ttl_secs = self.run_registry_policy.ttl.as_secs(),
+                remaining = self.runs.len(),
+                "pruned in-memory agent run registry"
+            );
+        }
+    }
+}
+
+fn load_run_registry_policy() -> Result<RunRegistryPolicy> {
+    fn parse_env<T>(name: &str) -> Result<Option<T>>
+    where
+        T: std::str::FromStr,
+        <T as std::str::FromStr>::Err: std::error::Error + Send + Sync + 'static,
+    {
+        std::env::var(name)
+            .ok()
+            .map(|raw| raw.parse::<T>().with_context(|| format!("parsing {name}")))
+            .transpose()
+    }
+
+    let ttl_secs: u64 = parse_env(RUN_REGISTRY_TTL_ENV)?.unwrap_or(DEFAULT_RUN_REGISTRY_TTL_SECS);
+    if ttl_secs == 0 {
+        anyhow::bail!("{RUN_REGISTRY_TTL_ENV} must be greater than zero");
+    }
+
+    let max_entries: usize =
+        parse_env(RUN_REGISTRY_MAX_ENTRIES_ENV)?.unwrap_or(DEFAULT_RUN_REGISTRY_MAX_ENTRIES);
+    if max_entries == 0 {
+        anyhow::bail!("{RUN_REGISTRY_MAX_ENTRIES_ENV} must be greater than zero");
+    }
+
+    Ok(RunRegistryPolicy { ttl: Duration::from_secs(ttl_secs), max_entries })
+}
+
+fn prune_expired_runs(runs: &DashMap<RunId, RunRecord>, now: Instant, ttl: Duration) -> usize {
+    let stale_run_ids: Vec<RunId> = runs
+        .iter()
+        .filter_map(|entry| {
+            let age = now.saturating_duration_since(entry.value().inserted_at);
+            if age >= ttl { Some(*entry.key()) } else { None }
+        })
+        .collect();
+    let removed = stale_run_ids.len();
+    for run_id in stale_run_ids {
+        runs.remove(&run_id);
+    }
+    removed
+}
+
+fn prune_to_max_entries(runs: &DashMap<RunId, RunRecord>, max_entries: usize) -> usize {
+    let current_len = runs.len();
+    if current_len <= max_entries {
+        return 0;
+    }
+
+    let overflow = current_len - max_entries;
+    let mut records_by_age: Vec<(RunId, Instant)> =
+        runs.iter().map(|entry| (*entry.key(), entry.value().inserted_at)).collect();
+    records_by_age.sort_by_key(|(_, inserted_at)| *inserted_at);
+
+    for (run_id, _) in records_by_age.into_iter().take(overflow) {
+        runs.remove(&run_id);
+    }
+    overflow
 }
 
 fn describe_agent(spec: &AgentSpec) -> AgentDescriptor {
@@ -433,8 +538,21 @@ impl ApprovalPort for PauseForApproval {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::{Duration, Instant};
 
     use super::*;
+    use uuid::Uuid;
+
+    fn sample_record(run_id: RunId, inserted_at: Instant) -> RunRecord {
+        RunRecord {
+            run_id,
+            agent_id: "rag_spike".to_string(),
+            query: "test query".to_string(),
+            collection: "test-collection".to_string(),
+            tenant: "test-tenant".to_string(),
+            inserted_at,
+        }
+    }
 
     #[test]
     fn map_scored_chunk_for_summary_preserves_metadata_and_provenance() {
@@ -473,5 +591,43 @@ mod tests {
         assert_eq!(fused.score_type, chunk.score_type);
         assert_eq!(fused.sources, chunk.sources);
         assert_eq!(fused.source_scores, chunk.source_scores);
+    }
+
+    #[test]
+    fn prune_expired_runs_removes_entries_older_than_ttl() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let stale_run = Uuid::new_v4();
+        let fresh_run = Uuid::new_v4();
+        let ttl = Duration::from_secs(30);
+
+        runs.insert(stale_run, sample_record(stale_run, now - Duration::from_secs(120)));
+        runs.insert(fresh_run, sample_record(fresh_run, now - Duration::from_secs(5)));
+
+        let removed = prune_expired_runs(&runs, now, ttl);
+
+        assert_eq!(removed, 1);
+        assert!(!runs.contains_key(&stale_run));
+        assert!(runs.contains_key(&fresh_run));
+    }
+
+    #[test]
+    fn prune_to_max_entries_keeps_newest_runs() {
+        let runs = DashMap::new();
+        let now = Instant::now();
+        let oldest = Uuid::new_v4();
+        let middle = Uuid::new_v4();
+        let newest = Uuid::new_v4();
+
+        runs.insert(oldest, sample_record(oldest, now - Duration::from_secs(30)));
+        runs.insert(middle, sample_record(middle, now - Duration::from_secs(20)));
+        runs.insert(newest, sample_record(newest, now - Duration::from_secs(10)));
+
+        let removed = prune_to_max_entries(&runs, 2);
+
+        assert_eq!(removed, 1);
+        assert!(!runs.contains_key(&oldest));
+        assert!(runs.contains_key(&middle));
+        assert!(runs.contains_key(&newest));
     }
 }
