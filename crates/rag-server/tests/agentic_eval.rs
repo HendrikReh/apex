@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -23,6 +24,34 @@ fn unique_suffix() -> String {
     Uuid::new_v4().to_string()[..8].to_string()
 }
 
+fn unique_chat_document_ids(body: &serde_json::Value) -> BTreeSet<String> {
+    body["citations"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item["document_id"].as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn unique_agent_document_ids(body: &serde_json::Value) -> BTreeSet<String> {
+    body["search_results"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item["document_id"].as_str().map(ToOwned::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn count_expected_hits(expected: &[String], seen: &BTreeSet<String>) -> usize {
+    expected.iter().filter(|doc| seen.contains(doc.as_str())).count()
+}
+
 #[tokio::test]
 #[ignore] // requires `just up`
 async fn benchmark_routes_and_evidence_are_scored() {
@@ -42,6 +71,11 @@ async fn benchmark_routes_and_evidence_are_scored() {
     let benchmark: Vec<BenchmarkCase> =
         serde_json::from_str(&fs::read_to_string(benchmark_path).expect("benchmark json"))
             .expect("parse benchmark");
+    assert!(
+        benchmark.len() >= 25,
+        "benchmark should include at least 25 queries, found {}",
+        benchmark.len()
+    );
 
     let ingest = client
         .post(format!("{}/ingest", server.base_url()))
@@ -55,12 +89,11 @@ async fn benchmark_routes_and_evidence_are_scored() {
         .expect("ingest");
     assert_eq!(ingest.status(), StatusCode::OK);
 
-    let mut route_hits = 0usize;
-    let mut evidence_hits = 0usize;
+    let mut simple_case_count = 0usize;
+    let mut agentic_case_count = 0usize;
+    let mut agentic_breadth_wins = 0usize;
 
     for case in &benchmark {
-        let _ = (&case.id, &case.expected_query_class);
-
         let baseline = client
             .post(format!("{}/chat", server.base_url()))
             .header("x-tenant", &tenant)
@@ -72,6 +105,7 @@ async fn benchmark_routes_and_evidence_are_scored() {
             .await
             .expect("baseline");
         assert_eq!(baseline.status(), StatusCode::OK);
+        let baseline_body: serde_json::Value = baseline.json().await.expect("baseline json");
 
         let routed = client
             .post(format!("{}/agents/agentic_search_v1/execute", server.base_url()))
@@ -84,27 +118,103 @@ async fn benchmark_routes_and_evidence_are_scored() {
             .await
             .expect("routed");
         assert_eq!(routed.status(), StatusCode::OK);
-        let body: serde_json::Value = routed.json().await.expect("routed json");
+        let routed_body: serde_json::Value = routed.json().await.expect("routed json");
 
-        if body["route_decision"]["selected_path"].as_str() == Some(case.expected_route.as_str()) {
-            route_hits += 1;
-        }
+        assert_eq!(
+            routed_body["route_decision"]["selected_path"].as_str(),
+            Some(case.expected_route.as_str()),
+            "route mismatch for benchmark case {}",
+            case.id
+        );
+        assert_eq!(
+            routed_body["route_decision"]["query_class"].as_str(),
+            Some(case.expected_query_class.as_str()),
+            "query_class mismatch for benchmark case {}",
+            case.id
+        );
 
-        let docs: Vec<String> = body["search_results"]
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item["document_id"].as_str().map(|doc| doc.to_owned()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let rerun = client
+            .post(format!("{}/agents/agentic_search_v1/execute", server.base_url()))
+            .header("x-tenant", &tenant)
+            .json(&serde_json::json!({
+                "query": &case.query,
+                "collection": &collection
+            }))
+            .send()
+            .await
+            .expect("routed rerun");
+        assert_eq!(rerun.status(), StatusCode::OK);
+        let rerun_body: serde_json::Value = rerun.json().await.expect("routed rerun json");
 
-        if case.expected_evidence.iter().all(|doc| docs.iter().any(|seen| seen == doc)) {
-            evidence_hits += 1;
+        assert_eq!(
+            rerun_body["route_decision"]["selected_path"],
+            routed_body["route_decision"]["selected_path"],
+            "route changed between repeated runs for benchmark case {}",
+            case.id
+        );
+        assert_eq!(
+            rerun_body["route_decision"]["query_class"],
+            routed_body["route_decision"]["query_class"],
+            "query_class changed between repeated runs for benchmark case {}",
+            case.id
+        );
+        assert_eq!(
+            rerun_body["route_decision"]["retrieval_profile"],
+            routed_body["route_decision"]["retrieval_profile"],
+            "retrieval_profile changed between repeated runs for benchmark case {}",
+            case.id
+        );
+
+        let baseline_docs = unique_chat_document_ids(&baseline_body);
+        let routed_docs = unique_agent_document_ids(&routed_body);
+        let routed_hits = count_expected_hits(&case.expected_evidence, &routed_docs);
+        let baseline_hits = count_expected_hits(&case.expected_evidence, &baseline_docs);
+        let baseline_citation_count =
+            baseline_body["citations"].as_array().map(|items| items.len()).unwrap_or_default();
+        let routed_result_count =
+            routed_body["search_results"].as_array().map(|items| items.len()).unwrap_or_default();
+
+        assert_eq!(
+            routed_hits,
+            case.expected_evidence.len(),
+            "routed evidence missed expected documents for benchmark case {}",
+            case.id
+        );
+
+        if case.expected_route == "single_pass_rag" {
+            simple_case_count += 1;
+            assert_eq!(
+                baseline_body["answer"], routed_body["answer"],
+                "simple-query answer drift for benchmark case {}",
+                case.id
+            );
+            assert_eq!(
+                baseline_docs, routed_docs,
+                "simple-query evidence drift for benchmark case {}",
+                case.id
+            );
+            assert_eq!(
+                baseline_hits, routed_hits,
+                "simple-query evidence recall regressed for benchmark case {}",
+                case.id
+            );
+        } else {
+            agentic_case_count += 1;
+            assert!(
+                routed_hits >= baseline_hits,
+                "agentic routed path recovered less evidence than baseline /chat for benchmark case {}",
+                case.id
+            );
+            if routed_result_count > baseline_citation_count {
+                agentic_breadth_wins += 1;
+            }
         }
     }
 
-    assert!(route_hits >= benchmark.len().saturating_sub(1), "route accuracy too low");
-    assert!(evidence_hits >= 2, "evidence recall too low");
+    assert!(simple_case_count > 0, "benchmark must include simple baseline cases");
+    assert!(agentic_case_count > 0, "benchmark must include agentic cases");
+    assert!(
+        agentic_breadth_wins * 2 >= agentic_case_count,
+        "agentic routed path should expose a broader evidence surface than baseline /chat for most agentic benchmark cases"
+    );
 }

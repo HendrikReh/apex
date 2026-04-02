@@ -8,6 +8,12 @@ pub fn route_query(query: &str) -> RouteDecision {
     let has_how_to =
         lower.contains("how do i") || lower.contains("runbook") || lower.contains("steps");
     let has_ambiguity = lower.contains("which ") || lower.contains("difference between");
+    let has_exploratory = lower.contains("find ")
+        || lower.contains("show me")
+        || lower.contains("search for")
+        || lower.contains("overview of")
+        || lower.contains("documents about")
+        || lower.contains("docs about");
     let has_time = lower.contains("today") || lower.contains("latest") || lower.contains("current");
 
     let (selected_path, query_class, retrieval_profile, needs_multi_hop) = if has_compare {
@@ -26,9 +32,36 @@ pub fn route_query(query: &str) -> RouteDecision {
             RetrievalProfileId::LexicalFirst,
             false,
         )
+    } else if has_exploratory {
+        (
+            RoutePath::AgenticSearch,
+            QueryClass::ExploratorySearch,
+            RetrievalProfileId::BroadThenExpand,
+            false,
+        )
     } else {
         (RoutePath::SinglePassRag, QueryClass::SimpleFact, RetrievalProfileId::SimpleHybrid, false)
     };
+
+    let mut reasons = Vec::new();
+    if has_compare {
+        reasons.push("compare".to_string());
+    }
+    if has_how_to {
+        reasons.push("procedural".to_string());
+    }
+    if has_ambiguity {
+        reasons.push("ambiguity".to_string());
+    }
+    if has_exploratory {
+        reasons.push("exploratory".to_string());
+    }
+    if reasons.is_empty() {
+        reasons.push("default".to_string());
+    }
+    if has_time {
+        reasons.push("time_sensitive".to_string());
+    }
 
     RouteDecision {
         selected_path,
@@ -36,13 +69,10 @@ pub fn route_query(query: &str) -> RouteDecision {
         retrieval_profile,
         ambiguity: has_ambiguity,
         needs_multi_hop,
-        needs_high_evidence: has_compare || has_how_to,
+        needs_high_evidence: has_compare || has_how_to || has_exploratory,
         time_sensitive: has_time,
         normalized_filters: Vec::new(),
-        reasons: vec![
-            if has_compare { "compare".to_string() } else { "default".to_string() },
-            if has_how_to { "procedural".to_string() } else { "non_procedural".to_string() },
-        ],
+        reasons,
     }
 }
 
@@ -73,5 +103,13 @@ mod tests {
         assert_eq!(decision.selected_path, RoutePath::AgenticSearch);
         assert_eq!(decision.query_class, QueryClass::Procedural);
         assert_eq!(decision.retrieval_profile, RetrievalProfileId::LexicalFirst);
+    }
+
+    #[test]
+    fn exploratory_query_routes_to_agentic_search() {
+        let decision = route_query("Find documents about rollback timing for release incidents");
+        assert_eq!(decision.selected_path, RoutePath::AgenticSearch);
+        assert_eq!(decision.query_class, QueryClass::ExploratorySearch);
+        assert_eq!(decision.retrieval_profile, RetrievalProfileId::BroadThenExpand);
     }
 }
