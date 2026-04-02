@@ -85,6 +85,25 @@ pub struct ChatService {
     defaults: ChatDefaults,
 }
 
+fn build_summary_context(
+    context_builder: &ContextBuilder,
+    defaults: &ChatDefaults,
+    chunks: Vec<FusedChunk>,
+) -> String {
+    let context = context_builder.build(
+        chunks,
+        &ContextConfig {
+            max_tokens: defaults.context_max_tokens,
+            max_chunks: defaults.context_max_chunks,
+            // Agentic retrieval may intentionally expand multiple chunks from
+            // the same document, so preserve chunk-level evidence here.
+            dedupe_strategy: DedupeStrategy::ByChunkId,
+            include_citations: false,
+        },
+    );
+    render_context_chunks(&context.chunks)
+}
+
 impl ChatService {
     /// Construct a ChatService from config and a shared Stores handle.
     ///
@@ -200,16 +219,7 @@ impl ChatService {
     /// This avoids re-running retrieval and reuses the configured LLM backend,
     /// including the mock backend used by integration tests.
     pub async fn summarize_chunks(&self, query: &str, chunks: Vec<FusedChunk>) -> Result<String> {
-        let context = self.context_builder.build(
-            chunks,
-            &ContextConfig {
-                max_tokens: self.defaults.context_max_tokens,
-                max_chunks: self.defaults.context_max_chunks,
-                dedupe_strategy: DedupeStrategy::ByDocId,
-                include_citations: false,
-            },
-        );
-        let context_text = render_context_chunks(&context.chunks);
+        let context_text = build_summary_context(&self.context_builder, &self.defaults, chunks);
         let system_prompt = format!(
             "You are an analyst summarizing retrieved context for an agent workflow.\n\
              Summarize only what is supported by the provided context.\n\
@@ -368,5 +378,59 @@ impl ChatService {
                 Ok((conv.id, collection))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    fn summary_defaults() -> ChatDefaults {
+        ChatDefaults {
+            temperature: 0.1,
+            max_tokens: 4096,
+            context_max_tokens: 8_000,
+            context_max_chunks: 50,
+            history_limit: 30,
+            max_retries: 3,
+            retry_backoff_ms: 500,
+        }
+    }
+
+    fn fused_chunk(id: &str, doc: &str, index: i32, score: f32, text: &str) -> FusedChunk {
+        FusedChunk {
+            chunk_id: id.to_string(),
+            document_id: doc.to_string(),
+            chunk_index: index,
+            text: text.to_string(),
+            title: Some(format!("title-{doc}")),
+            source_url: Some(format!("https://example.com/{doc}")),
+            source_domain: Some("example.com".to_string()),
+            language: Some("en".to_string()),
+            tags: vec!["test".to_string()],
+            section_heading: Some("Section".to_string()),
+            collection: Some("docs".to_string()),
+            fused_score: score,
+            score_type: "rrf_fused".to_string(),
+            sources: vec!["dense".to_string()],
+            source_scores: HashMap::from([("dense".to_string(), score)]),
+        }
+    }
+
+    #[test]
+    fn build_summary_context_keeps_same_document_neighbors() {
+        let context_text = build_summary_context(
+            &ContextBuilder::new(),
+            &summary_defaults(),
+            vec![
+                fused_chunk("chunk-1", "doc-1", 7, 0.9, "anchor chunk"),
+                fused_chunk("chunk-2", "doc-1", 8, 0.8, "neighbor chunk"),
+            ],
+        );
+
+        assert!(context_text.contains("anchor chunk"));
+        assert!(context_text.contains("neighbor chunk"));
     }
 }
