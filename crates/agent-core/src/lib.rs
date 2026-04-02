@@ -12,15 +12,17 @@
 //! - [`ports`] — Adapter traits (`RetrievalPort`, `ChatPort`, `ApprovalPort`)
 //! - [`types`] — Domain value types (`AgentState`, query/result structs)
 //! - [`classify`] — Deterministic query classification heuristics
+//! - [`route`] — Deterministic routed-search heuristics
 //! - [`runtime`] — `AgentRuntime` trait and the graph-flow-backed implementation
 
 pub mod classify;
 pub mod ports;
+pub mod route;
 pub mod runtime;
 pub mod spec;
 pub mod types;
 
-pub use ports::{ApprovalPort, ChatPort, RetrievalPort};
+pub use ports::{ApprovalPort, BaselineAnswerPort, ChatPort, RetrievalPort};
 pub use runtime::AgentRuntime;
 pub use spec::{
     AgentContextProfile, AgentDedupeMode, AgentGuardrailsProfile, AgentPolicies,
@@ -28,4 +30,4 @@ pub use spec::{
     AgentRetrievalMode, AgentRetrievalProfile, AgentRetrievalStep, AgentSpec, AgentToolFilters,
     DefaultToolRegistry, GuardrailActionMode, ToolRegistry, substitute_placeholders,
 };
-pub use types::{AgentRunResult, AgentState, QueryType};
+pub use types::{AgentRunResult, AgentState, QueryType, RouteDecision, RoutePath};

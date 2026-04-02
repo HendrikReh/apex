@@ -2,6 +2,8 @@
 //!
 //! These types are owned by agent-core and never leak graph-flow internals.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -18,6 +20,44 @@ pub enum QueryType {
     Mixed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutePath {
+    SinglePassRag,
+    AgenticSearch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryClass {
+    SimpleFact,
+    AmbiguityDisambiguation,
+    ExploratorySearch,
+    Procedural,
+    MultiHopResearch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalProfileId {
+    SimpleHybrid,
+    LexicalFirst,
+    BroadThenExpand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RouteDecision {
+    pub selected_path: RoutePath,
+    pub query_class: QueryClass,
+    pub retrieval_profile: RetrievalProfileId,
+    pub ambiguity: bool,
+    pub needs_multi_hop: bool,
+    pub needs_high_evidence: bool,
+    pub time_sensitive: bool,
+    pub normalized_filters: Vec<String>,
+    pub reasons: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Search results (port output)
 // ---------------------------------------------------------------------------
@@ -29,7 +69,25 @@ pub struct ScoredChunk {
     pub document_id: String,
     pub chunk_index: i32,
     pub text: String,
+    pub title: Option<String>,
+    pub source_url: Option<String>,
+    pub source_domain: Option<String>,
+    pub language: Option<String>,
+    pub tags: Vec<String>,
+    pub section_heading: Option<String>,
+    pub collection: Option<String>,
     pub score: f32,
+    pub score_type: String,
+    pub sources: Vec<String>,
+    pub source_scores: HashMap<String, f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroundedAnswer {
+    pub answer: String,
+    pub search_results: Vec<ScoredChunk>,
+    pub citations: Vec<String>,
+    pub model: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +157,8 @@ pub struct AgentRunResult {
     pub search_results: Option<Vec<ScoredChunk>>,
     /// Query classification result.
     pub query_type: Option<QueryType>,
+    /// Route decision for routed-search agents.
+    pub route_decision: Option<RouteDecision>,
     /// Pending checkpoint info when state is `AwaitingApproval`.
     pub pending_checkpoint: Option<PendingCheckpoint>,
     /// Timeline of executed steps.

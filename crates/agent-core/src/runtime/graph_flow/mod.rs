@@ -347,6 +347,7 @@ impl GraphFlowRuntime {
             summary,
             search_results,
             query_type,
+            route_decision: None,
             pending_checkpoint,
             steps,
         }
