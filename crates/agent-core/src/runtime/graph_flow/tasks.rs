@@ -138,18 +138,62 @@ impl Task for RetrieveEvidenceTask {
 
         let results = match decision.retrieval_profile {
             RetrievalProfileId::SimpleHybrid => {
-                self.retrieval.search_hybrid(&collection, &query, &tenant).await
+                self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(|e| {
+                    graph_flow::GraphError::TaskExecutionFailed(format!(
+                        "retrieve evidence failed: {e}"
+                    ))
+                })
             }
             RetrievalProfileId::LexicalFirst => {
-                self.retrieval.search_fts(&collection, &query, &tenant, 8).await
+                let mut lexical =
+                    self.retrieval.search_fts(&collection, &query, &tenant, 10).await.map_err(
+                        |e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        },
+                    )?;
+                let hybrid =
+                    self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(
+                        |e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        },
+                    )?;
+                lexical.extend(hybrid);
+                Ok(lexical)
             }
             RetrievalProfileId::BroadThenExpand => {
-                self.retrieval.search_dense(&collection, &query, &tenant, 8).await
+                let mut hybrid =
+                    self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(
+                        |e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        },
+                    )?;
+                if let Some(anchor) = hybrid.first() {
+                    let neighbors = self
+                        .retrieval
+                        .expand_chunk_neighbors(
+                            &tenant,
+                            &anchor.document_id,
+                            anchor.chunk_index,
+                            1,
+                            1,
+                        )
+                        .await
+                        .map_err(|e| {
+                            graph_flow::GraphError::TaskExecutionFailed(format!(
+                                "retrieve evidence failed: {e}"
+                            ))
+                        })?;
+                    hybrid.extend(neighbors);
+                }
+                Ok(hybrid)
             }
-        }
-        .map_err(|e| {
-            graph_flow::GraphError::TaskExecutionFailed(format!("retrieve evidence failed: {e}"))
-        })?;
+        }?;
 
         info!(
             retrieval_profile = ?decision.retrieval_profile,

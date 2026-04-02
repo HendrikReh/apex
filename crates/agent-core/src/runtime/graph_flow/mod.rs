@@ -83,15 +83,6 @@ impl GraphFlowRuntime {
         retrieval: Arc<dyn RetrievalPort>,
         chat: Arc<dyn ChatPort>,
         approval: Arc<dyn ApprovalPort>,
-    ) -> Self {
-        Self::new_with_baseline(retrieval, chat, approval, Arc::new(UnavailableBaselineAnswerPort))
-    }
-
-    /// Create a runtime with the hardcoded spike graph and a baseline-answer port.
-    pub fn new_with_baseline(
-        retrieval: Arc<dyn RetrievalPort>,
-        chat: Arc<dyn ChatPort>,
-        approval: Arc<dyn ApprovalPort>,
         baseline: Arc<dyn BaselineAnswerPort>,
     ) -> Self {
         Self {
@@ -105,24 +96,17 @@ impl GraphFlowRuntime {
         }
     }
 
-    /// Create a runtime driven by a YAML agent spec.
-    pub fn from_spec(
-        spec: AgentSpec,
+    /// Create a runtime with the hardcoded spike graph and no baseline-answer port.
+    pub fn new_without_baseline(
         retrieval: Arc<dyn RetrievalPort>,
         chat: Arc<dyn ChatPort>,
         approval: Arc<dyn ApprovalPort>,
     ) -> Self {
-        Self::from_spec_with_baseline(
-            spec,
-            retrieval,
-            chat,
-            approval,
-            Arc::new(UnavailableBaselineAnswerPort),
-        )
+        Self::new(retrieval, chat, approval, Arc::new(UnavailableBaselineAnswerPort))
     }
 
-    /// Create a runtime driven by a YAML agent spec and a baseline-answer port.
-    pub fn from_spec_with_baseline(
+    /// Create a runtime driven by a YAML agent spec.
+    pub fn from_spec(
         spec: AgentSpec,
         retrieval: Arc<dyn RetrievalPort>,
         chat: Arc<dyn ChatPort>,
@@ -138,6 +122,16 @@ impl GraphFlowRuntime {
             sessions: Arc::new(InMemorySessionStorage::new()),
             meta: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Create a runtime driven by a YAML agent spec and no baseline-answer port.
+    pub fn from_spec_without_baseline(
+        spec: AgentSpec,
+        retrieval: Arc<dyn RetrievalPort>,
+        chat: Arc<dyn ChatPort>,
+        approval: Arc<dyn ApprovalPort>,
+    ) -> Self {
+        Self::from_spec(spec, retrieval, chat, approval, Arc::new(UnavailableBaselineAnswerPort))
     }
 
     /// Map a task ID from a spec to its concrete [`graph_flow::Task`] implementation.
@@ -543,6 +537,7 @@ impl super::AgentRuntime for GraphFlowRuntime {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -563,11 +558,15 @@ mod tests {
         baseline_queries: Vec<String>,
         retrieval_calls: Vec<&'static str>,
         compose_queries: Vec<String>,
+        expand_requests: Vec<(String, String, i32, i32, i32)>,
     }
 
     struct TrackingRetrieval {
         state: Arc<Mutex<RoutedCallState>>,
-        results: Vec<ScoredChunk>,
+        dense_results: Vec<ScoredChunk>,
+        fts_results: Vec<ScoredChunk>,
+        hybrid_results: Vec<ScoredChunk>,
+        expanded_results: Vec<ScoredChunk>,
     }
 
     struct TrackingChat {
@@ -663,7 +662,7 @@ mod tests {
             _: u64,
         ) -> anyhow::Result<Vec<ScoredChunk>> {
             self.state.lock().expect("retrieval state").retrieval_calls.push("dense");
-            Ok(self.results.clone())
+            Ok(self.dense_results.clone())
         }
 
         async fn search_sparse(
@@ -674,7 +673,7 @@ mod tests {
             _: u64,
         ) -> anyhow::Result<Vec<ScoredChunk>> {
             self.state.lock().expect("retrieval state").retrieval_calls.push("sparse");
-            Ok(self.results.clone())
+            Ok(self.dense_results.clone())
         }
 
         async fn search_hybrid(
@@ -684,7 +683,7 @@ mod tests {
             _: &str,
         ) -> anyhow::Result<Vec<ScoredChunk>> {
             self.state.lock().expect("retrieval state").retrieval_calls.push("hybrid");
-            Ok(self.results.clone())
+            Ok(self.hybrid_results.clone())
         }
 
         async fn search_fts(
@@ -695,18 +694,27 @@ mod tests {
             _: u64,
         ) -> anyhow::Result<Vec<ScoredChunk>> {
             self.state.lock().expect("retrieval state").retrieval_calls.push("fts");
-            Ok(self.results.clone())
+            Ok(self.fts_results.clone())
         }
 
         async fn expand_chunk_neighbors(
             &self,
-            _: &str,
-            _: &str,
-            _: i32,
-            _: i32,
-            _: i32,
+            tenant: &str,
+            document_id: &str,
+            chunk_index: i32,
+            before: i32,
+            after: i32,
         ) -> anyhow::Result<Vec<ScoredChunk>> {
-            Ok(Vec::new())
+            let mut state = self.state.lock().expect("retrieval state");
+            state.retrieval_calls.push("expand");
+            state.expand_requests.push((
+                tenant.to_string(),
+                document_id.to_string(),
+                chunk_index,
+                before,
+                after,
+            ));
+            Ok(self.expanded_results.clone())
         }
 
         async fn fetch_document(&self, _: &str, _: &str) -> anyhow::Result<serde_json::Value> {
@@ -769,8 +777,11 @@ description: "Milestone 1 routed search graph"
 spec_version: "1.0"
 required_tools:
   - retrieval.dense
+  - retrieval.sparse
   - retrieval.hybrid
   - retrieval.fts
+  - retrieval.expand_chunk_neighbors
+  - retrieval.fetch_document
 tasks:
   - route_query
   - baseline_answer
@@ -807,7 +818,7 @@ graph:
 
     #[tokio::test]
     async fn extract_results_reads_route_decision_from_context() {
-        let runtime = GraphFlowRuntime::new(
+        let runtime = GraphFlowRuntime::new_without_baseline(
             Arc::new(StubRetrieval),
             Arc::new(StubChat),
             Arc::new(StubApproval),
@@ -851,11 +862,14 @@ graph:
     #[tokio::test]
     async fn routed_spec_uses_baseline_answer_for_single_pass_queries() {
         let state = Arc::new(Mutex::new(RoutedCallState::default()));
-        let runtime = GraphFlowRuntime::from_spec_with_baseline(
+        let runtime = GraphFlowRuntime::from_spec(
             routed_spec(),
             Arc::new(TrackingRetrieval {
                 state: state.clone(),
-                results: vec![test_chunk("retrieved evidence")],
+                dense_results: Vec::new(),
+                fts_results: Vec::new(),
+                hybrid_results: vec![test_chunk("retrieved evidence")],
+                expanded_results: Vec::new(),
             }),
             Arc::new(TrackingChat { state: state.clone() }),
             Arc::new(StubApproval),
@@ -891,11 +905,14 @@ graph:
     #[tokio::test]
     async fn routed_spec_uses_retrieval_and_composition_for_agentic_queries() {
         let state = Arc::new(Mutex::new(RoutedCallState::default()));
-        let runtime = GraphFlowRuntime::from_spec_with_baseline(
+        let runtime = GraphFlowRuntime::from_spec(
             routed_spec(),
             Arc::new(TrackingRetrieval {
                 state: state.clone(),
-                results: vec![test_chunk("procedural evidence")],
+                dense_results: Vec::new(),
+                fts_results: vec![test_chunk("fts evidence")],
+                hybrid_results: vec![test_chunk("hybrid evidence")],
+                expanded_results: Vec::new(),
             }),
             Arc::new(TrackingChat { state: state.clone() }),
             Arc::new(StubApproval),
@@ -926,15 +943,63 @@ graph:
         );
         assert_eq!(
             result.answer.as_deref(),
-            Some("composed 'How do I rotate API keys in the auth runbook?' from 1 chunks")
+            Some("composed 'How do I rotate API keys in the auth runbook?' from 2 chunks")
         );
 
         let state = state.lock().expect("call state");
         assert!(state.baseline_queries.is_empty(), "agentic route should bypass baseline answer");
-        assert_eq!(state.retrieval_calls, vec!["fts"]);
+        assert_eq!(state.retrieval_calls, vec!["fts", "hybrid"]);
         assert_eq!(
             state.compose_queries,
             vec!["How do I rotate API keys in the auth runbook?".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_spec_expands_neighbors_for_broad_then_expand_queries() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: Vec::new(),
+                hybrid_results: vec![test_chunk("anchor evidence")],
+                expanded_results: vec![test_chunk("neighbor evidence")],
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        );
+
+        let result = runtime
+            .start(routed_config("Compare Rust and Python tradeoffs for async services"))
+            .await
+            .expect("broad-then-expand route should complete");
+
+        assert_eq!(result.state, AgentState::Completed);
+        assert_eq!(
+            result.route_decision.as_ref().map(|d| d.retrieval_profile),
+            Some(RetrievalProfileId::BroadThenExpand)
+        );
+        assert_eq!(
+            result.answer.as_deref(),
+            Some("composed 'Compare Rust and Python tradeoffs for async services' from 2 chunks")
+        );
+
+        let state = state.lock().expect("call state");
+        assert_eq!(state.retrieval_calls, vec!["hybrid", "expand"]);
+        assert_eq!(
+            state.expand_requests,
+            vec![("tenant-a".to_string(), "doc-1".to_string(), 0, 1, 1)]
         );
     }
 
@@ -949,7 +1014,18 @@ graph:
 
         assert_eq!(spec.agent_id, "agentic_search_v1");
         assert_eq!(spec.graph.start_task, "route_query");
-        assert!(spec.required_tools.iter().any(|tool| tool == "retrieval.hybrid"));
+        let required_tools: HashSet<_> = spec.required_tools.iter().cloned().collect();
+        let expected_tools: HashSet<_> = [
+            "retrieval.dense".to_string(),
+            "retrieval.sparse".to_string(),
+            "retrieval.hybrid".to_string(),
+            "retrieval.fts".to_string(),
+            "retrieval.expand_chunk_neighbors".to_string(),
+            "retrieval.fetch_document".to_string(),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(required_tools, expected_tools);
         assert!(spec.graph.tasks.iter().any(|task| task == "final_answer"));
         assert_eq!(spec.graph.edges.len(), 5);
     }

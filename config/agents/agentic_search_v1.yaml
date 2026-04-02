@@ -11,8 +11,11 @@ spec_version: "1.0"
 
 required_tools:
   - retrieval.dense
+  - retrieval.sparse
   - retrieval.hybrid
   - retrieval.fts
+  - retrieval.expand_chunk_neighbors
+  - retrieval.fetch_document
 
 tasks:
   - route_query

@@ -62,17 +62,16 @@ impl AgentManager {
 
         let mut runtimes: HashMap<String, Arc<dyn AgentRuntime>> = HashMap::new();
         for (agent_id, spec) in registry.list() {
-            let runtime: Arc<dyn AgentRuntime> =
-                Arc::new(GraphFlowRuntime::from_spec_with_baseline(
-                    spec.clone(),
-                    Arc::new(ServerRetrievalPort {
-                        retrieval: retrieval.clone(),
-                        stores: stores.clone(),
-                    }),
-                    Arc::new(ServerChatPort { chat: chat.clone() }),
-                    Arc::new(PauseForApproval),
-                    Arc::new(ServerBaselineAnswerPort { chat: chat.clone() }),
-                ));
+            let runtime: Arc<dyn AgentRuntime> = Arc::new(GraphFlowRuntime::from_spec(
+                spec.clone(),
+                Arc::new(ServerRetrievalPort {
+                    retrieval: retrieval.clone(),
+                    stores: stores.clone(),
+                }),
+                Arc::new(ServerChatPort { chat: chat.clone() }),
+                Arc::new(PauseForApproval),
+                Arc::new(ServerBaselineAnswerPort { chat: chat.clone() }),
+            ));
             runtimes.insert(agent_id.clone(), runtime);
         }
 

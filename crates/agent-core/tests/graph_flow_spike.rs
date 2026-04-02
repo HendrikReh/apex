@@ -178,8 +178,11 @@ fn config() -> AgentRunConfig {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn full_run_with_auto_approve() {
-    let runtime =
-        GraphFlowRuntime::new(Arc::new(MockRetrieval), Arc::new(MockChat), Arc::new(AutoApprove));
+    let runtime = GraphFlowRuntime::new_without_baseline(
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
 
     let result = runtime.start(config()).await.expect("start failed");
 
@@ -196,7 +199,7 @@ async fn full_run_with_auto_approve() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn pause_and_resume_with_manual_approval() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
         Arc::new(ManualApproval),
@@ -223,7 +226,7 @@ async fn pause_and_resume_with_manual_approval() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn rejection_at_checkpoint() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
         Arc::new(ManualApproval),
@@ -249,7 +252,7 @@ async fn rejection_at_checkpoint() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn inspect_returns_session_state() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
         Arc::new(ManualApproval),
@@ -266,8 +269,11 @@ async fn inspect_returns_session_state() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn inspect_unknown_run_returns_none() {
-    let runtime =
-        GraphFlowRuntime::new(Arc::new(MockRetrieval), Arc::new(MockChat), Arc::new(AutoApprove));
+    let runtime = GraphFlowRuntime::new_without_baseline(
+        Arc::new(MockRetrieval),
+        Arc::new(MockChat),
+        Arc::new(AutoApprove),
+    );
 
     let result = runtime.inspect(uuid::Uuid::new_v4()).await.expect("inspect failed");
     assert!(result.is_none());
@@ -310,7 +316,7 @@ checkpoints:
 #[allow(clippy::disallowed_methods)]
 async fn spec_driven_full_run() {
     let spec = AgentSpec::from_yaml_str(RAG_SPIKE_SPEC).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -329,7 +335,7 @@ async fn spec_driven_full_run() {
 #[allow(clippy::disallowed_methods)]
 async fn spec_driven_pause_and_resume() {
     let spec = AgentSpec::from_yaml_str(RAG_SPIKE_SPEC).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -360,7 +366,7 @@ async fn spec_from_yaml_file() {
     assert_eq!(spec.checkpoints.len(), 1);
 
     // Verify the loaded spec drives a full run.
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -403,7 +409,7 @@ checkpoints:
 
     // Use ManualApproval port — which always returns None (would pause).
     // But approval_type: auto in the spec should bypass the port entirely.
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -420,7 +426,7 @@ checkpoints:
 #[allow(clippy::disallowed_methods)]
 async fn spec_checkpoint_config_surfaces_in_pending() {
     let spec = AgentSpec::from_yaml_str(RAG_SPIKE_SPEC).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -538,7 +544,7 @@ graph:
     - { from: summarize, to: final_answer }
 "#;
     let spec = AgentSpec::from_yaml_str(yaml).expect("spec should parse");
-    let runtime = GraphFlowRuntime::from_spec(
+    let runtime = GraphFlowRuntime::from_spec_without_baseline(
         spec,
         Arc::new(MockRetrieval),
         Arc::new(MockChat),
@@ -682,7 +688,7 @@ impl RetrievalPort for FailingRetrieval {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn retrieval_error_produces_failed_state() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(FailingRetrieval),
         Arc::new(MockChat),
         Arc::new(AutoApprove),
@@ -696,7 +702,7 @@ async fn retrieval_error_produces_failed_state() {
 #[tokio::test]
 #[allow(clippy::disallowed_methods)]
 async fn inspect_reports_failed_state_correctly() {
-    let runtime = GraphFlowRuntime::new(
+    let runtime = GraphFlowRuntime::new_without_baseline(
         Arc::new(FailingRetrieval),
         Arc::new(MockChat),
         Arc::new(AutoApprove),
