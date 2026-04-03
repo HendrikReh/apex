@@ -38,6 +38,11 @@ impl BenchmarkCase {
     fn evidence_expectation(&self) -> EvidenceExpectation {
         let has_explicit_buckets =
             !self.required_evidence.is_empty() || !self.supporting_evidence.is_empty();
+        assert!(
+            !(has_explicit_buckets && !self.expected_evidence.is_empty()),
+            "benchmark case {} mixes legacy expected_evidence with explicit required/supporting buckets",
+            self.id
+        );
 
         let required_documents: BTreeSet<String> = if has_explicit_buckets {
             self.required_evidence.iter().cloned().collect()
@@ -67,11 +72,7 @@ impl BenchmarkCase {
         // Legacy schema (`expected_evidence` only) keeps strict all-doc recall
         // unless the benchmark explicitly opts into a per-case threshold.
         let default_min_expected_recall = if has_explicit_buckets {
-            if required_documents.is_empty() {
-                1.0
-            } else {
-                required_documents.len() as f32 / expected_documents.len() as f32
-            }
+            required_documents.len() as f32 / expected_documents.len() as f32
         } else {
             1.0
         };
@@ -375,4 +376,40 @@ fn min_expected_recall_can_relax_legacy_expected_pool() {
     assert!(expectation.required_documents.is_empty());
     assert_eq!(expectation.expected_documents.len(), 2);
     assert!((expectation.min_expected_recall - 0.5).abs() < f32::EPSILON);
+}
+
+#[test]
+fn supporting_only_defaults_to_zero_recall_threshold() {
+    let case = BenchmarkCase {
+        id: "supporting-only".to_string(),
+        query: "q".to_string(),
+        expected_route: "agentic_search".to_string(),
+        expected_query_class: "multi_hop_research".to_string(),
+        expected_evidence: Vec::new(),
+        required_evidence: Vec::new(),
+        supporting_evidence: vec!["doc-a".to_string(), "doc-b".to_string()],
+        min_expected_recall: None,
+    };
+
+    let expectation = case.evidence_expectation();
+    assert!(expectation.required_documents.is_empty());
+    assert_eq!(expectation.expected_documents.len(), 2);
+    assert!((expectation.min_expected_recall - 0.0).abs() < f32::EPSILON);
+}
+
+#[test]
+#[should_panic(expected = "mixes legacy expected_evidence with explicit required/supporting")]
+fn mixed_legacy_and_explicit_evidence_buckets_are_rejected() {
+    let case = BenchmarkCase {
+        id: "mixed".to_string(),
+        query: "q".to_string(),
+        expected_route: "agentic_search".to_string(),
+        expected_query_class: "multi_hop_research".to_string(),
+        expected_evidence: vec!["doc-a".to_string()],
+        required_evidence: vec!["doc-b".to_string()],
+        supporting_evidence: Vec::new(),
+        min_expected_recall: None,
+    };
+
+    let _ = case.evidence_expectation();
 }
