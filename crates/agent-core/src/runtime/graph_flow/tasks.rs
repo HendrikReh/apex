@@ -117,6 +117,7 @@ impl Task for BaselineAnswerTask {
 /// Executes deterministic retrieval selected by the route decision.
 pub struct RetrieveEvidenceTask {
     pub retrieval: Arc<dyn RetrievalPort>,
+    pub lexical_fts_top_k: u64,
 }
 
 #[async_trait::async_trait]
@@ -150,14 +151,15 @@ impl Task for RetrieveEvidenceTask {
                 })
             }
             RetrievalProfileId::LexicalFirst => {
-                let mut lexical =
-                    self.retrieval.search_fts(&collection, &query, &tenant, 10).await.map_err(
-                        |e| {
-                            graph_flow::GraphError::TaskExecutionFailed(format!(
-                                "retrieve evidence failed: {e}"
-                            ))
-                        },
-                    )?;
+                let mut lexical = self
+                    .retrieval
+                    .search_fts(&collection, &query, &tenant, self.lexical_fts_top_k)
+                    .await
+                    .map_err(|e| {
+                        graph_flow::GraphError::TaskExecutionFailed(format!(
+                            "retrieve evidence failed: {e}"
+                        ))
+                    })?;
                 let hybrid =
                     self.retrieval.search_hybrid(&collection, &query, &tenant).await.map_err(
                         |e| {

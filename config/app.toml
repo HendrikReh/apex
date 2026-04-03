@@ -50,6 +50,7 @@ request_id_header = "x-request-id"
 rrf_k = 60                                          # RRF fusion k parameter
 dense_top_k = 20                                    # Dense search result limit
 sparse_top_k = 20                                   # Sparse/BM25 search result limit
+lexical_fts_top_k = 10                              # Lexical-first FTS result limit for routed retrieval
 
 [context]
 max_tokens = 8000                                   # Token budget for assembled context

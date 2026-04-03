@@ -46,6 +46,7 @@ pub async fn full_app() -> (Router, Arc<AppState>) {
             stores.clone(),
             retrieval.clone(),
             chat.clone(),
+            config.lexical_fts_top_k,
         )
         .await
         .expect("agents"),

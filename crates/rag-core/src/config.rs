@@ -166,6 +166,7 @@ struct RetrievalSection {
     rrf_k: Option<u32>,
     dense_top_k: Option<u64>,
     sparse_top_k: Option<u64>,
+    lexical_fts_top_k: Option<u64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -281,6 +282,7 @@ pub struct AppConfig {
     pub rrf_k: u32,
     pub dense_top_k: u64,
     pub sparse_top_k: u64,
+    pub lexical_fts_top_k: u64,
     // Context assembly
     pub context_max_tokens: usize,
     pub context_max_chunks: usize,
@@ -354,6 +356,7 @@ impl fmt::Debug for AppConfig {
             .field("rrf_k", &self.rrf_k)
             .field("dense_top_k", &self.dense_top_k)
             .field("sparse_top_k", &self.sparse_top_k)
+            .field("lexical_fts_top_k", &self.lexical_fts_top_k)
             .field("context_max_tokens", &self.context_max_tokens)
             .field("context_max_chunks", &self.context_max_chunks)
             .field("llm_provider", &self.llm_provider)
@@ -610,6 +613,11 @@ impl AppConfig {
         if sparse_top_k == 0 {
             anyhow::bail!("sparse_top_k must be greater than zero");
         }
+        let lexical_fts_top_k =
+            env_parsed("LEXICAL_FTS_TOP_K")?.or(r.lexical_fts_top_k).unwrap_or(10);
+        if lexical_fts_top_k == 0 {
+            anyhow::bail!("lexical_fts_top_k must be greater than zero");
+        }
         let context_max_tokens =
             env_parsed("CONTEXT_MAX_TOKENS")?.or(ctx.max_tokens).unwrap_or(8000);
         if context_max_tokens == 0 {
@@ -792,6 +800,7 @@ impl AppConfig {
             rrf_k,
             dense_top_k,
             sparse_top_k,
+            lexical_fts_top_k,
             context_max_tokens,
             context_max_chunks,
             llm_provider,
@@ -886,6 +895,7 @@ mod tests {
             std::env::remove_var("RRF_K");
             std::env::remove_var("DENSE_TOP_K");
             std::env::remove_var("SPARSE_TOP_K");
+            std::env::remove_var("LEXICAL_FTS_TOP_K");
             std::env::remove_var("CONTEXT_MAX_TOKENS");
             std::env::remove_var("CONTEXT_MAX_CHUNKS");
             std::env::remove_var("LLM_PROVIDER");
@@ -972,6 +982,7 @@ mod tests {
         assert_eq!(cfg.rrf_k, 60);
         assert_eq!(cfg.dense_top_k, 20);
         assert_eq!(cfg.sparse_top_k, 20);
+        assert_eq!(cfg.lexical_fts_top_k, 10);
         assert_eq!(cfg.context_max_tokens, 8000);
         assert_eq!(cfg.context_max_chunks, 50);
         assert_eq!(cfg.llm_provider, LlmProvider::OpenAiCompatible);
@@ -1041,7 +1052,19 @@ mod tests {
         assert!(err.contains("llm_max_tokens"), "error: {err}");
         unsafe { std::env::remove_var("LLM_MAX_TOKENS") };
 
-        // -- Part 4: pdfium_library_path from env --
+        // -- Part 4: lexical_fts_top_k override and validation --
+        unsafe { std::env::set_var("LEXICAL_FTS_TOP_K", "12") };
+        let cfg = AppConfig::from_current_env().expect("lexical_fts_top_k override");
+        assert_eq!(cfg.lexical_fts_top_k, 12);
+        unsafe { std::env::set_var("LEXICAL_FTS_TOP_K", "0") };
+        let err = AppConfig::from_current_env().expect_err("zero lexical_fts_top_k should fail");
+        assert!(
+            err.to_string().contains("lexical_fts_top_k"),
+            "error should mention lexical_fts_top_k: {err}"
+        );
+        unsafe { std::env::remove_var("LEXICAL_FTS_TOP_K") };
+
+        // -- Part 5: pdfium_library_path from env --
         unsafe { std::env::set_var("PDFIUM_LIBRARY_PATH", "/usr/local/lib/libpdfium.dylib") };
         let cfg = AppConfig::from_current_env().expect("from_env with PDFIUM_LIBRARY_PATH");
         assert_eq!(
@@ -1051,7 +1074,7 @@ mod tests {
         );
         unsafe { std::env::remove_var("PDFIUM_LIBRARY_PATH") };
 
-        // -- Part 5: TESSDATA_PREFIX env override --
+        // -- Part 6: TESSDATA_PREFIX env override --
         unsafe { std::env::set_var("TESSDATA_PREFIX", "/opt/tessdata") };
         let cfg = AppConfig::from_current_env().expect("from_env with TESSDATA_PREFIX");
         assert_eq!(
@@ -1061,7 +1084,7 @@ mod tests {
         );
         unsafe { std::env::remove_var("TESSDATA_PREFIX") };
 
-        // -- Part 6: ingest roots env override --
+        // -- Part 7: ingest roots env override --
         let root_a = tempfile::tempdir().expect("tempdir a");
         let root_b = tempfile::tempdir().expect("tempdir b");
         let roots_csv = format!("{},{}", root_a.path().display(), root_b.path().display());
@@ -1073,7 +1096,7 @@ mod tests {
         assert_eq!(cfg.ingest_allowed_roots[1], root_b.path().canonicalize().expect("canonical b"),);
         unsafe { std::env::remove_var("INGEST_ALLOWED_ROOTS") };
 
-        // -- Part 7: agent specs dir env override --
+        // -- Part 8: agent specs dir env override --
         let agent_specs_dir = tempfile::tempdir().expect("tempdir agent specs");
         unsafe { std::env::set_var("AGENT_SPECS_DIR", agent_specs_dir.path()) };
         let cfg = AppConfig::from_current_env().expect("from_env with AGENT_SPECS_DIR");
@@ -1083,7 +1106,7 @@ mod tests {
         );
         unsafe { std::env::remove_var("AGENT_SPECS_DIR") };
 
-        // -- Part 8: secret env vars load as redacted types --
+        // -- Part 9: secret env vars load as redacted types --
         unsafe {
             std::env::set_var("QDRANT_API_KEY", "qdrant-secret");
             std::env::set_var("BOOTSTRAP_PLATFORM_API_KEY", "bootstrap-secret");
@@ -1118,7 +1141,7 @@ mod tests {
             std::env::remove_var("LLM_API_KEY");
         }
 
-        // -- Part 9: zero ocr_timeout_secs rejected --
+        // -- Part 10: zero ocr_timeout_secs rejected --
         unsafe { std::env::set_var("OCR_TIMEOUT_SECS", "0") };
         let err = AppConfig::from_current_env()
             .expect_err("zero ocr_timeout_secs should be rejected")

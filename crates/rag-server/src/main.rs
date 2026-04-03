@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
             stores.clone(),
             retrieval.clone(),
             chat.clone(),
+            config.lexical_fts_top_k,
         )
         .await
         .context("loading agent manager")?,
