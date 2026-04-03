@@ -17,7 +17,75 @@ struct BenchmarkCase {
     query: String,
     expected_route: String,
     expected_query_class: String,
+    #[serde(default)]
     expected_evidence: Vec<String>,
+    #[serde(default)]
+    required_evidence: Vec<String>,
+    #[serde(default)]
+    supporting_evidence: Vec<String>,
+    #[serde(default)]
+    min_expected_recall: Option<f32>,
+}
+
+#[derive(Debug)]
+struct EvidenceExpectation {
+    required_documents: BTreeSet<String>,
+    expected_documents: BTreeSet<String>,
+    min_expected_recall: f32,
+}
+
+impl BenchmarkCase {
+    fn evidence_expectation(&self) -> EvidenceExpectation {
+        let has_explicit_buckets =
+            !self.required_evidence.is_empty() || !self.supporting_evidence.is_empty();
+
+        let required_documents: BTreeSet<String> = if has_explicit_buckets {
+            self.required_evidence.iter().cloned().collect()
+        } else if self.min_expected_recall.is_some() {
+            BTreeSet::new()
+        } else {
+            self.expected_evidence.iter().cloned().collect()
+        };
+
+        let expected_documents: BTreeSet<String> = if has_explicit_buckets {
+            self.expected_evidence
+                .iter()
+                .chain(self.required_evidence.iter())
+                .chain(self.supporting_evidence.iter())
+                .cloned()
+                .collect()
+        } else {
+            self.expected_evidence.iter().cloned().collect()
+        };
+
+        assert!(
+            !expected_documents.is_empty(),
+            "benchmark case {} must define at least one expected document",
+            self.id
+        );
+
+        // Legacy schema (`expected_evidence` only) keeps strict all-doc recall
+        // unless the benchmark explicitly opts into a per-case threshold.
+        let default_min_expected_recall = if has_explicit_buckets {
+            if required_documents.is_empty() {
+                1.0
+            } else {
+                required_documents.len() as f32 / expected_documents.len() as f32
+            }
+        } else {
+            1.0
+        };
+
+        let min_expected_recall = self.min_expected_recall.unwrap_or(default_min_expected_recall);
+        assert!(
+            (0.0..=1.0).contains(&min_expected_recall),
+            "benchmark case {} has min_expected_recall={} outside [0.0, 1.0]",
+            self.id,
+            min_expected_recall
+        );
+
+        EvidenceExpectation { required_documents, expected_documents, min_expected_recall }
+    }
 }
 
 fn unique_suffix() -> String {
@@ -48,7 +116,7 @@ fn unique_agent_document_ids(body: &serde_json::Value) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-fn count_expected_hits(expected: &[String], seen: &BTreeSet<String>) -> usize {
+fn count_expected_hits(expected: &BTreeSet<String>, seen: &BTreeSet<String>) -> usize {
     expected.iter().filter(|doc| seen.contains(doc.as_str())).count()
 }
 
@@ -167,8 +235,11 @@ async fn benchmark_routes_and_evidence_are_scored() {
 
         let baseline_docs = unique_chat_document_ids(&baseline_body);
         let routed_docs = unique_agent_document_ids(&routed_body);
-        let routed_hits = count_expected_hits(&case.expected_evidence, &routed_docs);
-        let baseline_hits = count_expected_hits(&case.expected_evidence, &baseline_docs);
+        let expectation = case.evidence_expectation();
+        let routed_hits = count_expected_hits(&expectation.expected_documents, &routed_docs);
+        let baseline_hits = count_expected_hits(&expectation.expected_documents, &baseline_docs);
+        let required_hits = count_expected_hits(&expectation.required_documents, &routed_docs);
+        let routed_recall = routed_hits as f32 / expectation.expected_documents.len() as f32;
         let routed_score_types: BTreeSet<String> = routed_body["search_results"]
             .as_array()
             .map(|items| {
@@ -191,9 +262,16 @@ async fn benchmark_routes_and_evidence_are_scored() {
             .unwrap_or(false);
 
         assert_eq!(
-            routed_hits,
-            case.expected_evidence.len(),
-            "routed evidence missed expected documents for benchmark case {}",
+            required_hits,
+            expectation.required_documents.len(),
+            "routed evidence missed required documents for benchmark case {}",
+            case.id
+        );
+        assert!(
+            routed_recall >= expectation.min_expected_recall,
+            "routed evidence recall {:.3} below threshold {:.3} for benchmark case {}",
+            routed_recall,
+            expectation.min_expected_recall,
             case.id
         );
 
@@ -241,4 +319,60 @@ async fn benchmark_routes_and_evidence_are_scored() {
         enriched_agentic_cases == agentic_case_count,
         "agentic routed path should expose enriched evidence metadata for every agentic benchmark case"
     );
+}
+
+#[test]
+fn legacy_expected_evidence_defaults_to_strict_recall() {
+    let case = BenchmarkCase {
+        id: "legacy".to_string(),
+        query: "q".to_string(),
+        expected_route: "agentic_search".to_string(),
+        expected_query_class: "multi_hop_research".to_string(),
+        expected_evidence: vec!["doc-a".to_string(), "doc-b".to_string()],
+        required_evidence: Vec::new(),
+        supporting_evidence: Vec::new(),
+        min_expected_recall: None,
+    };
+
+    let expectation = case.evidence_expectation();
+    assert_eq!(expectation.required_documents, expectation.expected_documents);
+    assert!((expectation.min_expected_recall - 1.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn explicit_required_and_supporting_default_to_required_coverage() {
+    let case = BenchmarkCase {
+        id: "explicit".to_string(),
+        query: "q".to_string(),
+        expected_route: "agentic_search".to_string(),
+        expected_query_class: "multi_hop_research".to_string(),
+        expected_evidence: Vec::new(),
+        required_evidence: vec!["doc-a".to_string()],
+        supporting_evidence: vec!["doc-b".to_string()],
+        min_expected_recall: None,
+    };
+
+    let expectation = case.evidence_expectation();
+    assert_eq!(expectation.required_documents.len(), 1);
+    assert_eq!(expectation.expected_documents.len(), 2);
+    assert!((expectation.min_expected_recall - 0.5).abs() < f32::EPSILON);
+}
+
+#[test]
+fn min_expected_recall_can_relax_legacy_expected_pool() {
+    let case = BenchmarkCase {
+        id: "threshold".to_string(),
+        query: "q".to_string(),
+        expected_route: "agentic_search".to_string(),
+        expected_query_class: "multi_hop_research".to_string(),
+        expected_evidence: vec!["doc-a".to_string(), "doc-b".to_string()],
+        required_evidence: Vec::new(),
+        supporting_evidence: Vec::new(),
+        min_expected_recall: Some(0.5),
+    };
+
+    let expectation = case.evidence_expectation();
+    assert!(expectation.required_documents.is_empty());
+    assert_eq!(expectation.expected_documents.len(), 2);
+    assert!((expectation.min_expected_recall - 0.5).abs() < f32::EPSILON);
 }
