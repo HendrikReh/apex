@@ -615,6 +615,7 @@ mod tests {
             rrf_k: 60,
             dense_top_k: 20,
             sparse_top_k: 20,
+            lexical_fts_top_k: 10,
             context_max_tokens: 8000,
             context_max_chunks: 50,
             llm_provider: LlmProvider::OpenAiCompatible,

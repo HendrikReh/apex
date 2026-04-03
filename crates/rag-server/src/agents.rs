@@ -72,6 +72,7 @@ impl AgentManager {
         stores: Stores,
         retrieval: Arc<RetrievalService>,
         chat: Arc<ChatService>,
+        lexical_fts_top_k: u64,
     ) -> Result<Self> {
         let tool_registry = DefaultToolRegistry;
         let registry = agent_core::AgentRegistry::load_from_dir(
@@ -84,16 +85,19 @@ impl AgentManager {
 
         let mut runtimes: HashMap<String, Arc<dyn AgentRuntime>> = HashMap::new();
         for (agent_id, spec) in registry.list() {
-            let runtime: Arc<dyn AgentRuntime> = Arc::new(GraphFlowRuntime::from_spec(
-                spec.clone(),
-                Arc::new(ServerRetrievalPort {
-                    retrieval: retrieval.clone(),
-                    stores: stores.clone(),
-                }),
-                Arc::new(ServerChatPort { chat: chat.clone() }),
-                Arc::new(PauseForApproval),
-                Arc::new(ServerBaselineAnswerPort { chat: chat.clone() }),
-            ));
+            let runtime: Arc<dyn AgentRuntime> = Arc::new(
+                GraphFlowRuntime::from_spec(
+                    spec.clone(),
+                    Arc::new(ServerRetrievalPort {
+                        retrieval: retrieval.clone(),
+                        stores: stores.clone(),
+                    }),
+                    Arc::new(ServerChatPort { chat: chat.clone() }),
+                    Arc::new(PauseForApproval),
+                    Arc::new(ServerBaselineAnswerPort { chat: chat.clone() }),
+                )
+                .with_lexical_fts_top_k(lexical_fts_top_k),
+            );
             runtimes.insert(agent_id.clone(), runtime);
         }
 

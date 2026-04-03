@@ -53,6 +53,7 @@ pub struct GraphFlowRuntime {
     chat: Arc<dyn ChatPort>,
     approval: Arc<dyn ApprovalPort>,
     baseline: Arc<dyn BaselineAnswerPort>,
+    lexical_fts_top_k: u64,
     /// Optional spec driving graph construction. When `None`, falls back to
     /// the hardcoded 5-task spike graph.
     spec: Option<AgentSpec>,
@@ -61,6 +62,8 @@ pub struct GraphFlowRuntime {
     /// Run metadata indexed by run ID.
     meta: Arc<Mutex<std::collections::HashMap<RunId, RunMeta>>>,
 }
+
+const DEFAULT_LEXICAL_FTS_TOP_K: u64 = 10;
 
 struct UnavailableBaselineAnswerPort;
 
@@ -90,6 +93,7 @@ impl GraphFlowRuntime {
             chat,
             approval,
             baseline,
+            lexical_fts_top_k: DEFAULT_LEXICAL_FTS_TOP_K,
             spec: None,
             sessions: Arc::new(InMemorySessionStorage::new()),
             meta: Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -118,10 +122,17 @@ impl GraphFlowRuntime {
             chat,
             approval,
             baseline,
+            lexical_fts_top_k: DEFAULT_LEXICAL_FTS_TOP_K,
             spec: Some(spec),
             sessions: Arc::new(InMemorySessionStorage::new()),
             meta: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
+    }
+
+    /// Set the lexical-first FTS retrieval window used by `retrieve_evidence`.
+    pub fn with_lexical_fts_top_k(mut self, lexical_fts_top_k: u64) -> Self {
+        self.lexical_fts_top_k = lexical_fts_top_k;
+        self
     }
 
     /// Create a runtime driven by a YAML agent spec and no baseline-answer port.
@@ -141,9 +152,10 @@ impl GraphFlowRuntime {
             BASELINE_ANSWER_TASK => {
                 Some(Arc::new(BaselineAnswerTask { baseline: self.baseline.clone() }))
             }
-            RETRIEVE_EVIDENCE_TASK => {
-                Some(Arc::new(RetrieveEvidenceTask { retrieval: self.retrieval.clone() }))
-            }
+            RETRIEVE_EVIDENCE_TASK => Some(Arc::new(RetrieveEvidenceTask {
+                retrieval: self.retrieval.clone(),
+                lexical_fts_top_k: self.lexical_fts_top_k,
+            })),
             COMPOSE_ANSWER_TASK => Some(Arc::new(ComposeAnswerTask { chat: self.chat.clone() })),
             CLASSIFY_TASK => Some(Arc::new(ClassifyTask)),
             HYBRID_SEARCH_TASK => {
@@ -556,6 +568,7 @@ mod tests {
     struct RoutedCallState {
         baseline_queries: Vec<String>,
         retrieval_calls: Vec<&'static str>,
+        fts_top_ks: Vec<u64>,
         compose_queries: Vec<String>,
         expand_requests: Vec<(String, String, i32, i32, i32)>,
     }
@@ -690,9 +703,11 @@ mod tests {
             _: &str,
             _: &str,
             _: &str,
-            _: u64,
+            top_k: u64,
         ) -> anyhow::Result<Vec<ScoredChunk>> {
-            self.state.lock().expect("retrieval state").retrieval_calls.push("fts");
+            let mut state = self.state.lock().expect("retrieval state");
+            state.retrieval_calls.push("fts");
+            state.fts_top_ks.push(top_k);
             Ok(self.fts_results.clone())
         }
 
@@ -953,10 +968,51 @@ graph:
         let state = state.lock().expect("call state");
         assert!(state.baseline_queries.is_empty(), "agentic route should bypass baseline answer");
         assert_eq!(state.retrieval_calls, vec!["fts", "hybrid"]);
+        assert_eq!(state.fts_top_ks, vec![DEFAULT_LEXICAL_FTS_TOP_K]);
         assert_eq!(
             state.compose_queries,
             vec!["How do I rotate API keys in the auth runbook?".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn routed_spec_uses_configured_lexical_fts_top_k() {
+        let state = Arc::new(Mutex::new(RoutedCallState::default()));
+        let runtime = GraphFlowRuntime::from_spec(
+            routed_spec(),
+            Arc::new(TrackingRetrieval {
+                state: state.clone(),
+                dense_results: Vec::new(),
+                fts_results: vec![test_chunk_with("chunk-fts", "doc-1", 0, "fts evidence")],
+                hybrid_results: vec![test_chunk_with(
+                    "chunk-hybrid",
+                    "doc-2",
+                    0,
+                    "hybrid evidence",
+                )],
+                expanded_results: Vec::new(),
+            }),
+            Arc::new(TrackingChat { state: state.clone() }),
+            Arc::new(StubApproval),
+            Arc::new(TrackingBaseline {
+                state: state.clone(),
+                grounded_answer: GroundedAnswer {
+                    answer: "baseline should not run".to_string(),
+                    search_results: Vec::new(),
+                    citations: Vec::new(),
+                    model: "baseline-model".to_string(),
+                },
+            }),
+        )
+        .with_lexical_fts_top_k(7);
+
+        let _result = runtime
+            .start(routed_config("How do I rotate API keys in the auth runbook?"))
+            .await
+            .expect("agentic route should complete");
+
+        let state = state.lock().expect("call state");
+        assert_eq!(state.fts_top_ks, vec![7]);
     }
 
     #[tokio::test]
