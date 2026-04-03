@@ -138,6 +138,13 @@ They are intentionally `#[ignore]` because they are slower, costlier, or depend 
 
 Use this to compare the baseline `/chat` path against `agentic_search_v1` on the checked-in benchmark set under `data/evals/agentic_search_v1/`.
 
+Benchmark case evidence expectations support both legacy and extended schema:
+
+- Legacy: `expected_evidence` (strict full recall by default).
+- Extended: `required_evidence`, `supporting_evidence`, and optional `min_expected_recall` (0.0-1.0).
+- If `required_evidence`/`supporting_evidence` are provided and `min_expected_recall` is omitted, the default threshold is `required/total`.
+- Do not mix `expected_evidence` with `required_evidence`/`supporting_evidence` in the same case.
+
 Runs:
 
 ```bash
