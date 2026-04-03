@@ -39,7 +39,7 @@ impl BenchmarkCase {
         let has_explicit_buckets =
             !self.required_evidence.is_empty() || !self.supporting_evidence.is_empty();
         assert!(
-            !(has_explicit_buckets && !self.expected_evidence.is_empty()),
+            !has_explicit_buckets || self.expected_evidence.is_empty(),
             "benchmark case {} mixes legacy expected_evidence with explicit required/supporting buckets",
             self.id
         );
